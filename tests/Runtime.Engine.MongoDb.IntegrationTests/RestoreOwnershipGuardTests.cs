@@ -419,6 +419,50 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
         }
     }
 
+    [Fact]
+    public async Task Restore_WithOverride_IntoANewDatabase_DoesNotDropTheExistingTenantsOtherForeignMarkedDatabase()
+    {
+        // The override was checked against the TARGET only. The existing tenant lives in a different database
+        // that carries an orphaned foreign marker: dropping it needs its own decision, the restore's override
+        // does not cover it (AB#8672).
+        const string goneInstance = "octosystemgone";
+        var sourceTenantId = NewName("rgsrc");
+        var existingTenantId = NewName("rgexisting");
+        var newDatabase = NewName("rgnewdb");
+        var archivePath = NewArchivePath();
+
+        await CreateTenantAsync(InstanceA, sourceTenantId);
+        await CreateTenantAsync(InstanceA, existingTenantId);
+        try
+        {
+            await OwnershipStoreA.StampAsync(existingTenantId, existingTenantId, goneInstance, Ct);
+            await BackupAsync(InstanceA, sourceTenantId, archivePath);
+
+            var result = await InstanceA.RestoreTenantAsync(existingTenantId, newDatabase, archivePath,
+                overrideForeignOwnership: true);
+
+            Assert.False(result.Success, "The restore must not drop the existing tenant's other database");
+            Assert.Contains(TenantException.DatabaseNameNotAvailable(existingTenantId).Message, result.Error);
+            Assert.True(await InstanceA.IsDatabaseExistingAsync(existingTenantId));
+            var marker = await OwnershipStoreA.GetAsync(existingTenantId, Ct);
+            Assert.NotNull(marker);
+            Assert.Equal(goneInstance, marker!.OwnerSystemDatabaseName);
+            var existing = await InstanceA.TryFindTenantContextAsync(existingTenantId);
+            Assert.NotNull(existing);
+            Assert.Equal(existingTenantId, existing!.DatabaseName.ToLowerInvariant());
+            Assert.False(await InstanceA.IsDatabaseExistingAsync(newDatabase));
+            Assert.DoesNotContain(fixture.Logs.Entries, e =>
+                e.Message.StartsWith("OWNERSHIP OVERRIDE", StringComparison.Ordinal) &&
+                e.Message.Contains(existingTenantId, StringComparison.Ordinal));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceA, existingTenantId, overrideForeignOwnership: true);
+            await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
+            DeleteQuietly(archivePath);
+        }
+    }
+
     private static async Task CreateTenantAsync(ISystemContext instance, string tenantId)
     {
         using var session = await instance.GetAdminSessionAsync();

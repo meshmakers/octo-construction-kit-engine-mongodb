@@ -3081,7 +3081,9 @@ never overridable; a database whose ownership marker names another instance, or 
 database registers, is refused naming the owner. `overrideForeignOwnership` lets the restore overwrite
 such a tenant database with an `OWNERSHIP OVERRIDE` warning — except a database another instance still
 registers when `attachTenant` is true: the attach gate above would refuse it after the data was
-replaced, and a successful attach would register one database in two instances. After mongorestore the
+replaced, and a successful attach would register one database in two instances. The override covers the
+checked target only: with `dropExistingTenant`, the existing tenant's database is dropped under the override only
+when it IS the target; a different existing database goes through the delete guard without it. After mongorestore the
 archive's ownership marker and system-database marker are removed, so a backup of another instance (or
 of a system database) restores as a tenant database the restoring instance owns after the attach.
 

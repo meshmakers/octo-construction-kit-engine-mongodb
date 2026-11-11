@@ -316,10 +316,16 @@ internal class TenantBackupService(
                         tenantId);
                     using var session = await systemContext.GetAdminSessionAsync();
                     session.StartTransaction();
-                    // The delete has its own ownership guard (AB#8807) for the existing tenant's database; the
-                    // administrator's deliberate override of the restore covers it as well.
+                    // The delete has its own ownership guard (AB#8807) for the existing tenant's database. The
+                    // administrator's override was checked against the restore TARGET only (AB#8672), so it
+                    // covers the drop only when the existing tenant lives in that very database; a different
+                    // database of the existing tenant is dropped only when the delete guard lets it go on its own.
+                    var existingDatabaseIsTarget = string.Equals(
+                        TenantDatabaseRegistrationLookup.Normalize(existingTenantContext.DatabaseName),
+                        TenantDatabaseRegistrationLookup.Normalize(normalizedTargetDatabaseName),
+                        StringComparison.Ordinal);
                     await systemContext.DropChildTenantAsync(session, tenantId,
-                        overrideForeignOwnership: overrideForeignOwnership);
+                        overrideForeignOwnership: overrideForeignOwnership && existingDatabaseIsTarget);
                     await session.CommitTransactionAsync();
                     logger.LogInformation("Tenant '{TenantId}' dropped successfully", tenantId);
                 }
