@@ -1368,10 +1368,10 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             return Array.Empty<Dtos.CrateTableStatsRow>();
         }
 
-        return await _resilience.ExecuteAsync(async _ =>
+        return await _resilience.ExecuteAsync(async token =>
         {
             var schema = TenantSchema.SchemaName(tenantId);
-            await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
+            await using var lease = await LeaseConnectionAsync(tenantId, token);
             var connection = lease.Connection;
 
             // Two single-round-trip queries against the introspection surface, then merged in
@@ -1379,7 +1379,18 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             // sys.health rows are per-partition and the join would multiply shard rows on
             // partitioned tables (none of ours are partitioned today, but the join would silently
             // misreport totals the first time someone partitions an archive).
-            var shardRows = await ReadShardStatsAsync(connection, schema, tableNames);
+            //
+            // Health is read before the refresh below: a refresh that times out at the driver can leave
+            // the connection unusable, and after a failed refresh nothing else is sent on it.
+            var shardRows = await ReadShardStatsAsync(connection, schema, tableNames, token);
+            var healthRows = (await connection.QueryAsync<(string TableName, string Health)>(
+                new CommandDefinition(
+                    @"SELECT table_name AS TableName, health AS Health
+                      FROM sys.health
+                      WHERE table_schema = @schema
+                        AND table_name = ANY(@tables)",
+                    new { schema, tables = tableNames.ToArray() },
+                    cancellationToken: token))).ToDictionary(r => r.TableName);
 
             // AB#8735: num_docs only counts the rows of the last refresh, and CrateDB skips the periodic
             // refresh of a shard nobody searched for 30 s ("search idle"). An archive that is written but
@@ -1387,17 +1398,10 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             // old count) until someone searched it; a search only wakes the shard, the rows show up at the
             // next periodic refresh. So the existing tables are refreshed first and read again. A refresh
             // of a shard without unrefreshed writes changes nothing.
-            if (shardRows.Count > 0 && await TryRefreshTablesAsync(connection, schema, shardRows.Keys.ToList()))
+            if (shardRows.Count > 0 && await TryRefreshTablesAsync(connection, schema, shardRows.Keys.ToList(), token))
             {
-                shardRows = await ReadShardStatsAsync(connection, schema, tableNames);
+                shardRows = await ReadShardStatsAsync(connection, schema, tableNames, token);
             }
-
-            var healthRows = (await connection.QueryAsync<(string TableName, string Health)>(
-                @"SELECT table_name AS TableName, health AS Health
-                  FROM sys.health
-                  WHERE table_schema = @schema
-                    AND table_name = ANY(@tables)",
-                new { schema, tables = tableNames.ToArray() })).ToDictionary(r => r.TableName);
 
             // Only return rows for tables we actually saw shards for — callers treat missing
             // entries as "table doesn't exist yet". Health may be missing even when shards exist
@@ -1413,34 +1417,38 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
                     shardData.SizeBytes));
             }
             return (IReadOnlyList<Dtos.CrateTableStatsRow>)result;
-        });
+        }, cancellationToken);
     }
 
     private static async Task<Dictionary<string, (string TableName, long NumDocs, long SizeBytes)>> ReadShardStatsAsync(
-        NpgsqlConnection connection, string schema, IReadOnlyList<string> tableNames)
+        NpgsqlConnection connection, string schema, IReadOnlyList<string> tableNames, CancellationToken cancellationToken)
     {
         // primary = true filter ensures replica copies aren't double-counted.
         return (await connection.QueryAsync<(string TableName, long NumDocs, long SizeBytes)>(
-            @"SELECT table_name AS TableName,
-                     COALESCE(SUM(num_docs), 0) AS NumDocs,
-                     COALESCE(SUM(size), 0) AS SizeBytes
-              FROM sys.shards
-              WHERE schema_name = @schema
-                AND table_name = ANY(@tables)
-                AND ""primary"" = true
-              GROUP BY table_name",
-            new { schema, tables = tableNames.ToArray() })).ToDictionary(r => r.TableName);
+            new CommandDefinition(
+                @"SELECT table_name AS TableName,
+                         COALESCE(SUM(num_docs), 0) AS NumDocs,
+                         COALESCE(SUM(size), 0) AS SizeBytes
+                  FROM sys.shards
+                  WHERE schema_name = @schema
+                    AND table_name = ANY(@tables)
+                    AND ""primary"" = true
+                  GROUP BY table_name",
+                new { schema, tables = tableNames.ToArray() },
+                cancellationToken: cancellationToken))).ToDictionary(r => r.TableName);
     }
 
     /// <summary>
     /// Refreshes <paramref name="tableNames"/> in one statement (AB#8735), so <c>num_docs</c> counts every row
-    /// written before. Returns <c>false</c> when there is nothing to refresh or CrateDB refused the refresh (a table
-    /// dropped by a concurrent delete, a missing privilege, a statement timeout); the caller then reports the shard
-    /// statistics as they are. The refresh only makes the count current, so its failure must not fail the archive
-    /// list: it is logged as a warning.
+    /// written before. Returns <c>false</c> when there is nothing to refresh or the refresh failed — CrateDB refused
+    /// it (a table dropped by a concurrent delete, a missing privilege, a statement timeout) or the driver timed out
+    /// (<see cref="NpgsqlException"/> with an inner <see cref="TimeoutException"/>); the caller then reports the
+    /// shard statistics read before and sends nothing more on the connection. The refresh only makes the count
+    /// current, so its failure must not fail the archive list: it is logged as a warning. A cancellation the caller
+    /// requested is not a failure of the refresh and propagates.
     /// </summary>
     private async Task<bool> TryRefreshTablesAsync(NpgsqlConnection connection, string schema,
-        IReadOnlyList<string> tableNames)
+        IReadOnlyList<string> tableNames, CancellationToken cancellationToken)
     {
         var sql = BuildRefreshTablesSql(schema, tableNames);
         if (sql is null)
@@ -1450,10 +1458,10 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         try
         {
-            await connection.ExecuteAsync(sql);
+            await connection.ExecuteAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
             return true;
         }
-        catch (PostgresException ex)
+        catch (NpgsqlException ex) when (!cancellationToken.IsCancellationRequested && IsRefreshRefusal(ex))
         {
             _logger.LogWarning(ex,
                 "Refreshing {TableCount} archive tables in schema {Schema} failed ({SqlState}); the record counts of " +
@@ -1462,6 +1470,13 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             return false;
         }
     }
+
+    /// <summary>
+    /// A refresh failure the archive statistics fall back from: an error CrateDB returned, or a command timeout of
+    /// the driver. Other driver errors (a broken connection) stay with the resilience pipeline.
+    /// </summary>
+    internal static bool IsRefreshRefusal(NpgsqlException ex) =>
+        ex is PostgresException || ex.InnerException is TimeoutException;
 
     /// <summary>
     /// <c>REFRESH TABLE "schema"."archive_a", "schema"."archive_b"</c>, or <c>null</c> for no table. The names come

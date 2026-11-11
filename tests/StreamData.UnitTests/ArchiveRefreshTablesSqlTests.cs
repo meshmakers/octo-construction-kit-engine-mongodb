@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
+using Npgsql;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
@@ -29,5 +30,29 @@ public class ArchiveRefreshTablesSqlTests
     public void BuildRefreshTablesSql_NoTable_IsNull()
     {
         Assert.Null(CrateDatabaseClient.BuildRefreshTablesSql("acme", []));
+    }
+
+    [Fact]
+    public void IsRefreshRefusal_ServerError_FallsBack()
+    {
+        var ex = new PostgresException("relation unknown", "ERROR", "ERROR", "42P01");
+
+        Assert.True(CrateDatabaseClient.IsRefreshRefusal(ex));
+    }
+
+    [Fact]
+    public void IsRefreshRefusal_DriverCommandTimeout_FallsBack()
+    {
+        var ex = new NpgsqlException("Exception while reading from stream", new TimeoutException("Timeout during reading attempt"));
+
+        Assert.True(CrateDatabaseClient.IsRefreshRefusal(ex));
+    }
+
+    [Fact]
+    public void IsRefreshRefusal_BrokenConnection_IsLeftToTheResiliencePipeline()
+    {
+        var ex = new NpgsqlException("Exception while reading from stream", new EndOfStreamException());
+
+        Assert.False(CrateDatabaseClient.IsRefreshRefusal(ex));
     }
 }
