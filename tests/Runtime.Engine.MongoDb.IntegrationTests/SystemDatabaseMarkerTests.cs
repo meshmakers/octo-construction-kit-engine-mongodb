@@ -182,6 +182,9 @@ public class SystemDatabaseMarkerTests(TwoInstanceFixture fixture)
         }
         finally
         {
+            // The system marker makes the source look like another instance's system database; the delete guard
+            // (AB#8807) would refuse the drop and leak the tenant.
+            await MarkerStore.RemoveAsync(sourceTenantId, Ct);
             await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
             await ThrowawayTenant.DropAsync(InstanceA, restoredTenantId);
             DeleteQuietly(archivePath);
