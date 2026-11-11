@@ -2196,6 +2196,25 @@ afterwards (`TotalCount` = pruned count):
   byte-identical, paging after pruning; both overloads) with the real filter and a restricted policy
   table. Consumers: the export-by-deep-graph job of octo-bot-services (AB#6734).
 
+### AuditOnly read violations: action and aggregation (AB#7279)
+
+`TenantRepository.CreateSecurityFilterAsync` publishes `DataPermissions.ReadViolation` once per repository
+call whose type graph hits `AuditDeniedCkTypeIds` (16 call sites; a `ForEach` of single queries makes
+thousands per run). Since AB#7279:
+
+- The event is built by the engine's `DataPermissionAudit.PublishReadViolationAsync` with the real
+  action: queries pass `read` (default parameter), the update/replace/delete overrides pass
+  `update`/`replace`/`delete` for their pre-filter, so a write is no longer reported as "read". The
+  read message is unchanged; other actions read `performed '<action>' on protected type … without a
+  read grant`. Every call is counted in `octo.datapermissions.audit.violations`.
+- `TenantContext.GetRepositoryAuditEventSink()` hands the engine's `AggregatingAuditEventSink`
+  (fallback: the plain `IAuditEventSink`) to every `TenantRepository`, so the read filter and the
+  engine's write funnel publish first occurrence + one summary per window per (tenant, subject,
+  type, action). Other events through that sink carry no aggregation key and pass through unchanged.
+- Pinned by `DataPermissionEnforcementTests.AuditOnlyViolations_NameTheRealAction_AndRepeatedReadsAreAggregated`
+  (fixture `DataPermissionTestFixture.AuditSink`). Details of the aggregation: engine `CLAUDE.md`,
+  "Aggregation of repeated audit events".
+
 ### Interface query: `ITenantRepository.GetRtEntitiesByInterfaceAsync` (AB#7019)
 
 One method returns the entities of **all implementers of a CK interface** (derived types included), filtered, sorted, paged

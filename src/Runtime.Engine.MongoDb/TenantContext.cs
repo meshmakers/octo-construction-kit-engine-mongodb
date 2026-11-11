@@ -14,6 +14,7 @@ using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.AuditTrails;
+using Meshmakers.Octo.Runtime.Engine.AuditTrails;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -3169,7 +3170,7 @@ public class TenantContext : ITenantContext
             _bulkRtMutation,
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
-            _serviceProvider.GetService<IAuditEventSink>(),
+            GetRepositoryAuditEventSink(),
             _loggerFactory.CreateLogger<TenantRepository>());
         return tenantRepository;
     }
@@ -3183,9 +3184,21 @@ public class TenantContext : ITenantContext
             _bulkRtMutation,
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
-            _serviceProvider.GetService<IAuditEventSink>(),
+            GetRepositoryAuditEventSink(),
             _loggerFactory.CreateLogger<TenantRepository>());
         return tenantRepository;
+    }
+
+    /// <summary>
+    ///     The audit sink of the tenant repositories: the engine's <see cref="AggregatingAuditEventSink" /> around the
+    ///     host's sink (AB#7279), so AuditOnly violations published per repository call are aggregated per (tenant,
+    ///     subject, type, action); events without an aggregation key pass through unchanged. Falls back to the plain
+    ///     sink for hosts that register the engine without it.
+    /// </summary>
+    private IAuditEventSink? GetRepositoryAuditEventSink()
+    {
+        return _serviceProvider.GetService<AggregatingAuditEventSink>() ??
+               _serviceProvider.GetService<IAuditEventSink>();
     }
 
     private IMongoDbRepositoryDataSource CreateRepositoryDataSource(string databaseName)
