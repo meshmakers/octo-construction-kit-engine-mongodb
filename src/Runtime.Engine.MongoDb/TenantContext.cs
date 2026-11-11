@@ -1114,7 +1114,16 @@ public class TenantContext : ITenantContext
         // happens after the record deletion is durably gone. See DeleteChildTenantMetadataAsync.
         var handle = await DeleteChildTenantMetadataAsync(adminSession, tenantId, dropStreamData,
             overrideForeignOwnership);
-        await DropTenantDatabaseAsync(handle, tenantId);
+        try
+        {
+            await DropTenantDatabaseAsync(handle, tenantId);
+        }
+        catch (TenantException e) when (e.IsDatabaseDropPending)
+        {
+            // Here the metadata deletion is not committed yet: the refusal aborts the caller's transaction and the
+            // tenant stays registered, so it is the plain conflict, not a pending drop (AB#8807).
+            throw TenantException.DatabaseNameNotAvailable(NormalizeDatabaseName(handle.DatabaseName));
+        }
     }
 
     /// <inheritdoc />
@@ -1198,7 +1207,10 @@ public class TenantContext : ITenantContext
             // the lifecycle record. Another OctoMesh instance on the server may have claimed the name in between, so
             // the cross-instance ownership is re-checked right here, for every caller. Inside the try: the metadata
             // is gone either way, so the cache invalidation and the post-delete notification still run.
-            await EnsureDropTargetNotOwnedByAnotherInstanceAsync(tenantId, normalizedDatabaseName, handle);
+            // The check also RESERVES the database for this instance until the drop: an unmarked database gets this
+            // instance's marker first (insert-if-absent), so another instance can no longer attach or restore it
+            // between the check and the drop. The marker goes with the database; a refused drop releases it again.
+            await ReserveDropTargetAsync(tenantId, normalizedDatabaseName, handle);
 
             // Drop BOTH spellings: databases from the create path are physically normalized, but a
             // legacy attach adopted the physical database under whatever casing the record holds.
@@ -1664,24 +1676,81 @@ public class TenantContext : ITenantContext
     /// <summary>
     ///     The last cross-instance ownership check of a delete (AB#8807), right before the physical drop. Uses the same
     ///     decision as attach, restore and the metadata guard (<see cref="TenantDatabaseForeignOwnership" />) and throws
-    ///     the uniform database-name conflict of AB#4763 when the database belongs to another OctoMesh instance - its
-    ///     system database, a database another instance registers, or one carrying another instance's marker. The
-    ///     only exception is the deliberate override the metadata guard already granted for an orphaned foreign
-    ///     marker (<see cref="TenantDeletionHandle.ForeignOwnershipOverridden" />); a claim that appeared since then
-    ///     (another instance registers the database now) refuses the drop even then.
+    ///     the uniform database-name conflict of AB#4763, flagged <see cref="TenantException.IsDatabaseDropPending" />,
+    ///     when the database belongs to another OctoMesh instance - its system database, a database another instance
+    ///     registers, or one carrying another instance's marker. The only exception is the deliberate override the
+    ///     metadata guard granted for an orphaned foreign marker (<see cref="TenantDeletionHandle.ForeignOwnershipOverridden" />,
+    ///     kept in the delete's tombstone for the settle sweep); its conditions are re-checked here on every call, so a
+    ///     claim that appeared since then (another instance registers the database now) refuses the drop even then.
     /// </summary>
-    private async Task EnsureDropTargetNotOwnedByAnotherInstanceAsync(string tenantId, string normalizedDatabaseName,
+    /// <remarks>
+    ///     After the (read-only) check the database is reserved for this instance until the drop (insert-if-absent
+    ///     claim, AB#8807): an unmarked database - a legacy one, or one whose marker its owner just removed - could
+    ///     otherwise be attached by another instance between the check and the drop; a claim another instance won
+    ///     in between refuses the drop. Under the override the orphaned foreign marker is taken over for the same
+    ///     reason, and only while it is still the marker the check saw. The claim goes with the database. A database
+    ///     name only reachable in another casing (a legacy attach) cannot be claimed under the normalized name; it
+    ///     is dropped after the check alone.
+    /// </remarks>
+    private async Task ReserveDropTargetAsync(string tenantId, string normalizedDatabaseName,
         TenantDeletionHandle handle)
     {
-        var owner = await FindForeignOwnerAsync(normalizedDatabaseName);
-        if (owner == null || (handle.ForeignOwnershipOverridden && owner.CanBeOverridden))
+        if (!await IsDatabaseExistingAsync(normalizedDatabaseName))
         {
             return;
         }
 
-        throw RejectDatabaseName(tenantId.NormalizeString(), normalizedDatabaseName, handle.CorrelationId,
-            $"the database drop would destroy a database that {owner.Description}; the database is left untouched " +
-            "(it was claimed after the tenant's metadata was deleted, or the delete settle sweep found it claimed)");
+        var normalizedTenantId = tenantId.NormalizeString();
+        var store = GetTenantOwnershipStore();
+        var claimTime = TenantOwnershipStore.NewClaimTime();
+
+        // Read-only check first: nothing is ever written into a database another instance owns (its system database
+        // above all) unless the override applies to exactly that database.
+        var owner = await FindForeignOwnerAsync(normalizedDatabaseName);
+        if (owner != null)
+        {
+            if (handle.ForeignOwnershipOverridden && owner.CanBeOverridden && owner.ForeignMarker != null &&
+                await store.TryTakeOverMarkerAsync(normalizedDatabaseName, owner.ForeignMarker, normalizedTenantId,
+                    OwnerInstanceIdentity, claimTime))
+            {
+                return;
+            }
+
+            throw RefuseDrop(normalizedTenantId, normalizedDatabaseName, handle, owner.Description);
+        }
+
+        TenantOwnershipRecord claim;
+        try
+        {
+            claim = await store.StampIfAbsentAndGetAsync(normalizedDatabaseName, normalizedTenantId,
+                OwnerInstanceIdentity, claimTime: claimTime);
+        }
+        catch (MongoDB.Driver.MongoException ex)
+        {
+            _logger.LogDebug(ex,
+                "Could not reserve database '{DatabaseName}' of tenant '{TenantId}' before its drop; it is dropped " +
+                "after the ownership check alone", normalizedDatabaseName, tenantId);
+            return;
+        }
+
+        if (!string.Equals(claim.OwnerSystemDatabaseName, OwnerInstanceIdentity, StringComparison.Ordinal))
+        {
+            throw RefuseDrop(normalizedTenantId, normalizedDatabaseName, handle,
+                $"another OctoMesh instance (owner system database '{claim.OwnerSystemDatabaseName}') claimed " +
+                "concurrently, right before the drop");
+        }
+    }
+
+    private TenantException RefuseDrop(string normalizedTenantId, string normalizedDatabaseName,
+        TenantDeletionHandle handle, string foreignOwner)
+    {
+        _logger.LogWarning(
+            "Refused to drop database '{DatabaseName}' of deleted tenant '{TenantId}' (correlation {CorrelationId}): " +
+            "it is a database that {ForeignOwner}; it was claimed after the tenant's metadata was deleted, or the " +
+            "delete settle sweep found it claimed. The database is left untouched and the delete stays pending. The " +
+            "caller only sees a generic conflict message.", normalizedDatabaseName, normalizedTenantId,
+            handle.CorrelationId, foreignOwner);
+        return TenantException.DatabaseDropRefused(normalizedDatabaseName);
     }
 
     private Task<TenantDatabaseForeignOwner?> FindForeignOwnerAsync(string normalizedDatabaseName) =>

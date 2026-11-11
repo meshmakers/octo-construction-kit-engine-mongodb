@@ -46,7 +46,10 @@ public interface ITenantLifecycleStore
     /// </summary>
     Task MarkFailedAsync(string tenantId, string error, CancellationToken cancellationToken = default);
 
-    /// <summary>Marks the tenant as being deleted (tombstone) until the database drop is confirmed complete.</summary>
+    /// <summary>
+    /// Marks the tenant as being deleted (tombstone) until the database drop is confirmed complete. Starts a new
+    /// delete: an ownership override recorded by an earlier attempt is reset (AB#8807).
+    /// </summary>
     Task MarkDeletingAsync(string tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -62,6 +65,17 @@ public interface ITenantLifecycleStore
     /// </summary>
     Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <see cref="EnsureDeletingAsync(string, string?, Guid, CancellationToken)" /> that also records whether the
+    /// delete's metadata guard granted the ownership override (<see cref="TenantLifecycleRecord.ForeignOwnershipOverridden" />,
+    /// AB#8807). The delete endpoint calls it before it commits the metadata deletion, so a delete interrupted
+    /// between that commit and the database drop is finished by the settle sweep with the same decision. The
+    /// default implementation keeps the earlier behaviour and drops the flag.
+    /// </summary>
+    Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId, bool foreignOwnershipOverridden,
+        CancellationToken cancellationToken = default) =>
+        EnsureDeletingAsync(tenantId, databaseName, correlationId, cancellationToken);
 
     /// <summary>Removes the lifecycle record entirely (the tenant is fully gone).</summary>
     Task RemoveAsync(string tenantId, CancellationToken cancellationToken = default);

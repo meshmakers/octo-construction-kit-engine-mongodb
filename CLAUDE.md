@@ -3098,9 +3098,21 @@ is still fully registered (until then a re-create of that tenant id answers 409)
 the same decision again right before the physical drop, for every caller - also the settle sweep in
 common-services, which re-drops a resurrected database from a `TenantDeletionHandle` built out of the lifecycle
 record after only a local lookup: a database claimed by another instance in the meantime is never dropped (uniform
-conflict, database untouched; cache invalidation and post-delete event still run). Only an override the metadata
+conflict, database untouched; cache invalidation and post-delete event still run). This refusal comes after the
+caller committed the metadata deletion, so the exception carries `TenantException.IsDatabaseDropPending` (also
+`IsConflict`, same uniform text): the tenant record is gone, the database stays and the tombstone stays for the
+sweep, which retries the drop each tick. The asset repository's REST delete answers it with a 409 that says so
+(record deleted, database left untouched, delete pending); `DropChildTenantAsync`, whose metadata deletion is not
+committed yet, turns it back into the plain conflict. After the read-only check the drop **reserves** the database
+until the drop (insert-if-absent marker of this instance; the marker goes with the database): an unmarked database
+can no longer be attached by another instance between the check and the drop, and a claim another instance won in
+between refuses the drop. Nothing is written into a database the check found foreign. Only an override the metadata
 phase granted (`TenantDeletionHandle.ForeignOwnershipOverridden`) passes there, and only while the database is
-still merely an orphaned foreign marker.
+still merely an orphaned foreign marker (re-checked at every drop; the marker is then taken over for the drop). The
+REST delete records the granted override in the tombstone (`TenantLifecycleRecord.ForeignOwnershipOverridden`,
+`ITenantLifecycleStore.EnsureDeletingAsync(..., foreignOwnershipOverridden)`) BEFORE it commits the metadata
+deletion, and the settle sweep builds its handle with it, so a delete interrupted between the commit and the drop is
+finished with the same decision; `MarkDeletingAsync` resets it for a new delete.
 `TenantDatabaseForeignOwnership.FindAsync` (same folder; also the decision of the attach gate and of the
 restore guard, whose `CheckForeignOwnershipAsync` only words the restore's messages) decides: another instance's system database, a marker
 naming another instance, or another system database registering the database (also the owner side of a

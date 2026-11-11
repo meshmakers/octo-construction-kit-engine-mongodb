@@ -325,7 +325,7 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
                 InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(tenantOfB, Guid.NewGuid()), "dgdeleted"));
 
             AssertUniformConflict(exception, tenantOfB);
-            AssertDropRefusalLogged(tenantOfB, SystemDatabaseB);
+            AssertDropRefusalLogged(exception, tenantOfB, SystemDatabaseB);
             Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfB));
             Assert.NotNull(await InstanceB.TryFindTenantContextAsync(tenantOfB));
         }
@@ -350,8 +350,60 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
                 InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(tenantOfB, Guid.NewGuid()), "dgdeleted"));
 
             AssertUniformConflict(exception, tenantOfB);
-            AssertDropRefusalLogged(tenantOfB, SystemDatabaseB);
+            AssertDropRefusalLogged(exception, tenantOfB, SystemDatabaseB);
             Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfB));
+            // The refusal comes from the read-only check: no claim was written into B's database (AB#8807).
+            Assert.Null(await OwnershipStore.GetAsync(tenantOfB, Ct));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceB, tenantOfB);
+        }
+    }
+
+    [Fact]
+    public async Task DropDatabase_FromASettleSweepHandle_WithTheRecordedOverride_DropsAnOrphanedForeignMarkedDatabase()
+    {
+        // AB#8807: the delete granted the override and recorded it in its tombstone, then stopped before the drop.
+        // The sweep's handle carries the decision; the conditions still hold (only an orphaned foreign marker).
+        const string goneInstance = "octosystemgone";
+        var leftover = NewName("dgsweepovr");
+
+        await CreateAsync(InstanceA, leftover);
+        try
+        {
+            await UnregisterDirectlyQuietlyAsync(InstanceA, leftover);
+            await OwnershipStore.StampAsync(leftover, leftover, goneInstance, Ct);
+
+            await InstanceA.DropTenantDatabaseAsync(
+                new TenantDeletionHandle(leftover, Guid.NewGuid()) { ForeignOwnershipOverridden = true }, leftover);
+
+            Assert.False(await InstanceA.IsDatabaseExistingAsync(leftover));
+        }
+        finally
+        {
+            await DropDatabaseQuietlyAsync(leftover);
+        }
+    }
+
+    [Fact]
+    public async Task DropDatabase_FromASettleSweepHandle_WithTheRecordedOverride_IsRefused_OnceAnotherInstanceRegistersIt()
+    {
+        // AB#8807: the recorded override is re-validated on every retry. B registered the database since the delete,
+        // so it is no longer an orphaned foreign marker: the drop refuses and keeps the database and B's marker.
+        var tenantOfB = NewName("dgsweepreval");
+
+        await CreateAsync(InstanceB, tenantOfB);
+        try
+        {
+            var exception = await Assert.ThrowsAsync<TenantException>(() => InstanceA.DropTenantDatabaseAsync(
+                new TenantDeletionHandle(tenantOfB, Guid.NewGuid()) { ForeignOwnershipOverridden = true },
+                "dgdeleted"));
+
+            AssertUniformConflict(exception, tenantOfB);
+            AssertDropRefusalLogged(exception, tenantOfB, SystemDatabaseB);
+            Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfB));
+            Assert.Equal(SystemDatabaseB, (await OwnershipStore.GetAsync(tenantOfB, Ct))!.OwnerSystemDatabaseName);
         }
         finally
         {
@@ -390,7 +442,7 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
                 InstanceA.DropTenantDatabaseAsync(handle, tenantOfA));
 
             AssertUniformConflict(exception, tenantOfA);
-            AssertDropRefusalLogged(tenantOfA, SystemDatabaseB);
+            AssertDropRefusalLogged(exception, tenantOfA, SystemDatabaseB);
             Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfA));
         }
         finally
@@ -423,13 +475,17 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
         }
     }
 
-    /// <summary>The drop-time refusal names the owner in A's server log.</summary>
-    private void AssertDropRefusalLogged(string databaseName, string ownerSystemDatabase)
+    /// <summary>
+    ///     The drop-time refusal (AB#8807) is the uniform conflict, flagged as a pending drop (the caller's metadata
+    ///     deletion is committed), and names the owner in A's server log.
+    /// </summary>
+    private void AssertDropRefusalLogged(TenantException exception, string databaseName, string ownerSystemDatabase)
     {
+        Assert.True(exception.IsDatabaseDropPending);
         Assert.Contains(fixture.Logs.Entries, e =>
             e.Level == LogLevel.Warning &&
-            e.Message.Contains($"Rejected database name '{databaseName}'", StringComparison.Ordinal) &&
-            e.Message.Contains("the database drop would destroy", StringComparison.Ordinal) &&
+            e.Message.Contains($"Refused to drop database '{databaseName}'", StringComparison.Ordinal) &&
+            e.Message.Contains("the delete stays pending", StringComparison.Ordinal) &&
             e.Message.Contains(ownerSystemDatabase, StringComparison.Ordinal));
     }
 

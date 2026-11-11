@@ -16,6 +16,15 @@ public sealed class TenantLifecycleRecord
     /// <summary>Correlation id tying this record to the tenant lifecycle events that drive it.</summary>
     public Guid CorrelationId { get; set; }
 
+    /// <summary>
+    /// Deleting tombstones only: the delete's metadata guard granted the deliberate ownership override for a
+    /// database that carries only an orphaned marker of another OctoMesh instance (AB#8807,
+    /// <see cref="TenantDeletionHandle.ForeignOwnershipOverridden" />). Written before the metadata deletion commits,
+    /// so the settle sweep finishes an interrupted delete with the same decision; the drop re-checks its conditions
+    /// on every attempt. Reset by <see cref="ITenantLifecycleStore.MarkDeletingAsync" />.
+    /// </summary>
+    public bool ForeignOwnershipOverridden { get; set; }
+
     public TenantLifecycleState State { get; set; }
 
     public TenantLifecyclePhase Phase { get; set; }

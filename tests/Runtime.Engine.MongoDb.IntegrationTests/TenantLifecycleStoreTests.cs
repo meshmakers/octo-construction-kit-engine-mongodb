@@ -148,6 +148,41 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
     }
 
     /// <summary>
+    /// AB#8807: the delete records the ownership override its metadata guard granted in the tombstone before the
+    /// metadata commit, so the settle sweep finishes an interrupted delete with the same decision. The plain restamp
+    /// after the drop keeps it; a new delete (MarkDeleting) starts without it.
+    /// </summary>
+    [Fact]
+    public async Task EnsureDeleting_records_the_ownership_override_the_plain_restamp_keeps_it_and_MarkDeleting_resets_it()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"t-{Guid.NewGuid():N}";
+        var correlationId = Guid.NewGuid();
+        try
+        {
+            await store.EnsureDeletingAsync(tenantId, $"db-{tenantId}", correlationId, true, ct);
+            var recorded = await store.GetAsync(tenantId, ct);
+            Assert.True(recorded!.ForeignOwnershipOverridden);
+            Assert.Equal($"db-{tenantId}", recorded.DatabaseName);
+            Assert.Equal(TenantLifecycleState.Deleting, recorded.State);
+
+            await store.EnsureDeletingAsync(tenantId, $"db-{tenantId}", correlationId, ct);
+            Assert.True((await store.GetAsync(tenantId, ct))!.ForeignOwnershipOverridden);
+
+            await store.MarkDeletingAsync(tenantId, ct);
+            Assert.False((await store.GetAsync(tenantId, ct))!.ForeignOwnershipOverridden);
+
+            await store.EnsureDeletingAsync(tenantId, $"db-{tenantId}", correlationId, false, ct);
+            Assert.False((await store.GetAsync(tenantId, ct))!.ForeignOwnershipOverridden);
+        }
+        finally
+        {
+            await store.RemoveAsync(tenantId, ct);
+        }
+    }
+
+    /// <summary>
     /// AB#4829 review follow-up. The Deleting-preservation invariant must hold for EVERY writer, not
     /// just EnsureCreating: MarkActive is the terminal write of exactly the in-flight setup pass the
     /// invariant defends against — a pass that entered before the delete's tombstone and completes

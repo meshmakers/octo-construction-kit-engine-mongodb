@@ -303,6 +303,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         // phantom Deleting record for a non-existent tenant and permanently 409 any re-create.
         var update = Builders<TenantLifecycleRecord>.Update
             .Set(r => r.State, TenantLifecycleState.Deleting)
+            .Set(r => r.ForeignOwnershipOverridden, false)
             .Set(r => r.LeaseOwner, (string?)null)
             .Set(r => r.LeaseUntil, (DateTime?)null)
             .Set(r => r.LastTransitionUtc, DateTime.UtcNow);
@@ -311,8 +312,16 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
             .ConfigureAwait(false);
     }
 
-    public async Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
-        CancellationToken cancellationToken = default)
+    public Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
+        CancellationToken cancellationToken = default) =>
+        EnsureDeletingCoreAsync(tenantId, databaseName, correlationId, null, cancellationToken);
+
+    public Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
+        bool foreignOwnershipOverridden, CancellationToken cancellationToken = default) =>
+        EnsureDeletingCoreAsync(tenantId, databaseName, correlationId, foreignOwnershipOverridden, cancellationToken);
+
+    private async Task EnsureDeletingCoreAsync(string tenantId, string? databaseName, Guid correlationId,
+        bool? foreignOwnershipOverridden, CancellationToken cancellationToken)
     {
         var collection = await GetCollectionAsync(ensureIndexes: true, cancellationToken).ConfigureAwait(false);
 
@@ -330,6 +339,13 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         if (!string.IsNullOrEmpty(databaseName))
         {
             update = update.Set(r => r.DatabaseName, databaseName);
+        }
+
+        // AB#8807: only the overload with the flag writes it; the plain restamp after the drop keeps what the delete
+        // recorded before its metadata commit.
+        if (foreignOwnershipOverridden.HasValue)
+        {
+            update = update.Set(r => r.ForeignOwnershipOverridden, foreignOwnershipOverridden.Value);
         }
 
         await collection.UpdateOneAsync(Eq(tenantId), update, new UpdateOptions { IsUpsert = true },

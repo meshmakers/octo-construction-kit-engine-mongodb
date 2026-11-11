@@ -40,8 +40,11 @@ public sealed record TenantDeletionHandle(
     /// <summary>
     ///     True when the metadata deletion let a deliberate administrator override drop a database that only carries
     ///     another OctoMesh instance's ownership marker (AB#8807). <see cref="ITenantContext.DropTenantDatabaseAsync" />
-    ///     re-checks the cross-instance ownership right before the drop and honours the override only for exactly that
-    ///     case; a handle built from a lifecycle record (the delete settle sweep) never carries it.
+    ///     re-checks the cross-instance ownership right before every drop and honours the override only while that is
+    ///     still the case. The delete endpoint keeps the decision in the delete's tombstone
+    ///     (<see cref="TenantLifecycle.TenantLifecycleRecord.ForeignOwnershipOverridden" />) before it commits the
+    ///     metadata deletion, so the settle sweep, which builds its handle from the tombstone, finishes an interrupted
+    ///     delete with the same decision.
     /// </summary>
     public bool ForeignOwnershipOverridden { get; init; }
 
