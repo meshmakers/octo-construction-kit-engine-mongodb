@@ -223,7 +223,7 @@ internal class TenantBackupService(
             // guard (AB#4945) refuses the result. Runs before the dropExistingTenant block, which is itself
             // destructive.
             var foreignOwnershipRefusal = await CheckForeignOwnershipAsync(tenantId,
-                normalizedTargetDatabaseName, overrideForeignOwnership,
+                normalizedTargetDatabaseName, overrideForeignOwnership, attachTenant,
                 cancellationToken ?? CancellationToken.None);
             if (foreignOwnershipRefusal != null)
             {
@@ -427,10 +427,12 @@ internal class TenantBackupService(
     ///     system database registers it (a tenant from before the marker shipped). A deliberate
     ///     <paramref name="overrideForeignOwnership" /> lets the restore proceed into another instance's
     ///     tenant database and logs the override as a warning naming the owner; another instance's system
-    ///     database is never overwritten.
+    ///     database is never overwritten. Nor does the override restore and attach a database another
+    ///     instance still registers: the attach guard (AB#8796) would refuse the attach after the data was
+    ///     already replaced, and a successful attach would register one database in two instances.
     /// </summary>
     private async Task<string?> CheckForeignOwnershipAsync(string tenantId, string databaseName,
-        bool overrideForeignOwnership, CancellationToken cancellationToken)
+        bool overrideForeignOwnership, bool attachTenant, CancellationToken cancellationToken)
     {
         var ownInstance = TenantDatabaseRegistrationLookup.Normalize(systemContext.DatabaseName);
         var registrations = await registrationLookup.GetRegistrationsAsync(cancellationToken);
@@ -459,24 +461,33 @@ internal class TenantBackupService(
             }
         }
 
-        if (foreignOwner == null)
+        // Also when the database does not exist (yet): a name another instance has registered is not
+        // free, the restored database would show up as that instance's tenant.
+        var foreignRegistrations = registrations.GetRegisteringSystemDatabases(databaseName)
+            .Where(s => !string.Equals(s, ownInstance, StringComparison.Ordinal))
+            .ToList();
+        if (foreignOwner == null && foreignRegistrations.Count > 0)
         {
-            // Also when the database does not exist (yet): a name another instance has registered is not
-            // free, the restored database would show up as that instance's tenant.
-            var foreignRegistrations = registrations.GetRegisteringSystemDatabases(databaseName)
-                .Where(s => !string.Equals(s, ownInstance, StringComparison.Ordinal))
-                .ToList();
-            if (foreignRegistrations.Count > 0)
-            {
-                foreignOwner =
-                    $"is registered as a tenant database by another OctoMesh instance (system database " +
-                    $"'{string.Join("', '", foreignRegistrations)}')";
-            }
+            foreignOwner =
+                $"is registered as a tenant database by another OctoMesh instance (system database " +
+                $"'{string.Join("', '", foreignRegistrations)}')";
         }
 
         if (foreignOwner == null)
         {
             return null;
+        }
+
+        if (overrideForeignOwnership && attachTenant && foreignRegistrations.Count > 0)
+        {
+            var doubleRegistrationMessage =
+                $"Database '{databaseName}' is registered as a tenant database by another OctoMesh instance " +
+                $"(system database '{string.Join("', '", foreignRegistrations)}'). The ownership override cannot " +
+                $"restore and attach tenant '{tenantId}' into it, because the attach would register one database " +
+                "in two instances. Detach the tenant in that instance first, or restore without attaching.";
+            logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId,
+                doubleRegistrationMessage);
+            return doubleRegistrationMessage;
         }
 
         if (overrideForeignOwnership)

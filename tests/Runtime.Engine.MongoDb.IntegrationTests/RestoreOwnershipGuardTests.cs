@@ -286,10 +286,55 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
     }
 
     [Fact]
-    public async Task Restore_IntoTenantDatabaseOfAnotherInstance_WithOverride_Succeeds_AndLogsTheOverride()
+    public async Task Restore_IntoDatabaseMarkedByAnotherInstance_WithOverride_Succeeds_AndLogsTheOverride()
     {
+        // A database the marker assigns to B while no system database registers it any more (B's
+        // registry row is gone, e.g. B was removed): the override lets A take it over.
         var sourceTenantId = NewName("rgsrc");
-        var foreignTenantId = NewName("rgoverride");
+        var orphanTenantId = NewName("rgoverride");
+        var archivePath = NewArchivePath();
+
+        await CreateTenantAsync(InstanceA, sourceTenantId);
+        await CreateTenantAsync(InstanceB, orphanTenantId);
+        try
+        {
+            await DetachQuietlyAsync(InstanceB, orphanTenantId);
+            await OwnershipStoreA.StampAsync(orphanTenantId, orphanTenantId, SystemDatabaseB, Ct);
+            await BackupAsync(InstanceA, sourceTenantId, archivePath);
+
+            var refused = await InstanceA.RestoreTenantAsync(orphanTenantId, orphanTenantId, archivePath);
+            var result = await InstanceA.RestoreTenantAsync(orphanTenantId, orphanTenantId, archivePath,
+                overrideForeignOwnership: true);
+
+            Assert.False(refused.Success);
+            Assert.Contains(SystemDatabaseB, refused.Error);
+            Assert.True(result.Success, $"Restore with override should succeed. Error: {result.Error}");
+            Assert.NotNull(await InstanceA.TryFindTenantContextAsync(orphanTenantId));
+            var marker = await OwnershipStoreA.GetAsync(orphanTenantId, Ct);
+            Assert.NotNull(marker);
+            Assert.Equal(SystemDatabaseA, marker!.OwnerSystemDatabaseName);
+
+            Assert.Contains(fixture.Logs.Entries, e =>
+                e.Level == LogLevel.Warning &&
+                e.Message.Contains("OWNERSHIP OVERRIDE", StringComparison.Ordinal) &&
+                e.Message.Contains(orphanTenantId, StringComparison.Ordinal) &&
+                e.Message.Contains(SystemDatabaseB, StringComparison.Ordinal));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceA, orphanTenantId);
+            await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
+            DeleteQuietly(archivePath);
+        }
+    }
+
+    [Fact]
+    public async Task Restore_WithOverrideAndAttach_IntoDatabaseRegisteredByAnotherInstance_IsRefusedBeforeAnyWrite()
+    {
+        // The attach guard (AB#8796) refuses a database another instance registers. Restoring first would
+        // replace B's data and then fail the attach — so the override refuses before any write.
+        var sourceTenantId = NewName("rgsrc");
+        var foreignTenantId = NewName("rgregd");
         var archivePath = NewArchivePath();
 
         await CreateTenantAsync(InstanceA, sourceTenantId);
@@ -301,12 +346,41 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
             var result = await InstanceA.RestoreTenantAsync(foreignTenantId, foreignTenantId, archivePath,
                 overrideForeignOwnership: true);
 
-            Assert.True(result.Success, $"Restore with override should succeed. Error: {result.Error}");
-            Assert.NotNull(await InstanceA.TryFindTenantContextAsync(foreignTenantId));
+            Assert.False(result.Success);
+            Assert.Contains("register one database in two instances", result.Error);
+            Assert.Contains(SystemDatabaseB, result.Error);
+            Assert.Null(await InstanceA.TryFindTenantContextAsync(foreignTenantId));
             var marker = await OwnershipStoreA.GetAsync(foreignTenantId, Ct);
             Assert.NotNull(marker);
-            Assert.Equal(SystemDatabaseA, marker!.OwnerSystemDatabaseName);
+            Assert.Equal(SystemDatabaseB, marker!.OwnerSystemDatabaseName);
+            Assert.NotNull(await InstanceB.TryFindTenantContextAsync(foreignTenantId));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceB, foreignTenantId);
+            await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
+            DeleteQuietly(archivePath);
+        }
+    }
 
+    [Fact]
+    public async Task Restore_WithOverrideWithoutAttach_IntoDatabaseRegisteredByAnotherInstance_Succeeds_AndLogsTheOverride()
+    {
+        var sourceTenantId = NewName("rgsrc");
+        var foreignTenantId = NewName("rgnoattach");
+        var archivePath = NewArchivePath();
+
+        await CreateTenantAsync(InstanceA, sourceTenantId);
+        await CreateTenantAsync(InstanceB, foreignTenantId);
+        try
+        {
+            await BackupAsync(InstanceA, sourceTenantId, archivePath);
+
+            var result = await InstanceA.RestoreTenantAsync(foreignTenantId, foreignTenantId, archivePath,
+                attachTenant: false, overrideForeignOwnership: true);
+
+            Assert.True(result.Success, $"Restore with override should succeed. Error: {result.Error}");
+            Assert.Null(await InstanceA.TryFindTenantContextAsync(foreignTenantId));
             Assert.Contains(fixture.Logs.Entries, e =>
                 e.Level == LogLevel.Warning &&
                 e.Message.Contains("OWNERSHIP OVERRIDE", StringComparison.Ordinal) &&
@@ -315,9 +389,7 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
         }
         finally
         {
-            // A now owns the database; B keeps a stale registration of it. Drop in A, then release B's row.
-            await ThrowawayTenant.DropAsync(InstanceA, foreignTenantId);
-            await DetachQuietlyAsync(InstanceB, foreignTenantId);
+            await ThrowawayTenant.DropAsync(InstanceB, foreignTenantId);
             await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
             DeleteQuietly(archivePath);
         }
