@@ -742,9 +742,18 @@ public class TenantContext : ITenantContext
             // AB#4945: claim the database for this instance before anything else in the try — the
             // marker is the cross-instance lock, so the claim window should be as small as
             // possible. The registry rows below roll back with the caller's transaction; the
-            // marker is compensated in the catch.
-            await GetTenantOwnershipStore().StampAsync(normalizedDatabaseName, normalizedTenantId,
-                OwnerInstanceIdentity);
+            // marker is compensated in the catch. AB#8796: insert-if-absent, never an overwrite —
+            // another instance attaching the same unmarked database may have claimed it between the
+            // gate's read and this write; then the first writer keeps it and this attach is refused
+            // with the same uniform conflict as the gate.
+            var claim = await GetTenantOwnershipStore().StampIfAbsentAndGetAsync(normalizedDatabaseName,
+                normalizedTenantId, OwnerInstanceIdentity);
+            if (!string.Equals(claim.OwnerSystemDatabaseName, OwnerInstanceIdentity, StringComparison.Ordinal))
+            {
+                throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                    $"another OctoMesh instance (owner system database '{claim.OwnerSystemDatabaseName}') claimed " +
+                    "the database concurrently, after the namespace check of this attach");
+            }
 
             // Add the new tenant as child tenant of the current one
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
@@ -781,9 +790,11 @@ public class TenantContext : ITenantContext
             // failed attach leaves the database locked for every other instance without any
             // registry row backing the claim. Best-effort; a leftover marker of this instance
             // self-heals on the next attach by this instance.
+            // Only this instance's marker: when another instance won the claim above, its marker stays.
             if (!hadOwnMarkerBefore)
             {
-                await GetTenantOwnershipStore().TryRemoveAsync(normalizedDatabaseName);
+                await GetTenantOwnershipStore().TryRemoveIfOwnedByAsync(normalizedDatabaseName,
+                    OwnerInstanceIdentity);
             }
 
             // Attach reuses an already existing database, so it is never dropped here; only the
@@ -1548,57 +1559,23 @@ public class TenantContext : ITenantContext
 
         if (mode == TenantNamespaceMode.AttachExistingDatabase)
         {
-            // AB#4945 cross-instance guard: the registry lookups above only cover THIS instance's
+            // AB#4945 / AB#8796 cross-instance guard: the registry lookups above only cover THIS instance's
             // system database. On a shared MongoDB server another OctoMesh instance (different
-            // SystemDatabaseName, Epic AB#4944) may own this database — its ownership marker lives
-            // in the tenant database itself, so it is visible here. STRICT by decision: no force
-            // override; the owning instance has to detach first (the one sanctioned handover).
-            // The rejection stays uniform and reason-free per the AB#4763 rule — the owner goes to
-            // the log, never to the caller.
-            var ownership = await GetTenantOwnershipStore().GetAsync(normalizedDatabaseName);
-            if (ownership != null &&
-                !string.Equals(ownership.OwnerSystemDatabaseName, OwnerInstanceIdentity, StringComparison.Ordinal))
+            // SystemDatabaseName, Epic AB#4944) may own this database: its ownership marker names that
+            // instance, that instance's system database registers it (a database from before the marker), or
+            // it is that instance's system database. The decision is the one the restore and the delete use
+            // (TenantDatabaseForeignOwnership). STRICT by decision: no force override; the owning instance has
+            // to detach first (the one sanctioned handover). The rejection stays uniform and reason-free per
+            // the AB#4763 rule — the owner goes to the log, never to the caller.
+            var owner = await TenantDatabaseForeignOwnership.FindAsync(GetTenantOwnershipStore(),
+                _serviceProvider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
+                _systemConfiguration.Value.SystemDatabaseName, normalizedDatabaseName);
+            if (owner != null)
             {
                 throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
-                    $"the database is owned by another OctoMesh instance (owner system database " +
-                    $"'{ownership.OwnerSystemDatabaseName}', stamped {ownership.AttachedAtUtc:u} for tenant " +
-                    $"'{ownership.TenantId}'); detach it in the owning instance first");
+                    $"the database {owner.Description}" +
+                    (owner.IsSystemDatabase ? string.Empty : "; detach it in the owning instance first"));
             }
-
-            await RejectIfRegisteredByAnotherInstanceAsync(normalizedTenantId, normalizedDatabaseName, correlationId);
-        }
-    }
-
-    /// <summary>
-    ///     AB#8796: the marker check above misses every database that predates the marker (created
-    ///     before AB#4945 and not resolved since). Such a database can still be registered in another
-    ///     instance's system database on the same server — then attaching it here would make two
-    ///     instances work on it. Refused with the same uniform conflict; the owning system database
-    ///     goes to the log only. A database no other system database registers stays attachable.
-    /// </summary>
-    private async Task RejectIfRegisteredByAnotherInstanceAsync(string normalizedTenantId,
-        string normalizedDatabaseName, Guid correlationId)
-    {
-        var registrations = await _serviceProvider.GetRequiredService<TenantDatabaseRegistrationLookup>()
-            .GetRegistrationsAsync();
-
-        // The system database of another instance carries no marker and nobody registers it, so
-        // without this check it would pass as a free legacy database.
-        if (registrations.IsSystemDatabase(normalizedDatabaseName))
-        {
-            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
-                "the database is the system database of another OctoMesh instance on this server");
-        }
-
-        var otherRegistrations = registrations.GetRegisteringSystemDatabases(normalizedDatabaseName)
-            .Where(systemDatabase => !string.Equals(systemDatabase, OwnerInstanceIdentity, StringComparison.Ordinal))
-            .ToList();
-        if (otherRegistrations.Count > 0)
-        {
-            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
-                $"the database is registered as a tenant database in the system database(s) " +
-                $"'{string.Join("', '", otherRegistrations)}' of another OctoMesh instance on this server; " +
-                "detach it there first");
         }
     }
 
@@ -1624,7 +1601,7 @@ public class TenantContext : ITenantContext
 
         var owner = await TenantDatabaseForeignOwnership.FindAsync(GetTenantOwnershipStore(),
             _serviceProvider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
-            _systemConfiguration.Value.SystemDatabaseName, normalizedDatabaseName, normalizedTenantId);
+            _systemConfiguration.Value.SystemDatabaseName, normalizedDatabaseName);
         if (owner == null)
         {
             return;

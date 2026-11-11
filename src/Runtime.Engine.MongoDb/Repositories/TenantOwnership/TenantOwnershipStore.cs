@@ -46,8 +46,9 @@ internal sealed class TenantOwnershipStore
     }
 
     /// <summary>
-    ///     Stamps (or re-stamps) the marker. Used by create and attach, where the namespace gate
-    ///     has already established that any existing marker belongs to this instance.
+    ///     Stamps (or re-stamps) the marker. Used by create, which only writes into a database it
+    ///     created itself. Attach claims with <see cref="StampIfAbsentAndGetAsync" /> instead, so two
+    ///     instances attaching the same unmarked database cannot both win (AB#8796).
     /// </summary>
     public async Task StampAsync(string databaseName, string tenantId, string ownerSystemDatabaseName,
         CancellationToken cancellationToken = default)
@@ -132,14 +133,14 @@ internal sealed class TenantOwnershipStore
     }
 
     /// <summary>
-    ///     Best-effort removal for rollback paths (a failed attach must not leave a fresh marker
-    ///     behind that would lock the database for other instances).
+    ///     Best-effort <see cref="RemoveIfOwnedByAsync" /> for rollback paths (AB#8796): a failed attach removes
+    ///     the marker it wrote, but never the marker of another instance that won the claim.
     /// </summary>
-    public async Task TryRemoveAsync(string databaseName)
+    public async Task TryRemoveIfOwnedByAsync(string databaseName, string ownerSystemDatabaseName)
     {
         try
         {
-            await RemoveAsync(databaseName).ConfigureAwait(false);
+            await RemoveIfOwnedByAsync(databaseName, ownerSystemDatabaseName).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

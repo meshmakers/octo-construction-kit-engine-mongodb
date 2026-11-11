@@ -1,8 +1,8 @@
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 
 /// <summary>
-///     Why a database belongs to another OctoMesh instance on the same MongoDB server: the answer of the delete
-///     guard (AB#8807), written so that the other destructive admin guards (restore, AB#8672) can share it.
+///     Why a database belongs to another OctoMesh instance on the same MongoDB server: the one answer the
+///     destructive and adopting admin guards share — attach (AB#8796), restore (AB#8672) and delete (AB#8807).
 /// </summary>
 /// <param name="IsSystemDatabase">
 ///     The database is another instance's system database. Destroying it destroys that whole instance, so no
@@ -17,8 +17,13 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 ///     Completes the sentence "Database 'x' ...", names the owner. For the server log, or for callers that may see
 ///     the owner; never for a reason-free conflict (AB#4763).
 /// </param>
+/// <param name="ForeignMarker">The ownership marker of the database when it names another instance, else null.</param>
+/// <param name="ForeignRegistrations">
+///     The system databases of other instances that register the database, normalized and sorted; empty for a system
+///     database.
+/// </param>
 internal sealed record TenantDatabaseForeignOwner(bool IsSystemDatabase, bool IsRegisteredByAnotherInstance,
-    string Description)
+    string Description, TenantOwnershipRecord? ForeignMarker, IReadOnlyList<string> ForeignRegistrations)
 {
     /// <summary>Whether a deliberate administrator override may proceed (orphaned foreign marker only).</summary>
     public bool CanBeOverridden => !IsSystemDatabase && !IsRegisteredByAnotherInstance;
@@ -31,8 +36,11 @@ internal sealed record TenantDatabaseForeignOwner(bool IsSystemDatabase, bool Is
 ///     marker shipped, or a double registration, AB#8796).
 /// </summary>
 /// <remarks>
-///     Read-only. Takes one registry snapshot of the server per call (<see cref="TenantDatabaseRegistrationLookup" />),
-///     so it belongs on admin paths, not on the per-request resolve.
+///     Whether a database is a system database at all is decided by the registry snapshot
+///     (<see cref="TenantDatabaseRegistrations.IsSystemDatabase" />): the system-database marker first, the parent
+///     tenant ids of its registry rows as the fallback. Read-only. Takes one registry snapshot of the server per
+///     call (<see cref="TenantDatabaseRegistrationLookup" />), so it belongs on admin paths, not on the per-request
+///     resolve.
 /// </remarks>
 internal static class TenantDatabaseForeignOwnership
 {
@@ -45,17 +53,10 @@ internal static class TenantDatabaseForeignOwnership
     /// <param name="registrationLookup">The cross-instance registry lookup of AB#8796.</param>
     /// <param name="ownSystemDatabaseName">The system database of THIS instance (any casing).</param>
     /// <param name="databaseName">The database to check (any casing).</param>
-    /// <param name="registeredTenantId">
-    ///     The tenant this instance has registered on <paramref name="databaseName" />, when there is one (the delete).
-    ///     Such a row hides a system database from <see cref="TenantDatabaseRegistrations.IsSystemDatabase" />, which
-    ///     takes every registered database for a tenant database; with the tenant id the check also looks into the
-    ///     database: an unmarked database whose own tenant registry has rows, none of them naming that tenant as
-    ///     parent, is not the database of a parent tenant but a system database.
-    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public static async Task<TenantDatabaseForeignOwner?> FindAsync(TenantOwnershipStore ownershipStore,
         TenantDatabaseRegistrationLookup registrationLookup, string ownSystemDatabaseName, string databaseName,
-        string? registeredTenantId = null, CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
         var ownInstance = TenantDatabaseRegistrationLookup.Normalize(ownSystemDatabaseName);
         var normalizedDatabaseName = TenantDatabaseRegistrationLookup.Normalize(databaseName);
@@ -65,25 +66,10 @@ internal static class TenantDatabaseForeignOwnership
             !string.Equals(normalizedDatabaseName, ownInstance, StringComparison.Ordinal))
         {
             return new TenantDatabaseForeignOwner(true, false,
-                "is the system database of another OctoMesh instance on this MongoDB server");
+                "is the system database of another OctoMesh instance on this MongoDB server", null, []);
         }
 
         var marker = await ownershipStore.GetAsync(normalizedDatabaseName, cancellationToken).ConfigureAwait(false);
-
-        // A marker is never written into a system database, so only an unmarked database can be one.
-        if (marker == null && registeredTenantId != null &&
-            !string.Equals(normalizedDatabaseName, ownInstance, StringComparison.Ordinal))
-        {
-            var parents = await registrationLookup.GetRegistryParentTenantIdsAsync(normalizedDatabaseName,
-                cancellationToken).ConfigureAwait(false);
-            if (parents.Count > 0 &&
-                !parents.Contains(TenantDatabaseRegistrationLookup.Normalize(registeredTenantId)))
-            {
-                return new TenantDatabaseForeignOwner(true, false,
-                    "is the system database of another OctoMesh instance on this MongoDB server (its tenant " +
-                    "registry lists tenants of other parents)");
-            }
-        }
 
         // Also when the database does not exist (yet): a name another instance has registered is not free.
         var foreignRegistrations = registrations.GetRegisteringSystemDatabases(normalizedDatabaseName)
@@ -100,12 +86,12 @@ internal static class TenantDatabaseForeignOwnership
                 $"is owned by another OctoMesh instance (owner system database '{marker.OwnerSystemDatabaseName}', " +
                 $"tenant '{marker.TenantId}', stamped {marker.AttachedAtUtc:u})";
             return new TenantDatabaseForeignOwner(false, registeredBy != null,
-                registeredBy == null ? ownedBy : $"{ownedBy} and {registeredBy}");
+                registeredBy == null ? ownedBy : $"{ownedBy} and {registeredBy}", marker, foreignRegistrations);
         }
 
         if (registeredBy != null)
         {
-            return new TenantDatabaseForeignOwner(false, true, registeredBy);
+            return new TenantDatabaseForeignOwner(false, true, registeredBy, null, foreignRegistrations);
         }
 
         return null;

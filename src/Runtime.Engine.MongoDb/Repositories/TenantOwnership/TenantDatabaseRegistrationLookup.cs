@@ -22,15 +22,26 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 ///         paths — attach, restore, the list/stamp operation — not for the per-request resolve.
 ///     </para>
 ///     <para>
+///         This snapshot is the ONE classification of a database as a system database; attach, restore,
+///         delete (<see cref="TenantDatabaseForeignOwnership" />) and the list/stamp operation all ask it.
 ///         A <b>system database</b> is a database that carries the system-database marker
-///         (<see cref="SystemDatabaseMarkerStore" />, AB#8672), or one that holds a tenant registry with
-///         at least one row, carries no ownership marker (a marker is never written into a system
-///         database) and is not itself registered as a tenant database by any other registry on the
-///         server. The marker recognises the system database of an instance without any tenant; the
-///         registry rule stays as the fallback for an instance that has not run a version that stamps
-///         the marker. Its last condition separates a system database from a tenant database that keeps
-///         parent-local rows for its own child tenants: such a parent is always registered in its
-///         instance's system database.
+///         (<see cref="SystemDatabaseMarkerStore" />, AB#8672) — the primary signal, which also recognises
+///         the system database of an instance without any tenant — or, as the fallback for an instance
+///         that has not run a version that stamps the marker, a database whose tenant registry has at
+///         least one row for another database that names a parent tenant, and that carries no ownership
+///         marker (a marker is never written into a system database).
+///     </para>
+///     <para>
+///         The parent-tenant condition separates a system database from a tenant database that keeps
+///         parent-local rows for its own child tenants: the system registry writes the parent tenant id
+///         into every row, the parent-local registry never does (it never has, see
+///         <c>TenantContext.CreateChildTenantAsync</c>). It holds whether the parent is attached or
+///         detached — a detached parent has no ownership marker and no registration anywhere, so the
+///         earlier rule "not registered by any registry" took it for a system database and refused
+///         every re-attach and restore of a tenant with children. It also holds when a corrupt row of an
+///         instance registers another instance's system database as a tenant database (the delete guard,
+///         AB#8807): the row does not hide the system database. A system database whose rows all predate
+///         the parent tenant id is recognised only by its marker, which every instance stamps on start.
 ///     </para>
 ///     <para>
 ///         All names are compared and returned normalized (trimmed, lower case), like everywhere else
@@ -94,6 +105,7 @@ internal sealed class TenantDatabaseRegistrationLookup
         var registries = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var markedDatabases = new HashSet<string>(StringComparer.Ordinal);
         var systemMarkedDatabases = new HashSet<string>(StringComparer.Ordinal);
+        var systemRegistryRowDatabases = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var storedName in databaseNames.Where(n => !MongoInternalDatabases.Contains(n)))
         {
@@ -144,6 +156,11 @@ internal sealed class TenantDatabaseRegistrationLookup
                 if (registeredName != null && !string.Equals(registeredName, normalizedName, StringComparison.Ordinal))
                 {
                     registered.Add(registeredName);
+                    if (ReadStringAttribute(row, ParentTenantIdAttribute) != null)
+                    {
+                        // A row of a system registry (see the remarks): parent-local rows carry no parent id.
+                        systemRegistryRowDatabases.Add(normalizedName);
+                    }
                 }
             }
 
@@ -161,10 +178,9 @@ internal sealed class TenantDatabaseRegistrationLookup
             }
         }
 
-        var registeredAnywhere = new HashSet<string>(registries.Values.SelectMany(v => v), StringComparer.Ordinal);
         var systemRegistries = registries
             .Where(r => systemMarkedDatabases.Contains(r.Key) ||
-                        (!markedDatabases.Contains(r.Key) && !registeredAnywhere.Contains(r.Key)))
+                        (!markedDatabases.Contains(r.Key) && systemRegistryRowDatabases.Contains(r.Key)))
             .ToDictionary(r => r.Key, r => (IReadOnlySet<string>)r.Value, StringComparer.Ordinal);
 
         // AB#8672: a marked system database without any tenant has no registry rows.
@@ -178,34 +194,6 @@ internal sealed class TenantDatabaseRegistrationLookup
             "registry, {SystemCount} system databases", databaseNames.Count, registries.Count, systemRegistries.Count);
 
         return new TenantDatabaseRegistrations(systemRegistries);
-    }
-
-    /// <summary>
-    ///     Returns the parent tenant ids of the rows in the tenant registry of <paramref name="databaseName" /> itself,
-    ///     normalized; empty when the database holds no registry. Rows without a parent id are skipped. Used by the
-    ///     delete guard (AB#8807) to tell the registry of a parent tenant (its rows name that tenant as parent) from a
-    ///     system database that a corrupt row of this instance registers as a tenant database, which
-    ///     <see cref="TenantDatabaseRegistrations.IsSystemDatabase" /> cannot see because the row hides it.
-    /// </summary>
-    public async Task<IReadOnlySet<string>> GetRegistryParentTenantIdsAsync(string databaseName,
-        CancellationToken cancellationToken = default)
-    {
-        var database = GetDatabase(Normalize(databaseName));
-        var rows = await database.GetCollection<BsonDocument>(TenantRegistryCollectionName)
-            .Find(FilterDefinition<BsonDocument>.Empty)
-            .ToListAsync(cancellationToken).ConfigureAwait(false);
-
-        var parents = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var row in rows)
-        {
-            var parent = ReadStringAttribute(row, ParentTenantIdAttribute);
-            if (parent != null)
-            {
-                parents.Add(parent);
-            }
-        }
-
-        return parents;
     }
 
     /// <summary>
