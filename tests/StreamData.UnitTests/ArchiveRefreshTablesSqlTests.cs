@@ -33,26 +33,43 @@ public class ArchiveRefreshTablesSqlTests
     }
 
     [Fact]
-    public void IsRefreshRefusal_ServerError_FallsBack()
+    public void IsRefreshFallback_ServerError_FallsBack()
     {
         var ex = new PostgresException("relation unknown", "ERROR", "ERROR", "42P01");
 
-        Assert.True(CrateDatabaseClient.IsRefreshRefusal(ex));
+        Assert.True(CrateDatabaseClient.IsRefreshFallback(ex, CancellationToken.None));
     }
 
     [Fact]
-    public void IsRefreshRefusal_DriverCommandTimeout_FallsBack()
+    public void IsRefreshFallback_DriverCommandTimeout_FallsBack()
     {
         var ex = new NpgsqlException("Exception while reading from stream", new TimeoutException("Timeout during reading attempt"));
 
-        Assert.True(CrateDatabaseClient.IsRefreshRefusal(ex));
+        Assert.True(CrateDatabaseClient.IsRefreshFallback(ex, CancellationToken.None));
     }
 
     [Fact]
-    public void IsRefreshRefusal_BrokenConnection_IsLeftToTheResiliencePipeline()
+    public void IsRefreshFallback_CallBudgetExpired_FallsBack()
+    {
+        Assert.True(CrateDatabaseClient.IsRefreshFallback(new OperationCanceledException(), CancellationToken.None));
+    }
+
+    [Fact]
+    public void IsRefreshFallback_CallerCancelled_Propagates()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.False(CrateDatabaseClient.IsRefreshFallback(new OperationCanceledException(cts.Token), cts.Token));
+        Assert.False(CrateDatabaseClient.IsRefreshFallback(
+            new NpgsqlException("Exception while reading from stream", new TimeoutException()), cts.Token));
+    }
+
+    [Fact]
+    public void IsRefreshFallback_BrokenConnection_IsLeftToTheResiliencePipeline()
     {
         var ex = new NpgsqlException("Exception while reading from stream", new EndOfStreamException());
 
-        Assert.False(CrateDatabaseClient.IsRefreshRefusal(ex));
+        Assert.False(CrateDatabaseClient.IsRefreshFallback(ex, CancellationToken.None));
     }
 }

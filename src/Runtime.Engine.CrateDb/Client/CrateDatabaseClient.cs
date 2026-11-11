@@ -1398,7 +1398,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             // old count) until someone searched it; a search only wakes the shard, the rows show up at the
             // next periodic refresh. So the existing tables are refreshed first and read again. A refresh
             // of a shard without unrefreshed writes changes nothing.
-            if (shardRows.Count > 0 && await TryRefreshTablesAsync(connection, schema, shardRows.Keys.ToList(), token))
+            if (shardRows.Count > 0 && await TryRefreshTablesAsync(connection, schema, shardRows.Keys.ToList(), token, cancellationToken))
             {
                 shardRows = await ReadShardStatsAsync(connection, schema, tableNames, token);
             }
@@ -1440,15 +1440,15 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     /// <summary>
     /// Refreshes <paramref name="tableNames"/> in one statement (AB#8735), so <c>num_docs</c> counts every row
-    /// written before. Returns <c>false</c> when there is nothing to refresh or the refresh failed — CrateDB refused
-    /// it (a table dropped by a concurrent delete, a missing privilege, a statement timeout) or the driver timed out
-    /// (<see cref="NpgsqlException"/> with an inner <see cref="TimeoutException"/>); the caller then reports the
-    /// shard statistics read before and sends nothing more on the connection. The refresh only makes the count
-    /// current, so its failure must not fail the archive list: it is logged as a warning. A cancellation the caller
-    /// requested is not a failure of the refresh and propagates.
+    /// written before. Returns <c>false</c> when there is nothing to refresh or the refresh failed in a way
+    /// <see cref="IsRefreshFallback"/> accepts; the caller then reports the shard statistics read before and sends
+    /// nothing more on the connection. The refresh only makes the count current, so its failure must not fail the
+    /// archive list: it is logged as a warning. A cancellation the caller requested propagates.
     /// </summary>
+    /// <param name="token">Token of the resilience execution: the caller's token linked with the call's time budget.</param>
+    /// <param name="callerToken">The caller's own token, to tell its cancellation from an expired time budget.</param>
     private async Task<bool> TryRefreshTablesAsync(NpgsqlConnection connection, string schema,
-        IReadOnlyList<string> tableNames, CancellationToken cancellationToken)
+        IReadOnlyList<string> tableNames, CancellationToken token, CancellationToken callerToken)
     {
         var sql = BuildRefreshTablesSql(schema, tableNames);
         if (sql is null)
@@ -1458,25 +1458,29 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         try
         {
-            await connection.ExecuteAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
+            await connection.ExecuteAsync(new CommandDefinition(sql, cancellationToken: token));
             return true;
         }
-        catch (NpgsqlException ex) when (!cancellationToken.IsCancellationRequested && IsRefreshRefusal(ex))
+        catch (Exception ex) when (IsRefreshFallback(ex, callerToken))
         {
             _logger.LogWarning(ex,
-                "Refreshing {TableCount} archive tables in schema {Schema} failed ({SqlState}); the record counts of " +
+                "Refreshing {TableCount} archive tables in schema {Schema} failed ({Reason}); the record counts of " +
                 "this call come from the last refresh of each table and may lag behind",
-                tableNames.Count, schema, ex.SqlState);
+                tableNames.Count, schema, (ex as PostgresException)?.SqlState ?? ex.GetType().Name);
             return false;
         }
     }
 
     /// <summary>
-    /// A refresh failure the archive statistics fall back from: an error CrateDB returned, or a command timeout of
-    /// the driver. Other driver errors (a broken connection) stay with the resilience pipeline.
+    /// A refresh failure the archive statistics fall back from, unless the caller cancelled: an error CrateDB
+    /// returned (a table dropped by a concurrent delete, a missing privilege, a statement timeout), a command
+    /// timeout of the driver (<see cref="NpgsqlException"/> with an inner <see cref="TimeoutException"/>), or the
+    /// call's time budget of the resilience pipeline running out during the refresh (a cancellation the caller did
+    /// not request). Other driver errors (a broken connection) stay with the resilience pipeline.
     /// </summary>
-    internal static bool IsRefreshRefusal(NpgsqlException ex) =>
-        ex is PostgresException || ex.InnerException is TimeoutException;
+    internal static bool IsRefreshFallback(Exception ex, CancellationToken callerToken) =>
+        !callerToken.IsCancellationRequested
+        && ex is PostgresException or NpgsqlException { InnerException: TimeoutException } or OperationCanceledException;
 
     /// <summary>
     /// <c>REFRESH TABLE "schema"."archive_a", "schema"."archive_b"</c>, or <c>null</c> for no table. The names come
