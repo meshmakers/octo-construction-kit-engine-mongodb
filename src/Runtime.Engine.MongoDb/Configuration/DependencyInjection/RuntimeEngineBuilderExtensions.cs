@@ -117,6 +117,16 @@ public static class RuntimeEngineBuilderExtensions
         // ownership list/stamp operation.
         builder.Services
             .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantDatabaseRegistrationLookup>();
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipReview>();
+
+        // AB#8796 ownership conflicts seen on tenant resolve (a marker of another instance); the
+        // system context health check reports Degraded while there is one.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipConflictTracker>();
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership.ITenantOwnershipConflicts>(sp =>
+                sp.GetRequiredService<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipConflictTracker>());
 
         // AB#4812 durable display-rule backfill sweep tasks. The import hook (TenantContext) enqueues a
         // task per type whose display rules changed; the sweep background service (opt-in via

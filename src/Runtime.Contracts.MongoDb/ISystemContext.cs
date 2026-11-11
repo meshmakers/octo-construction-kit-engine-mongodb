@@ -1,5 +1,6 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -70,6 +71,23 @@ public interface ISystemContext : ITenantContext
     /// <param name="apply">True to write the missing rows, false for a dry run.</param>
     Task<TenantRegistryReconcileResult> ReconcileTenantRegistryAsync(IOctoAdminSession adminSession,
         bool apply = false);
+
+    /// <summary>
+    ///     Lists the tenant databases of this instance whose ownership is not unambiguous (AB#8796): no
+    ///     ownership marker, the marker of another OctoMesh instance, or a registration in another system
+    ///     database on the same MongoDB server as well. With <paramref name="stamp"/> it writes the marker of
+    ///     this instance only for unambiguous databases — no marker and registered only here — and leaves
+    ///     every other database untouched; they stay listed. Idempotent: a second run stamps nothing new and
+    ///     lists the same ambiguous databases. Without <paramref name="stamp"/> nothing is written.
+    /// </summary>
+    /// <remarks>
+    ///     Reads the registries of all system databases on the server with the admin client. A registry row
+    ///     whose database does not exist is counted, never stamped (stamping would create the database).
+    ///     A double registration is resolved by detaching the tenant in one of the instances.
+    /// </remarks>
+    /// <param name="adminSession">Admin session of the system tenant.</param>
+    /// <param name="stamp">True to stamp the unambiguous unmarked databases, false to list only.</param>
+    Task<TenantOwnershipReviewResult> ReviewTenantOwnershipAsync(IOctoAdminSession adminSession, bool stamp = false);
 
     /// <summary>
     /// Gets based on the tenant id the tenant context.

@@ -915,8 +915,11 @@ public class TenantContext : ITenantContext
             // aborts, the registry rows are restored, and the database stays consistently attached
             // here. The marker delete itself is non-transactional, but a marker removed just before
             // a registry rollback only means the tenant is re-claimable — the next resolve of this
-            // instance re-stamps it lazily.
-            await GetTenantOwnershipStore().RemoveAsync(NormalizeDatabaseName(octoTenant.DatabaseName));
+            // instance re-stamps it lazily. AB#8796: only this instance's own marker is released — a
+            // detach in the non-owning instance of a double registration leaves the owner's claim intact.
+            await GetTenantOwnershipStore().RemoveIfOwnedByAsync(NormalizeDatabaseName(octoTenant.DatabaseName),
+                OwnerInstanceIdentity);
+            _serviceProvider.GetRequiredService<TenantOwnershipConflictTracker>().Clear(tenantId.NormalizeString());
         }
         finally
         {
@@ -1549,6 +1552,41 @@ public class TenantContext : ITenantContext
                     $"'{ownership.OwnerSystemDatabaseName}', stamped {ownership.AttachedAtUtc:u} for tenant " +
                     $"'{ownership.TenantId}'); detach it in the owning instance first");
             }
+
+            await RejectIfRegisteredByAnotherInstanceAsync(normalizedTenantId, normalizedDatabaseName, correlationId);
+        }
+    }
+
+    /// <summary>
+    ///     AB#8796: the marker check above misses every database that predates the marker (created
+    ///     before AB#4945 and not resolved since). Such a database can still be registered in another
+    ///     instance's system database on the same server — then attaching it here would make two
+    ///     instances work on it. Refused with the same uniform conflict; the owning system database
+    ///     goes to the log only. A database no other system database registers stays attachable.
+    /// </summary>
+    private async Task RejectIfRegisteredByAnotherInstanceAsync(string normalizedTenantId,
+        string normalizedDatabaseName, Guid correlationId)
+    {
+        var registrations = await _serviceProvider.GetRequiredService<TenantDatabaseRegistrationLookup>()
+            .GetRegistrationsAsync();
+
+        // The system database of another instance carries no marker and nobody registers it, so
+        // without this check it would pass as a free legacy database.
+        if (registrations.IsSystemDatabase(normalizedDatabaseName))
+        {
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                "the database is the system database of another OctoMesh instance on this server");
+        }
+
+        var otherRegistrations = registrations.GetRegisteringSystemDatabases(normalizedDatabaseName)
+            .Where(systemDatabase => !string.Equals(systemDatabase, OwnerInstanceIdentity, StringComparison.Ordinal))
+            .ToList();
+        if (otherRegistrations.Count > 0)
+        {
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                $"the database is registered as a tenant database in the system database(s) " +
+                $"'{string.Join("', '", otherRegistrations)}' of another OctoMesh instance on this server; " +
+                "detach it there first");
         }
     }
 
@@ -1837,8 +1875,9 @@ public class TenantContext : ITenantContext
 
         try
         {
-            await GetTenantOwnershipStore().StampIfAbsentAsync(NormalizeDatabaseName(databaseName), key,
-                OwnerInstanceIdentity);
+            var marker = await GetTenantOwnershipStore().StampIfAbsentAndGetAsync(NormalizeDatabaseName(databaseName),
+                key, OwnerInstanceIdentity);
+            ReportOwnershipConflictIfForeign(key, NormalizeDatabaseName(databaseName), marker);
         }
         catch (Exception ex)
         {
@@ -1846,6 +1885,33 @@ public class TenantContext : ITenantContext
             _logger.LogDebug(ex,
                 "Could not lazily stamp the ownership marker for tenant '{TenantId}' (database '{DatabaseName}'); " +
                 "will retry on a later resolve", tenantId, databaseName);
+        }
+    }
+
+    /// <summary>
+    ///     AB#8796 "second line of defense" of AB#4945: a tenant this instance resolves while the
+    ///     marker of its database names another instance is a double registration — both instances may
+    ///     run controllers, schedulers and pipelines on it. Warn once per process and tenant and make the
+    ///     health check report Degraded; never refuse the resolve and never overwrite the marker, so
+    ///     existing tenants keep working until an operator detaches the tenant in one instance.
+    /// </summary>
+    private void ReportOwnershipConflictIfForeign(string normalizedTenantId, string normalizedDatabaseName,
+        TenantOwnershipRecord marker)
+    {
+        var tracker = _serviceProvider.GetRequiredService<TenantOwnershipConflictTracker>();
+        if (string.Equals(marker.OwnerSystemDatabaseName, OwnerInstanceIdentity, StringComparison.Ordinal))
+        {
+            tracker.Clear(normalizedTenantId);
+            return;
+        }
+
+        if (tracker.Report(normalizedTenantId, normalizedDatabaseName, marker.OwnerSystemDatabaseName))
+        {
+            _logger.LogWarning(
+                "Tenant '{TenantId}' resolves to database '{DatabaseName}', which is owned by another OctoMesh " +
+                "instance (owner system database '{OwnerSystemDatabaseName}', stamped {StampedAtUtc:u}). Both " +
+                "instances may be working on the same database; detach the tenant in one of them",
+                normalizedTenantId, normalizedDatabaseName, marker.OwnerSystemDatabaseName, marker.AttachedAtUtc);
         }
     }
 
@@ -2011,8 +2077,12 @@ public class TenantContext : ITenantContext
     }
 
     /// <inheritdoc cref="ISystemContext.InvalidateTenantResolveImportGuards" />
-    public void InvalidateTenantResolveImportGuards(string tenantId) =>
+    public void InvalidateTenantResolveImportGuards(string tenantId)
+    {
         ClearTenantResolveImportGuards(tenantId);
+        // AB#8796: the next resolve re-checks the marker; a detached or deleted tenant stops degrading health.
+        _serviceProvider.GetRequiredService<TenantOwnershipConflictTracker>().Clear(tenantId.NormalizeString());
+    }
 
     /// <inheritdoc cref="ISystemContext.InvalidateTenantRepositoryClientsAsync" />
     public async Task InvalidateTenantRepositoryClientsAsync(string tenantId, string? databaseName = null,

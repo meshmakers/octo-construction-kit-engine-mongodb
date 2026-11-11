@@ -5,6 +5,8 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using Microsoft.Extensions.DependencyInjection;
@@ -360,6 +362,21 @@ public class SystemContext : TenantContext, ISystemContext
         return new ResultSet<OctoTenant>(
             result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName, d.ParentTenantId)),
             result.TotalCount, null, null);
+    }
+
+    /// <inheritdoc />
+    public async Task<TenantOwnershipReviewResult> ReviewTenantOwnershipAsync(IOctoAdminSession adminSession,
+        bool stamp = false)
+    {
+        var tenants = new List<(string TenantId, string DatabaseName, bool DatabaseExists)>();
+        foreach (var tenant in (await GetAllTenantsAsync(adminSession)).Items)
+        {
+            var databaseName = NormalizeDatabaseName(tenant.DatabaseName);
+            tenants.Add((tenant.TenantId.NormalizeString(), databaseName, await IsDatabaseExistingAsync(databaseName)));
+        }
+
+        return await _serviceProvider.GetRequiredService<TenantOwnershipReview>().RunAsync(
+            NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName), tenants, stamp);
     }
 
     /// <summary>

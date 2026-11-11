@@ -82,6 +82,28 @@ internal sealed class TenantOwnershipStore
     }
 
     /// <summary>
+    ///     <see cref="StampIfAbsentAsync" /> that also returns the marker as it is afterwards (AB#8796):
+    ///     the own marker when this call or an earlier one of this instance wrote it, or the marker of
+    ///     another instance that won the insert-if-absent race. One round trip; never overwrites.
+    /// </summary>
+    public async Task<TenantOwnershipRecord> StampIfAbsentAndGetAsync(string databaseName, string tenantId,
+        string ownerSystemDatabaseName, CancellationToken cancellationToken = default)
+    {
+        var collection = GetCollection(databaseName);
+        var update = Builders<TenantOwnershipRecord>.Update
+            .SetOnInsert(r => r.OwnerSystemDatabaseName, ownerSystemDatabaseName)
+            .SetOnInsert(r => r.TenantId, tenantId)
+            .SetOnInsert(r => r.AttachedAtUtc, DateTime.UtcNow);
+
+        return await collection.FindOneAndUpdateAsync<TenantOwnershipRecord>(
+            r => r.Id == TenantOwnershipRecord.DocumentId, update,
+            new FindOneAndUpdateOptions<TenantOwnershipRecord>
+            {
+                IsUpsert = true, ReturnDocument = ReturnDocument.After
+            }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     Removes the marker. Detach calls this LAST so a failed detach leaves the database
     ///     consistently attached (registry rows roll back with the caller's transaction); after a
     ///     successful removal the database is attachable by any instance again — detach is the one
@@ -92,6 +114,21 @@ internal sealed class TenantOwnershipStore
         var collection = GetCollection(databaseName);
         await collection.DeleteOneAsync(r => r.Id == TenantOwnershipRecord.DocumentId, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Removes the marker only when it names <paramref name="ownerSystemDatabaseName" /> (AB#8796).
+    ///     Detach uses it: detaching a double-registered tenant in the instance that does NOT own the
+    ///     database must leave the owner's marker in place, otherwise the owner would lose its claim.
+    ///     A database without a marker stays without one.
+    /// </summary>
+    public async Task RemoveIfOwnedByAsync(string databaseName, string ownerSystemDatabaseName,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = GetCollection(databaseName);
+        await collection.DeleteOneAsync(
+            r => r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == ownerSystemDatabaseName,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -3036,8 +3036,8 @@ Lifecycle:
 |---|---|
 | `CreateChildTenantAsync` | Stamps right after the physical create — owned from birth; a stamp failure fails the create and the rollback drops the database we provably created. |
 | `AttachChildTenantAsync` | The gate consults the marker (attach mode, after the existence check): foreign owner → **uniform, reason-free rejection** per the AB#4763 rule (the owner is logged, never returned — no cross-instance oracle). **STRICT by decision: no force override** — the owning instance must detach first. On pass, the attach stamps first thing in the try; a marker THIS call created is removed again in the catch (best-effort) so a failed attach never leaves the database locked for other instances. |
-| `DetachChildTenantAsync` | Removes the marker LAST inside the try — the one sanctioned ownership handover. Deliberately not best-effort: a removal failure aborts the caller's transaction, the registry rows are restored, and the database stays consistently attached here. |
-| Tenant-resolve (`TryGetChildTenantContextAsync`) | Lazy claim: stamps insert-if-absent (once per process per tenant, guard cleared by `ClearTenantResolveImportGuards`), so the existing fleet becomes owned without a migration script. Insert-if-absent means a pre-guard double attachment across two instances is won by the first writer and never flaps. |
+| `DetachChildTenantAsync` | Removes the marker LAST inside the try — the one sanctioned ownership handover. Deliberately not best-effort: a removal failure aborts the caller's transaction, the registry rows are restored, and the database stays consistently attached here. Removes it **only when it names this instance** (`RemoveIfOwnedByAsync`, AB#8796): detaching a double-registered tenant in the non-owning instance leaves the owner's claim intact. |
+| Tenant-resolve (`TryGetChildTenantContextAsync`) | Lazy claim: stamps insert-if-absent (once per process per tenant, guard cleared by `ClearTenantResolveImportGuards`), so the existing fleet becomes owned without a migration script. Insert-if-absent means a pre-guard double attachment across two instances is won by the first writer and never flaps. AB#8796: the stamp returns the marker (`StampIfAbsentAndGetAsync`); a marker of ANOTHER instance logs one warning per process and tenant and is recorded in `TenantOwnershipConflictTracker` (`ITenantOwnershipConflicts`), which turns `TenantContextHealthCheck` **Degraded** with tenant, database and owner. Resolve is never refused, the marker never overwritten; `InvalidateTenantResolveImportGuards` and detach clear the conflict. |
 | `ClearChildTenantAsync` / delete | Clear re-stamps via its internal `CreateChildTenantAsync`; delete drops the database and the marker with it. |
 
 The collection is deliberately NOT in `InfrastructureCollections` — that registry is the
@@ -3045,13 +3045,32 @@ system-database shell allowlist (AB#4854), and the marker is never written into 
 (the gate reserves the system database name before any marker access). Reads never materialize a
 database: every caller operates on a database whose existence the gate has already established.
 
+**Cross-instance registrations (AB#8796).** Databases from before the marker carry none, so the
+marker alone lets another instance adopt them. `TenantDatabaseRegistrationLookup` (same folder) reads
+the `RtEntity_SystemTenant` registry of every database on the server with the admin client and answers
+which **system databases** register a database. A system database = a registry with at least one row,
+no ownership marker, and not registered as a tenant database by any other registry (separates it from
+a parent tenant's parent-local rows). Limit: a system database with an empty registry is not
+recognised. The attach gate calls it after the marker check (`RejectIfRegisteredByAnotherInstanceAsync`):
+another instance's system database, or a database another system database registers, is rejected with
+the same uniform conflict. The lookup takes a fresh snapshot per call — admin paths only, never on
+resolve. `ISystemContext.ReviewTenantOwnershipAsync(session, stamp)` (`TenantOwnershipReview`) lists
+the own registry's databases that are `Unmarked`, `MarkedByOtherInstance` or
+`RegisteredByOtherInstance` and with `stamp` writes the marker only for `Unmarked` ones (no marker,
+registered only here; insert-if-absent); missing databases are counted, never stamped. Asset repo:
+`POST system/v1/tenants/review-ownership`; octo-cli `ReviewTenantOwnership [--stamp]`.
+
 Known residual: `TenantBackupService.RestoreTenantAsync` restores whatever marker the backup
 carries (own-instance backups restore their own marker — correct); restoring another instance's
 backup into this instance requires a detach-style marker removal first, which is intentional.
 
 Tests: `TenantOwnershipGuardTests` (create stamps; detach removes + re-attach re-stamps;
 foreign-owned attach conflicts uniformly with the foreign claim untouched; unstamped legacy DB is
-adopted and stamped; tenant-resolve lazily stamps an unmarked DB).
+adopted and stamped; tenant-resolve lazily stamps an unmarked DB). Two real instances on one server
+(`TwoInstanceFixture`, collection `TwoInstance`): `TenantDatabaseRegistrationLookupTests`,
+`TenantOwnershipCrossInstanceTests` (unmarked attach refused/allowed, other system database refused,
+resolve warning once + Degraded + detach in the non-owner keeps the marker, idempotent list/stamp with
+the ambiguous databases untouched).
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 
