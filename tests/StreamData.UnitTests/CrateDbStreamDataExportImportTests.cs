@@ -435,6 +435,113 @@ public class CrateDbStreamDataExportImportTests
             .MustHaveHappenedOnceExactly();
     }
 
+    /// <summary>
+    /// AB#8737: a computed column has an empty <c>Path</c>; the import used to map it with
+    /// <c>ColumnNameMapper</c> and failed with "Path must not be empty". It now names the computed
+    /// column's physical name and evaluates its formula on the imported row; the value the row
+    /// carries for it is ignored.
+    /// </summary>
+    [Fact]
+    public async Task Import_ComputedColumn_IsEvaluatedAgainAndTheRowValueIgnored()
+    {
+        A.CallTo(() => _store.GetAsync(Archive)).Returns(
+            new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Disabled, "net-raw",
+            [
+                new CkArchiveColumnSpec("Consumption", false, false),
+                new CkArchiveColumnSpec("Production", false, false),
+                new CkArchiveColumnSpec(string.Empty, false, false)
+                    { Name = "Net", Formula = "consumption - production", ResultType = FormulaResultType.Double }
+            ]));
+        A.CallTo(() => _formula.Evaluate("consumption - production", A<IReadOnlyDictionary<string, double>>._,
+                FormulaResultType.Double))
+            .ReturnsLazily((string _, IReadOnlyDictionary<string, double> args, FormulaResultType _) =>
+                args["consumption"] - args["production"]);
+        var captured = new List<DataPointDto>();
+        IReadOnlyList<string>? columns = null;
+        A.CallTo(() => _db.InsertDataAsync(A<string>._, A<string>._, A<IReadOnlyList<string>>._,
+                A<IEnumerable<DataPointDto>>._))
+            .Invokes((string _, string _, IReadOnlyList<string> c, IEnumerable<DataPointDto> d,
+                IReadOnlyList<ArchiveConflictKey>? _) =>
+            {
+                columns = c;
+                captured.AddRange(d);
+            });
+        var row = new Dictionary<string, object?>
+        {
+            [Constants.RtId] = HexRtId,
+            [Constants.CkTypeId] = SomeType.ToString(),
+            [Constants.Timestamp] = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            ["consumption"] = 10d,
+            ["production"] = 4d,
+            ["net"] = 999d,
+        };
+
+        await NewSut().ImportRowsAsync(Archive, Rows(row), ArchiveImportMode.InsertOnly, CancellationToken.None);
+
+        Assert.Equal(["consumption", "production", "net"], columns);
+        var point = Assert.Single(captured);
+        Assert.Equal(6d, point.Attributes["net"]);
+    }
+
+    /// <summary>
+    /// AB#8737: during a formula change the import writes the active and the pending versioned column (as ingest
+    /// does), and a computed column that reads another computed column sees the freshly evaluated value, not the one
+    /// the row carried.
+    /// </summary>
+    [Fact]
+    public async Task Import_PendingFormulaAndChainedComputedColumn_AreEvaluatedInOrder()
+    {
+        A.CallTo(() => _store.GetAsync(Archive)).Returns(
+            new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Disabled, "net-raw",
+            [
+                new CkArchiveColumnSpec("Consumption", false, false),
+                new CkArchiveColumnSpec("Production", false, false),
+                new CkArchiveColumnSpec(string.Empty, false, false)
+                    { Name = "Double", Formula = "net * 2", ResultType = FormulaResultType.Double },
+                new CkArchiveColumnSpec(string.Empty, false, false)
+                {
+                    Name = "Net", Formula = "consumption - production", PendingFormula = "consumption + production",
+                    ResultType = FormulaResultType.Double
+                }
+            ]));
+        A.CallTo(() => _formula.Evaluate(A<string>._, A<IReadOnlyDictionary<string, double>>._, FormulaResultType.Double))
+            .ReturnsLazily((string formula, IReadOnlyDictionary<string, double> a, FormulaResultType _) => formula switch
+            {
+                "consumption - production" => a["consumption"] - a["production"],
+                "consumption + production" => a["consumption"] + a["production"],
+                "net * 2" => a["net"] * 2,
+                _ => throw new InvalidOperationException(formula)
+            });
+        var captured = new List<DataPointDto>();
+        IReadOnlyList<string>? columns = null;
+        A.CallTo(() => _db.InsertDataAsync(A<string>._, A<string>._, A<IReadOnlyList<string>>._,
+                A<IEnumerable<DataPointDto>>._))
+            .Invokes((string _, string _, IReadOnlyList<string> c, IEnumerable<DataPointDto> d,
+                IReadOnlyList<ArchiveConflictKey>? _) =>
+            {
+                columns = c;
+                captured.AddRange(d);
+            });
+        var row = new Dictionary<string, object?>
+        {
+            [Constants.RtId] = HexRtId,
+            [Constants.CkTypeId] = SomeType.ToString(),
+            [Constants.Timestamp] = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            ["consumption"] = 10d,
+            ["production"] = 4d,
+            ["net"] = 999d,
+            ["double"] = 999d,
+        };
+
+        await NewSut().ImportRowsAsync(Archive, Rows(row), ArchiveImportMode.InsertOnly, CancellationToken.None);
+
+        Assert.Equal(["consumption", "production", "double", "net", "net__v1"], columns);
+        var point = Assert.Single(captured);
+        Assert.Equal(6d, point.Attributes["net"]);
+        Assert.Equal(14d, point.Attributes["net__v1"]);
+        Assert.Equal(12d, point.Attributes["double"]);
+    }
+
     [Fact]
     public async Task Import_Raw_LargeRowSet_FlushesInMultipleBatches()
     {

@@ -453,6 +453,35 @@ time-range; computed column over a member, ranking column on a member, manual pr
 `RawArchiveRecordMemberPipelineIntegrationTests` (`CreateUpdateInfo@1` → `SaveStreamDataInArchive@1` against the real
 repository).
 
+### Archive data export and import of computed columns (AB#8737)
+
+A computed column has no `Path`: it is named by `Name` and derived by its `Formula`. The archive data export
+(`ExportRowsAsync`) reads every physical column, so an exported row carries the computed value as well (under its active
+physical name, and under an orphaned `{name}__v{N}` column after a formula change). The import (`ImportRowsAsync`)
+reads only the stored columns of the target archive from a row and **evaluates the computed columns again** with the
+target archive's formulas, on the whole imported row (during a formula change the pending column too), as a backfill
+does. Decision (AB#8737): a value a row carries for a computed column is **ignored**, not refused: the value is
+derived data, the formula of the target archive decides, and an export of the same archive imports without changes.
+A formula that cannot be evaluated fails the import like an ingest. Before AB#8737 the import mapped every column by
+its `Path` and failed on the first computed column with "Path must not be empty". The export metadata of the bot service
+(`metadata.archive.columns`) lists only the stored columns; the schema match ignores computed columns.
+
+Tests: `StreamDataExportImport/ComputedColumnExportImportIntegrationTests` (real CrateDB, raw and time-range: round trip,
+a forged computed value in a row), `CrateDbStreamDataExportImportTests` (unit).
+
+### Archive storage stats — record count (AB#8735)
+
+`GetArchiveStatsAsync` (GraphQL `streamData.archivesStorageStats`, the Studio archive list) reads the record count
+(`num_docs`), size and health from `sys.shards` / `sys.health`. `num_docs` only counts the rows of the last refresh, and
+CrateDB skips the periodic refresh of a shard nobody searched for 30 s ("search idle"): an archive imported into while
+Disabled, or written to while nobody read it, showed 0 (or an old count) until a query touched it — and even a query only
+wakes the shard, the rows appear at its next periodic refresh. Since AB#8735 the stats call refreshes the listed tables
+that exist (one `REFRESH TABLE a, b, …`) and reads `sys.shards` again, so the count includes every row written before the
+list was loaded. A refresh of a shard without unrefreshed writes changes nothing. When CrateDB refuses the refresh (a table dropped
+between the reads, a missing privilege, a timeout) the call reports the counts of the last refresh and logs a warning;
+the list does not fail over it. Tests: `StreamDataExportImport/ArchiveStatsAfterImportIntegrationTests`
+(real CrateDB, import into a search-idle table), `ArchiveRefreshTablesSqlTests` (unit).
+
 ### Time semantics
 
 - **Canonical timezone is UTC.** Incoming timestamps with offset are normalized to UTC before insert. Naive `DateTime` values (no offset) are interpreted as UTC, never as local time.

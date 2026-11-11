@@ -2067,10 +2067,18 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
 
-        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
-        var userColumnNames = snapshot.Columns
+        // AB#8737: a computed column has no path (it is named by Name and derived by its Formula), so it is no
+        // input of the import. The value an exported row carries for it is ignored; the column is evaluated again
+        // from the imported row with the target archive's formula, the way a backfill evaluates a stored row. The
+        // insert names the stored columns and the computed physical columns (active, and pending during a formula
+        // change), like the ingest path.
+        var (qualifiedTable, resolvedColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
+        var userColumnNames = resolvedColumnNames.ToList();
+        var inputColumnNames = snapshot.Columns
+            .Where(c => !c.IsComputed)
             .Select(c => ColumnNameMapper.PathToColumnName(c.Path))
             .ToList();
+        var computedPlan = BuildComputedPlan(snapshot);
         var windowed = snapshot.UsesWindowedStorage;
         // Rollup tables key their PK with `generation` (AB#4184 Phase 6); the windowed insert must
         // name it in the conflict target and write the always-live generation 0 (AB#4773).
@@ -2081,7 +2089,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // The platform columns of a rollup row are data of the export like its aggregates (AB#7727); a dump
             // from before they existed imports with NULL, which reads as "no manual values". They travel with
             // the user columns of the insert.
-            userColumnNames.AddRange(ArchiveRowOriginFields.RollupFields.Except(userColumnNames));
+            var rollupFields = ArchiveRowOriginFields.RollupFields.Except(userColumnNames).ToList();
+            userColumnNames.AddRange(rollupFields);
+            inputColumnNames.AddRange(rollupFields.Except(inputColumnNames));
         }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.importRows");
@@ -2096,7 +2106,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         {
             if (windowed)
             {
-                windowedBatch.Add(MapImportedWindowedRow(row, userColumnNames, rowIndex));
+                windowedBatch.Add(MapImportedWindowedRow(row, inputColumnNames, computedPlan, rowIndex));
                 if (windowedBatch.Count >= ImportBatchSize)
                 {
                     await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch, generationTracked);
@@ -2105,7 +2115,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             }
             else
             {
-                rawBatch.Add(MapImportedRawRow(row, userColumnNames, rowIndex));
+                rawBatch.Add(MapImportedRawRow(row, inputColumnNames, computedPlan, rowIndex));
                 if (rawBatch.Count >= ImportBatchSize)
                 {
                     await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, rawBatch);
@@ -2140,17 +2150,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// for the raw insert path. Validates the rtid is 24-char hex and surfaces a per-field error
     /// (concept §10 / feedback_rtid_must_be_hex) rather than letting a malformed id reach the DB.
     /// </summary>
-    private static DataPointDto MapImportedRawRow(
-        IReadOnlyDictionary<string, object?> row, IReadOnlyList<string> userColumnNames, int rowIndex)
+    private DataPointDto MapImportedRawRow(IReadOnlyDictionary<string, object?> row,
+        IReadOnlyList<string> inputColumnNames, IReadOnlyList<ComputedColumnPlanItem> computedPlan, int rowIndex)
     {
         var rtId = ParseRtId(row, rowIndex);
         var ckTypeId = ParseCkTypeId(row, rowIndex);
 
-        var attributes = new Dictionary<string, object?>(userColumnNames.Count);
-        foreach (var col in userColumnNames)
+        var attributes = new Dictionary<string, object?>(inputColumnNames.Count + computedPlan.Count, StringComparer.Ordinal);
+        foreach (var col in inputColumnNames)
         {
             attributes[col] = row.TryGetValue(col, out var v) ? v : null;
         }
+
+        // The whole stored row is known, so every formula is evaluated (AB#8737).
+        ApplyComputedColumns(attributes, computedPlan);
 
         return new DataPointDto(attributes)
         {
@@ -2168,18 +2181,21 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         };
     }
 
-    private static Dtos.TimeRangeDataPointDto MapImportedWindowedRow(
-        IReadOnlyDictionary<string, object?> row, IReadOnlyList<string> userColumnNames, int rowIndex)
+    private Dtos.TimeRangeDataPointDto MapImportedWindowedRow(IReadOnlyDictionary<string, object?> row,
+        IReadOnlyList<string> inputColumnNames, IReadOnlyList<ComputedColumnPlanItem> computedPlan, int rowIndex)
     {
         var rtId = ParseRtId(row, rowIndex);
         var ckTypeId = ParseCkTypeId(row, rowIndex);
 
-        var attributes = new Dictionary<string, object?>(userColumnNames.Count, StringComparer.Ordinal);
-        foreach (var col in userColumnNames)
+        var attributes = new Dictionary<string, object?>(inputColumnNames.Count + computedPlan.Count, StringComparer.Ordinal);
+        foreach (var col in inputColumnNames)
         {
             var value = row.TryGetValue(col, out var v) ? v : null;
             attributes[col] = col == Constants.LastManualAt ? AsUtcDateTime(value) : value;
         }
+
+        // The whole stored row is known, so every formula is evaluated (AB#8737).
+        ApplyComputedColumns(attributes, computedPlan);
 
         return new Dtos.TimeRangeDataPointDto(attributes)
         {
