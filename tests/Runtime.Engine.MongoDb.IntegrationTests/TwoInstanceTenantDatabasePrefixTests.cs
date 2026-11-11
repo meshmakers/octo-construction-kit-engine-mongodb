@@ -58,10 +58,17 @@ public class TwoInstanceTenantDatabasePrefixTests(TwoInstanceFixture fixture)
         }
         finally
         {
-            await ThrowawayTenant.DropAsync(InstanceA, tenantId);
-            await ThrowawayTenant.DropAsync(InstanceB, tenantId);
-            ConfigurationA.TenantDatabasePrefix = previousA;
-            ConfigurationB.TenantDatabasePrefix = previousB;
+            try
+            {
+                await ThrowawayTenant.DropAsync(InstanceA, tenantId);
+                await ThrowawayTenant.DropAsync(InstanceB, tenantId);
+            }
+            finally
+            {
+                // The fixture is shared: the prefixes go back even when a cleanup fails.
+                ConfigurationA.TenantDatabasePrefix = previousA;
+                ConfigurationB.TenantDatabasePrefix = previousB;
+            }
         }
     }
 
