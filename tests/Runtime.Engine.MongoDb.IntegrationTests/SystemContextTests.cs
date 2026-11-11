@@ -1,3 +1,5 @@
+using System.Runtime.ExceptionServices;
+
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
@@ -36,6 +38,7 @@ public class SystemContextTests(DatabaseFixture databaseFixture)
     public async Task CreateAndImportCkModelTenant()
     {
         var systemContext = databaseFixture.GetSystemContext();
+        ExceptionDispatchInfo? failure = null;
         try
         {
             await systemContext.CreateSystemTenantAsync();
@@ -44,16 +47,37 @@ public class SystemContextTests(DatabaseFixture databaseFixture)
 
             OperationResult operationResult = new();
             await systemContext.ImportCkModelAsync(TestCkIds.CkModelId, operationResult);
-            Assert.False(operationResult.HasErrors);
+            Assert.False(operationResult.HasErrors, string.Join("; ", operationResult.Messages.Select(m => $"{m.MessageNumber}: {m.MessageText}")));
             Assert.False(operationResult.HasFatalErrors);
-
         }
-        finally
+        catch (Exception ex)
+        {
+            failure = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        // The cleanup must never hide why the test failed: a failed create rolls the system database back, and the
+        // delete below then only reports that it does not exist (CI 68737).
+        Exception? cleanupFailure = null;
+        try
         {
             await systemContext.DeleteSystemTenantAsync();
-            var result = await systemContext.IsSystemTenantExistingAsync();
-            Assert.False(result);
+            Assert.False(await systemContext.IsSystemTenantExistingAsync());
+        }
+        catch (Exception ex)
+        {
+            cleanupFailure = ex;
+        }
+
+        if (failure != null && cleanupFailure != null)
+        {
+            throw new AggregateException("The test failed, and so did its cleanup (the first exception is the cause)",
+                failure.SourceException, cleanupFailure);
+        }
+
+        failure?.Throw();
+        if (cleanupFailure != null)
+        {
+            ExceptionDispatchInfo.Throw(cleanupFailure);
         }
     }
-
 }
