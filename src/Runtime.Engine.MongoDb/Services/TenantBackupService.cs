@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 
@@ -20,7 +21,8 @@ internal class TenantBackupService(
     TenantOwnershipStore tenantOwnershipStore,
     TenantDatabaseRegistrationLookup registrationLookup,
     SystemDatabaseMarkerStore systemDatabaseMarkerStore,
-    ITenantLifecycleStore? tenantLifecycleStore = null) : ITenantBackupService
+    ITenantLifecycleStore? tenantLifecycleStore = null,
+    IOptions<OctoSystemConfiguration>? systemConfiguration = null) : ITenantBackupService
 {
     /// <inheritdoc />
     public async Task<CommandResult> BackupTenantAsync(string tenantId, string archiveFilePath,
@@ -229,6 +231,13 @@ internal class TenantBackupService(
             if (foreignOwnershipRefusal != null)
             {
                 return CommandResult.Failure(foreignOwnershipRefusal);
+            }
+
+            var (prefixRefusal, prefixExemptName) = await CheckTenantDatabasePrefixAsync(tenantId, normalizedTargetDatabaseName);
+            using var prefixExemption = prefixExemptName != null ? TenantDatabasePrefixExemption.Begin(prefixExemptName) : null;
+            if (prefixRefusal != null)
+            {
+                return CommandResult.Failure(prefixRefusal);
             }
 
             // AB#4829: the restore mongorestores into an UNREGISTERED database first and attaches
@@ -512,5 +521,37 @@ internal class TenantBackupService(
             "first, choose another database name, or override the ownership guard deliberately.";
         logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
         return errorMessage;
+    }
+
+    /// <summary>
+    ///     AB#8797: with a tenant-database prefix configured, a restore into a new database name without the prefix is
+    ///     refused HERE, before anything is dropped or written - the attach at the end would refuse it only after
+    ///     mongorestore filled the database. A restore over the tenant's own current database (a tenant from before
+    ///     the prefix, same id, same name) is allowed: the returned name is exempted from the prefix rule of
+    ///     the attach. Returns the refusal message (or null) and the name to exempt (or null). The caller opens the
+    ///     exemption scope itself: an <see cref="AsyncLocal{T}" /> set inside this async method would not flow back.
+    /// </summary>
+    private async Task<(string? Refusal, string? ExemptDatabaseName)> CheckTenantDatabasePrefixAsync(string tenantId,
+        string targetDatabaseName)
+    {
+        var prefix = systemConfiguration?.Value.TenantDatabasePrefix;
+        if (TenantDatabaseNames.CarriesPrefix(prefix, targetDatabaseName))
+        {
+            return (null, null);
+        }
+
+        var existing = await systemContext.TryFindTenantContextAsync(tenantId);
+        if (existing != null &&
+            string.Equals(existing.DatabaseName, targetDatabaseName, StringComparison.OrdinalIgnoreCase))
+        {
+            return (null, targetDatabaseName);
+        }
+
+        var refusal =
+            $"Database '{targetDatabaseName}' does not start with this instance's tenant-database prefix '{prefix}' " +
+            $"(System:TenantDatabasePrefix). Refusing to restore tenant '{tenantId}' into it; use a name with the " +
+            "prefix, or restore over the tenant's own existing database.";
+        logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, refusal);
+        return (refusal, null);
     }
 }

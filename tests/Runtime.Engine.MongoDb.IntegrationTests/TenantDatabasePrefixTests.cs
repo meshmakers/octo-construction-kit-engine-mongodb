@@ -322,4 +322,97 @@ public class TenantDatabasePrefixTests(TenantDatabasePrefixFixture fixture)
             await CreateAdminClient().DropDatabaseAsync(databaseName, TestContext.Current.CancellationToken);
         }
     }
+
+    private static string NewArchivePath() => Path.Combine(Path.GetTempPath(), $"pfxrestore_{Guid.NewGuid():N}.gz");
+
+    private async Task BackupAsync(string tenantId, string archivePath)
+    {
+        var backup = await SystemContext.BackupTenantAsync(tenantId, archivePath);
+        Assert.True(backup.Success, $"Backup should succeed. Error: {backup.Error}");
+    }
+
+    private static void DeleteQuietly(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // Cleanup only.
+        }
+    }
+
+    [Fact]
+    public async Task WithPrefix_ARestoreIntoANewNameWithoutThePrefix_IsRefusedBeforeAnythingIsWritten()
+    {
+        var prefix = NewPrefix();
+        var sourceId = NewId("rsrc");
+        var targetId = NewId("rtarget");
+        var archivePath = NewArchivePath();
+
+        await CreateTenantAsync(sourceId, sourceId);
+        try
+        {
+            await BackupAsync(sourceId, archivePath);
+
+            await WithPrefixAsync(prefix, async () =>
+            {
+                var result = await SystemContext.RestoreTenantAsync(targetId, targetId, archivePath);
+
+                Assert.False(result.Success);
+                Assert.Contains("tenant-database prefix", result.Error);
+                // Refused before mongorestore: no database, no tenant.
+                Assert.False(await SystemContext.IsDatabaseExistingAsync(targetId));
+                Assert.Null(await SystemContext.TryFindTenantContextAsync(targetId));
+
+                // With the prefix the same restore works.
+                var prefixed = await SystemContext.RestoreTenantAsync(targetId, prefix + targetId, archivePath);
+                Assert.True(prefixed.Success, $"Restore should succeed. Error: {prefixed.Error}");
+                Assert.Equal(prefix + targetId, (await SystemContext.TryFindTenantContextAsync(targetId))!.DatabaseName);
+            });
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(targetId);
+            await DropTenantQuietlyAsync(sourceId);
+            DeleteQuietly(archivePath);
+        }
+    }
+
+    [Fact]
+    public async Task WithPrefix_ARestoreOverATenantFromBeforeThePrefix_KeepsItsName()
+    {
+        var prefix = NewPrefix();
+        var tenantId = NewId("rlegacy");
+        var archivePath = NewArchivePath();
+
+        // Registered while the instance had no prefix.
+        await CreateTenantAsync(tenantId, tenantId);
+        try
+        {
+            await BackupAsync(tenantId, archivePath);
+
+            await WithPrefixAsync(prefix, async () =>
+            {
+                var result = await SystemContext.RestoreTenantAsync(tenantId, tenantId, archivePath,
+                    dropExistingTenant: true);
+
+                Assert.True(result.Success, $"Restore should succeed. Error: {result.Error}");
+                var context = await SystemContext.TryFindTenantContextAsync(tenantId);
+                Assert.NotNull(context);
+                Assert.Equal(tenantId, context.DatabaseName);
+
+                // The exemption covered only that restore: a new tenant with an unprefixed name is still refused.
+                var otherId = NewId("rother");
+                var exception = await Assert.ThrowsAsync<TenantException>(() => CreateTenantAsync(otherId, otherId));
+                Assert.True(exception.IsConflict);
+            });
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(tenantId);
+            DeleteQuietly(archivePath);
+        }
+    }
 }

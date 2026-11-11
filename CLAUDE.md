@@ -3119,14 +3119,21 @@ set either one without the other, and existing instances must keep both empty.
 | Tenants registered before the prefix keep their names: resolving never looks at the prefix; `ClearChildTenantAsync` re-creates under the old name inside `TenantDatabasePrefixExemption.Begin(name)` (an `AsyncLocal` scope for exactly that name and call) | `TenantDatabasePrefixExemption` |
 | The AB#4762 existence check is unchanged: a prefixed name that exists on the server is still refused | namespace gate |
 
-Restore (`TenantBackupService.RestoreTenantAsync`) attaches after `mongorestore`, so a prefix refusal there
-comes after the data is written; a pre-check before the restore and the exemption for a restore over the same
-tenant belong to the restore path (AB#8672 lane). Without a prefix nothing of this runs differently.
+Restore (`TenantBackupService.RestoreTenantAsync`) attaches after `mongorestore`, so the attach's refusal would
+come after the data is written. `CheckTenantDatabasePrefixAsync` therefore runs right after the cross-instance
+ownership guard (AB#8672), before any drop or write: a target name without the prefix is refused with a descriptive
+`CommandResult.Failure`, unless it is the current database of the same tenant id (a restore over a tenant from
+before the prefix), which the restore then attaches inside the exemption scope. The scope is opened by the caller,
+not inside the async helper: an `AsyncLocal` set in an awaited method does not flow back. Without a prefix nothing
+of this runs differently.
 
 Tests: `TenantDatabasePrefixTests` (own collection; switches the prefix on the bound options object to emulate a
 restart: default name, explicit name refused on create and attach, prefixed attach, no prefix as before, legacy
-tenant resolves and survives a clear, taken prefixed name refused) and `StreamData.UnitTests/TenantDatabaseNamesTests`
-(naming, validation, exemption scope).
+tenant resolves and survives a clear, taken prefixed name refused, restore into an unprefixed new name refused before
+anything is written, restore over a legacy tenant keeps its name), `TwoInstanceTenantDatabasePrefixTests` (two real
+instances on one server, `TwoInstanceCollection`: different prefixes create the same tenant id with the default name;
+without prefixes the second is refused) and `StreamData.UnitTests/TenantDatabaseNamesTests` (naming, validation,
+exemption scope).
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 
