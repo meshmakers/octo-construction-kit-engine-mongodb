@@ -974,7 +974,10 @@ public class TenantContext : ITenantContext
             // Clear empties the tenant: its archive entities go with the database, so their stream
             // data tables go too - keeping them would only orphan them (AB#4255).
             await DropChildTenantAsync(adminSession, tenantId, dropStreamData: true);
-            await CreateChildTenantAsync(adminSession, octoTenant.DatabaseName, tenantId);
+            using (TenantDatabasePrefixExemption.Begin(octoTenant.DatabaseName))
+            {
+                await CreateChildTenantAsync(adminSession, octoTenant.DatabaseName, tenantId);
+            }
         }
         finally
         {
@@ -1505,6 +1508,8 @@ public class TenantContext : ITenantContext
                 "the database name is reserved by MongoDB itself");
         }
 
+        EnsureDatabaseNameCarriesTenantDatabasePrefix(normalizedTenantId, normalizedDatabaseName, correlationId);
+
         var existingById = await GetRtSystemTenantAsync(adminSession, normalizedTenantId);
         if (existingById != null)
         {
@@ -1649,6 +1654,27 @@ public class TenantContext : ITenantContext
         throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
             $"the delete would drop a database that {owner.Description}; detach the tenant in this instance " +
             "instead (keeps the database), or override the ownership guard deliberately");
+    }
+
+    /// <summary>
+    ///     AB#8797: with a tenant-database prefix configured, a new tenant database must carry it. The name of a
+    ///     tenant that was registered before (clear, restore over the tenant) is exempt through
+    ///     <see cref="TenantDatabasePrefixExemption" />, so tenants from before the prefix keep their names. The
+    ///     refusal is the uniform conflict of AB#4763; the prefix goes to the log only.
+    /// </summary>
+    private void EnsureDatabaseNameCarriesTenantDatabasePrefix(string normalizedTenantId,
+        string normalizedDatabaseName, Guid correlationId)
+    {
+        var prefix = _systemConfiguration.Value.TenantDatabasePrefix;
+        if (TenantDatabaseNames.CarriesPrefix(prefix, normalizedDatabaseName) ||
+            TenantDatabasePrefixExemption.IsExempt(normalizedDatabaseName))
+        {
+            return;
+        }
+
+        throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+            $"the database name does not start with this instance's tenant-database prefix '{prefix}' " +
+            "(System:TenantDatabasePrefix)");
     }
 
     /// <summary>

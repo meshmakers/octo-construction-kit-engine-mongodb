@@ -2979,7 +2979,8 @@ tenant back, and that rollback used to drop whatever database the name pointed a
 
 Checks, in order: the configured system tenant id (reserved — the system tenant has no `RtTenant`
 self-record, so a registry lookup alone cannot cover it), the configured system database name,
-MongoDB's own `admin` / `local` / `config`, the platform-wide registry by tenant id, the registry by
+MongoDB's own `admin` / `local` / `config`, the instance's tenant-database prefix (AB#8797, see
+*Tenant-Database Prefix* below), the platform-wide registry by tenant id, the registry by
 database name, and finally physical existence — required for attach, forbidden for create.
 
 Two rules to preserve when touching it:
@@ -3100,6 +3101,32 @@ resolve warning once + Degraded + detach in the non-owner keeps the marker, idem
 the ambiguous databases untouched), `RestoreOwnershipGuardTests`, `SystemDatabaseMarkerTests` (fresh
 instance without tenants recognised and its system database refused as restore target, idempotent
 startup stamp with the registry rule as fallback, marker removed from a restored copy).
+
+### Tenant-Database Prefix — per-instance names on a shared MongoDB (AB#8797 / Epic AB#4944)
+
+Two instances on one MongoDB server (different `SystemDatabaseName`) used to collide on equal tenant ids: the
+namespace gate refuses a database name that exists anywhere on the server (AB#4762), and clients name the
+database after the tenant id by convention. `OctoSystemConfiguration.TenantDatabasePrefix` (section `System`,
+env `OCTO_SYSTEM__TENANTDATABASEPREFIX`, **default empty**) gives each instance its own name space, the MongoDB
+counterpart of `StreamData:SchemaInstancePrefix` (CrateDB). It is its own setting on purpose: an instance may
+set either one without the other, and existing instances must keep both empty.
+
+| Rule | Where |
+|---|---|
+| Format: normalized (trim, lower case), at most 30 bytes of ASCII letters, digits, `-`, `_`; anything else fails when `System` is bound (`ConfigurationErrorException` naming the option) | `TenantDatabaseNames.ValidatePrefix`, the setter |
+| Default name of a new tenant = `<prefix><tenantId>`, normalized; without a prefix the tenant id (unchanged convention) | `TenantDatabaseNames.DeriveDefault` (public, for the hosts: asset repository REST create without `databaseName`) |
+| Create and attach with a name that does not start with the prefix → the uniform `Database name '<x>' is not available.` (409); the prefix goes to the log only | `EnsureDatabaseNameCarriesTenantDatabasePrefix`, one call in the namespace gate after the reserved-name checks |
+| Tenants registered before the prefix keep their names: resolving never looks at the prefix; `ClearChildTenantAsync` re-creates under the old name inside `TenantDatabasePrefixExemption.Begin(name)` (an `AsyncLocal` scope for exactly that name and call) | `TenantDatabasePrefixExemption` |
+| The AB#4762 existence check is unchanged: a prefixed name that exists on the server is still refused | namespace gate |
+
+Restore (`TenantBackupService.RestoreTenantAsync`) attaches after `mongorestore`, so a prefix refusal there
+comes after the data is written; a pre-check before the restore and the exemption for a restore over the same
+tenant belong to the restore path (AB#8672 lane). Without a prefix nothing of this runs differently.
+
+Tests: `TenantDatabasePrefixTests` (own collection; switches the prefix on the bound options object to emulate a
+restart: default name, explicit name refused on create and attach, prefixed attach, no prefix as before, legacy
+tenant resolves and survives a clear, taken prefixed name refused) and `StreamData.UnitTests/TenantDatabaseNamesTests`
+(naming, validation, exemption scope).
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 
