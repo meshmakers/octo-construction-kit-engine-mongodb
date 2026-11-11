@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
@@ -38,15 +39,22 @@ public sealed record TenantDeletionHandle(
     bool StreamDataModelPresent = false)
 {
     /// <summary>
-    ///     True when the metadata deletion let a deliberate administrator override drop a database that only carries
-    ///     another OctoMesh instance's ownership marker (AB#8807). <see cref="ITenantContext.DropTenantDatabaseAsync" />
-    ///     re-checks the cross-instance ownership right before every drop and honours the override only while that is
-    ///     still the case. The delete endpoint keeps the decision in the delete's tombstone
-    ///     (<see cref="TenantLifecycle.TenantLifecycleRecord.ForeignOwnershipOverridden" />) before it commits the
+    ///     The ownership marker of another OctoMesh instance that a deliberate administrator override let the metadata
+    ///     deletion go past (an orphaned foreign marker, AB#8807); null when no override was granted.
+    ///     <see cref="ITenantContext.DropTenantDatabaseAsync" /> re-checks the cross-instance ownership right before
+    ///     every drop and honours the override only while exactly this marker is still on the database (or the marker
+    ///     this instance took it over with): a database another instance re-created under the same name carries a new
+    ///     marker and is never dropped. The delete endpoint keeps the identity in the delete's tombstone
+    ///     (<see cref="TenantLifecycle.TenantLifecycleRecord.OverriddenForeignMarkerOwner" />) before it commits the
     ///     metadata deletion, so the settle sweep, which builds its handle from the tombstone, finishes an interrupted
     ///     delete with the same decision.
     /// </summary>
-    public bool ForeignOwnershipOverridden { get; init; }
+    public TenantOwnershipMarkerIdentity? OverriddenForeignMarker { get; init; }
+
+    /// <summary>
+    ///     True when the metadata deletion granted the ownership override (<see cref="OverriddenForeignMarker" />).
+    /// </summary>
+    public bool ForeignOwnershipOverridden => OverriddenForeignMarker != null;
 
     /// <summary>A handle for a plain database drop: no stream data tables go with the database.</summary>
     public TenantDeletionHandle(string databaseName, Guid correlationId)

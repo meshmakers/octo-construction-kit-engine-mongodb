@@ -2,6 +2,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
@@ -553,6 +554,84 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
         InstanceA, repositoryOps, fixture.GetService<ILogger<TenantBackupService>>(), OwnershipStoreA,
         fixture.GetService<TenantDatabaseRegistrationLookup>(), fixture.GetService<SystemDatabaseMarkerStore>(),
         fixture.GetService<ITenantLifecycleStore>(), fixture.GetService<IOptions<OctoSystemConfiguration>>());
+
+    [Fact]
+    public async Task RestoreClaim_TakesOverTheApprovedForeignMarker_WhileItIsUnchanged()
+    {
+        // AB#8672: the ownership guard granted the override for an orphaned foreign marker; the claim takes over
+        // exactly that marker.
+        const string goneInstance = "octosystemgone";
+        var target = NewName("rstclaimok");
+        try
+        {
+            await OwnershipStoreA.StampAsync(target, target, goneInstance, Ct);
+            var approved = await GetMarkerIdentityAsync(target);
+
+            var claim = new TenantBackupService.RestoreClaim(OwnershipStoreA, target, target, SystemDatabaseA, true);
+            var refusal = await claim.AcquireAsync(approved, Ct);
+
+            Assert.Null(refusal);
+            Assert.Equal(SystemDatabaseA, (await OwnershipStoreA.GetAsync(target, Ct))!.OwnerSystemDatabaseName);
+        }
+        finally
+        {
+            await DropDatabaseQuietlyAsync(target);
+        }
+    }
+
+    [Fact]
+    public async Task RestoreClaim_RefusesAMarkerOtherThanTheApprovedOne_AndLeavesIt()
+    {
+        // AB#8672: between the guard and the claim another instance attached or re-created the database; its marker
+        // carries another stamp. The override was not granted for it: the claim refuses before anything is dropped
+        // or written, and the new marker stays.
+        const string goneInstance = "octosystemgone";
+        var target = NewName("rstclaimnew");
+        try
+        {
+            await OwnershipStoreA.StampAsync(target, target, goneInstance, Ct);
+            var approved = await GetMarkerIdentityAsync(target);
+            await Task.Delay(TimeSpan.FromMilliseconds(20), Ct);
+            await OwnershipStoreA.StampAsync(target, target, goneInstance, Ct);
+            var newMarker = await GetMarkerIdentityAsync(target);
+            Assert.NotEqual(approved, newMarker);
+
+            var claim = new TenantBackupService.RestoreClaim(OwnershipStoreA, target, target, SystemDatabaseA, true);
+            var refusal = await claim.AcquireAsync(approved, Ct);
+
+            Assert.NotNull(refusal);
+            Assert.Equal(newMarker, await GetMarkerIdentityAsync(target));
+        }
+        finally
+        {
+            await DropDatabaseQuietlyAsync(target);
+        }
+    }
+
+    private async Task<TenantOwnershipMarkerIdentity> GetMarkerIdentityAsync(string databaseName)
+    {
+        var marker = await OwnershipStoreA.GetAsync(databaseName, Ct);
+        Assert.NotNull(marker);
+        return new TenantOwnershipMarkerIdentity(marker!.OwnerSystemDatabaseName,
+            DateTime.SpecifyKind(marker.AttachedAtUtc, DateTimeKind.Utc));
+    }
+
+    private async Task DropDatabaseQuietlyAsync(string databaseName)
+    {
+        try
+        {
+            if (await InstanceA.IsDatabaseExistingAsync(databaseName))
+            {
+                await OwnershipStoreA.RemoveAsync(databaseName, Ct);
+                await InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(databaseName, Guid.NewGuid()),
+                    databaseName);
+            }
+        }
+        catch (Exception)
+        {
+            // Cleanup only.
+        }
+    }
 
     private static async Task<Exception?> TryAttachAsync(ISystemContext instance, string databaseName, string tenantId)
     {

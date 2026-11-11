@@ -3,6 +3,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 
 using Microsoft.Extensions.Logging;
@@ -222,7 +223,7 @@ internal class TenantBackupService(
             // SystemDatabaseName, Epic AB#4944), and mongorestore --drop would destroy it before the attach
             // guard (AB#4945) refuses the result. Runs before the dropExistingTenant block, which is itself
             // destructive.
-            var foreignOwnershipRefusal = await CheckForeignOwnershipAsync(tenantId,
+            var (foreignOwnershipRefusal, approvedForeignMarker) = await CheckForeignOwnershipAsync(tenantId,
                 normalizedTargetDatabaseName, overrideForeignOwnership, attachTenant,
                 cancellationToken ?? CancellationToken.None);
             if (foreignOwnershipRefusal != null)
@@ -332,7 +333,8 @@ internal class TenantBackupService(
             var claim = new RestoreClaim(tenantOwnershipStore, databaseName, tenantId.NormalizeString(),
                 systemContext.DatabaseName.Trim().ToLowerInvariant(),
                 await systemContext.IsDatabaseExistingAsync(databaseName));
-            var claimRefusal = await claim.AcquireAsync(overrideForeignOwnership, cancellationToken ?? CancellationToken.None);
+            var claimRefusal = await claim.AcquireAsync(approvedForeignMarker,
+                cancellationToken ?? CancellationToken.None);
             if (claimRefusal != null)
             {
                 return CommandResult.Failure(RefuseRestore(tenantId, databaseName, claimRefusal));
@@ -408,7 +410,7 @@ internal class TenantBackupService(
                 // The claim went with the dropped database: claim the target again before mongorestore writes into
                 // it. Until then the database does not exist, so no attach can take it.
                 claim.TargetDropped();
-                var reclaimRefusal = await claim.AcquireAsync(overrideForeignOwnership: false,
+                var reclaimRefusal = await claim.AcquireAsync(approvedForeignMarker: null,
                     cancellationToken ?? CancellationToken.None);
                 if (reclaimRefusal != null)
                 {
@@ -500,7 +502,7 @@ internal class TenantBackupService(
     ///     (AB#8672). Only a claim THIS restore inserted is ever released; a marker of this instance that was there
     ///     before (a restore over the instance's own tenant) is left alone.
     /// </summary>
-    private sealed class RestoreClaim(TenantOwnershipStore store, string databaseName, string tenantId,
+    internal sealed class RestoreClaim(TenantOwnershipStore store, string databaseName, string tenantId,
         string ownerSystemDatabaseName, bool databaseExistedBefore)
     {
         private readonly DateTime _claimTime = TenantOwnershipStore.NewClaimTime();
@@ -510,8 +512,13 @@ internal class TenantBackupService(
         /// <summary>The restore dropped the target (the existing tenant's database): a new claim materializes it again.</summary>
         public void TargetDropped() => _materializedByClaim = true;
 
-        /// <summary>Claims the target; returns the logged refusal reason when another instance holds it.</summary>
-        public async Task<string?> AcquireAsync(bool overrideForeignOwnership, CancellationToken cancellationToken)
+        /// <summary>
+        ///     Claims the target; returns the logged refusal reason when another instance holds it.
+        ///     <paramref name="approvedForeignMarker" /> is the foreign marker the ownership guard granted the
+        ///     deliberate override for (null: no override); only exactly that marker is taken over (AB#8672).
+        /// </summary>
+        public async Task<string?> AcquireAsync(TenantOwnershipMarkerIdentity? approvedForeignMarker,
+            CancellationToken cancellationToken)
         {
             var marker = await store.StampIfAbsentAndGetAsync(databaseName, tenantId, ownerSystemDatabaseName,
                 cancellationToken, _claimTime);
@@ -521,10 +528,15 @@ internal class TenantBackupService(
                 return null;
             }
 
-            // The ownership guard granted the deliberate override for this foreign marker: take it over, but only
-            // while it is still the marker the guard saw.
-            if (overrideForeignOwnership && await store.TryTakeOverMarkerAsync(databaseName, marker, tenantId,
-                    ownerSystemDatabaseName, _claimTime, cancellationToken))
+            // The ownership guard granted the deliberate override for one foreign marker: take over exactly that
+            // marker and only while it is still on the database. Another instance may have attached or re-created the
+            // database since the check - its marker carries another stamp - and its data must not be replaced.
+            if (approvedForeignMarker != null &&
+                string.Equals(marker.OwnerSystemDatabaseName, approvedForeignMarker.OwnerSystemDatabaseName,
+                    StringComparison.Ordinal) &&
+                marker.AttachedAtUtc == approvedForeignMarker.StampedAtUtc &&
+                await store.TryTakeOverMarkerAsync(databaseName, marker, tenantId, ownerSystemDatabaseName,
+                    _claimTime, cancellationToken))
             {
                 _inserted = true;
                 return null;
@@ -571,8 +583,13 @@ internal class TenantBackupService(
     ///     instance still registers: the attach guard (AB#8796) would refuse the attach after the data was
     ///     already replaced, and a successful attach would register one database in two instances.
     /// </summary>
-    private async Task<string?> CheckForeignOwnershipAsync(string tenantId, string databaseName,
-        bool overrideForeignOwnership, bool attachTenant, CancellationToken cancellationToken)
+    /// <returns>
+    ///     The refusal (or null) and, when the override was granted for a database carrying another instance's
+    ///     marker, the identity of that marker: the claim takes over exactly that marker and refuses any other.
+    /// </returns>
+    private async Task<(string? Refusal, TenantOwnershipMarkerIdentity? ApprovedForeignMarker)>
+        CheckForeignOwnershipAsync(string tenantId, string databaseName, bool overrideForeignOwnership,
+            bool attachTenant, CancellationToken cancellationToken)
     {
         var ownInstance = TenantDatabaseRegistrationLookup.Normalize(systemContext.DatabaseName);
 
@@ -588,14 +605,14 @@ internal class TenantBackupService(
         if (isOwnSystemDatabase || owner?.IsSystemDatabase == true)
         {
             var whose = isOwnSystemDatabase ? "this instance" : "another OctoMesh instance on this MongoDB server";
-            return RefuseRestore(tenantId, databaseName,
+            return (RefuseRestore(tenantId, databaseName,
                 $"it is the system database of {whose}; the restore would overwrite that entire instance. " +
-                "This refusal cannot be overridden");
+                "This refusal cannot be overridden"), null);
         }
 
         if (owner == null)
         {
-            return null;
+            return (null, null);
         }
 
         var foreignRegistrations = owner.ForeignRegistrations;
@@ -608,11 +625,11 @@ internal class TenantBackupService(
 
         if (overrideForeignOwnership && attachTenant && foreignRegistrations.Count > 0)
         {
-            return RefuseRestore(tenantId, databaseName,
+            return (RefuseRestore(tenantId, databaseName,
                 $"it is registered as a tenant database by another OctoMesh instance (system database " +
                 $"'{string.Join("', '", foreignRegistrations)}'); the ownership override cannot restore and attach " +
                 "into it, because the attach would register one database in two instances. Detach the tenant in " +
-                "that instance first, or restore without attaching");
+                "that instance first, or restore without attaching"), null);
         }
 
         if (overrideForeignOwnership)
@@ -621,12 +638,15 @@ internal class TenantBackupService(
                 "OWNERSHIP OVERRIDE: restoring tenant '{TenantId}' into database '{DatabaseName}', which {ForeignOwner}. " +
                 "The administrator overrode the cross-instance ownership guard; the other instance's data in " +
                 "this database is replaced", tenantId, databaseName, foreignOwner);
-            return null;
+            return (null, marker != null
+                ? new TenantOwnershipMarkerIdentity(marker.OwnerSystemDatabaseName,
+                    DateTime.SpecifyKind(marker.AttachedAtUtc, DateTimeKind.Utc))
+                : null);
         }
 
-        return RefuseRestore(tenantId, databaseName,
+        return (RefuseRestore(tenantId, databaseName,
             $"it {foreignOwner}; the restore would overwrite the other instance's data. Detach the tenant in the " +
-            "owning instance first, choose another database name, or override the ownership guard deliberately");
+            "owning instance first, choose another database name, or override the ownership guard deliberately"), null);
     }
 
     /// <summary>

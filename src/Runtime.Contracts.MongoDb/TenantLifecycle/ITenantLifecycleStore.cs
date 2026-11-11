@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
+
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 
 /// <summary>
@@ -67,14 +69,16 @@ public interface ITenantLifecycleStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// <see cref="EnsureDeletingAsync(string, string?, Guid, CancellationToken)" /> that also records whether the
-    /// delete's metadata guard granted the ownership override (<see cref="TenantLifecycleRecord.ForeignOwnershipOverridden" />,
-    /// AB#8807). The delete endpoint calls it before it commits the metadata deletion, so a delete interrupted
-    /// between that commit and the database drop is finished by the settle sweep with the same decision. The
-    /// default implementation keeps the earlier behaviour and drops the flag.
+    /// <see cref="EnsureDeletingAsync(string, string?, Guid, CancellationToken)" /> that also records the foreign
+    /// ownership marker the delete's metadata guard granted the override for
+    /// (<see cref="TenantLifecycleRecord.OverriddenForeignMarkerOwner" />, AB#8807); null records that no override was
+    /// granted. The delete endpoint calls it before it commits the metadata deletion, so a delete interrupted between
+    /// that commit and the database drop is finished by the settle sweep with the same decision - for exactly that
+    /// marker. The default implementation keeps the earlier behaviour and records no override, so the drop refuses a
+    /// database with a foreign marker.
     /// </summary>
-    Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId, bool foreignOwnershipOverridden,
-        CancellationToken cancellationToken = default) =>
+    Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
+        TenantOwnershipMarkerIdentity? overriddenForeignMarker, CancellationToken cancellationToken = default) =>
         EnsureDeletingAsync(tenantId, databaseName, correlationId, cancellationToken);
 
     /// <summary>Removes the lifecycle record entirely (the tenant is fully gone).</summary>

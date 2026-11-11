@@ -1,6 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
@@ -374,9 +375,10 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
         {
             await UnregisterDirectlyQuietlyAsync(InstanceA, leftover);
             await OwnershipStore.StampAsync(leftover, leftover, goneInstance, Ct);
+            var overridden = await GetMarkerIdentityAsync(leftover);
 
             await InstanceA.DropTenantDatabaseAsync(
-                new TenantDeletionHandle(leftover, Guid.NewGuid()) { ForeignOwnershipOverridden = true }, leftover);
+                new TenantDeletionHandle(leftover, Guid.NewGuid()) { OverriddenForeignMarker = overridden }, leftover);
 
             Assert.False(await InstanceA.IsDatabaseExistingAsync(leftover));
         }
@@ -384,6 +386,123 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
         {
             await DropDatabaseQuietlyAsync(leftover);
         }
+    }
+
+    [Fact]
+    public async Task DropDatabase_WithTheGrantedOverride_DropsTheDatabase_WhileTheOverriddenMarkerIsUnchanged()
+    {
+        // AB#8807: the metadata guard records exactly the marker it overrode; the drop (here: a later retry, as the
+        // settle sweep runs it) finds that marker unchanged and drops the database.
+        const string goneInstance = "octosystemgone";
+        var tenantOfA = NewName("dgfenceok");
+
+        await CreateAsync(InstanceA, tenantOfA);
+        try
+        {
+            await OwnershipStore.StampAsync(tenantOfA, tenantOfA, goneInstance, Ct);
+            var stamped = await GetMarkerIdentityAsync(tenantOfA);
+
+            TenantDeletionHandle? handle = null;
+            await InTransactionAsync(InstanceA, async s => handle =
+                await InstanceA.DeleteChildTenantMetadataAsync(s, tenantOfA, true, overrideForeignOwnership: true));
+            Assert.Equal(stamped, handle!.OverriddenForeignMarker);
+
+            var sweepHandle = new TenantDeletionHandle(tenantOfA, Guid.NewGuid())
+            {
+                OverriddenForeignMarker = handle.OverriddenForeignMarker
+            };
+            await InstanceA.DropTenantDatabaseAsync(sweepHandle, tenantOfA);
+
+            Assert.False(await InstanceA.IsDatabaseExistingAsync(tenantOfA));
+        }
+        finally
+        {
+            await DropDatabaseQuietlyAsync(tenantOfA);
+        }
+    }
+
+    [Fact]
+    public async Task DropDatabase_WithTheGrantedOverride_IsRefused_WhenAnotherInstanceReCreatedTheDatabaseWithANewMarker()
+    {
+        // AB#8807: the override was granted, then the database was dropped and another instance created a new
+        // database under the same name. Its marker is written before its registry row commits, so it looks like an
+        // orphaned foreign marker too - but it is not the one the override was granted for. A late settle sweep must
+        // refuse and leave the new database alone.
+        const string goneInstance = "octosystemgone";
+        var tenantOfA = NewName("dgfencenew");
+
+        await CreateAsync(InstanceA, tenantOfA);
+        try
+        {
+            await OwnershipStore.StampAsync(tenantOfA, tenantOfA, goneInstance, Ct);
+
+            TenantDeletionHandle? handle = null;
+            await InTransactionAsync(InstanceA, async s => handle =
+                await InstanceA.DeleteChildTenantMetadataAsync(s, tenantOfA, true, overrideForeignOwnership: true));
+            Assert.NotNull(handle!.OverriddenForeignMarker);
+            await InstanceA.DropTenantDatabaseAsync(handle, tenantOfA);
+            Assert.False(await InstanceA.IsDatabaseExistingAsync(tenantOfA));
+
+            // The same (unregistered) instance name re-creates the database with a new marker: only the stamp differs.
+            await Task.Delay(TimeSpan.FromMilliseconds(20), Ct);
+            await OwnershipStore.StampAsync(tenantOfA, tenantOfA, goneInstance, Ct);
+            var newMarker = await GetMarkerIdentityAsync(tenantOfA);
+            Assert.NotEqual(handle.OverriddenForeignMarker, newMarker);
+
+            var sweepHandle = new TenantDeletionHandle(tenantOfA, Guid.NewGuid())
+            {
+                OverriddenForeignMarker = handle.OverriddenForeignMarker
+            };
+            var exception = await Assert.ThrowsAsync<TenantException>(() =>
+                InstanceA.DropTenantDatabaseAsync(sweepHandle, tenantOfA));
+
+            AssertUniformConflict(exception, tenantOfA);
+            Assert.True(exception.IsDatabaseDropPending);
+            AssertDropRefusalLogged(exception, tenantOfA, goneInstance);
+            Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfA));
+            Assert.Equal(newMarker, await GetMarkerIdentityAsync(tenantOfA));
+        }
+        finally
+        {
+            await DropDatabaseQuietlyAsync(tenantOfA);
+        }
+    }
+
+    [Fact]
+    public async Task DropDatabase_WithTheGrantedOverride_IsRefused_WhenTheOverriddenMarkerIsGone()
+    {
+        // AB#8807: the override covers one marker. A database that no longer carries it (here: unmarked) is not
+        // dropped under the override.
+        const string goneInstance = "octosystemgone";
+        var leftover = NewName("dgfencegone");
+
+        await CreateAsync(InstanceA, leftover);
+        try
+        {
+            await UnregisterDirectlyQuietlyAsync(InstanceA, leftover);
+            await OwnershipStore.StampAsync(leftover, leftover, goneInstance, Ct);
+            var overridden = await GetMarkerIdentityAsync(leftover);
+            await OwnershipStore.RemoveAsync(leftover, Ct);
+
+            var exception = await Assert.ThrowsAsync<TenantException>(() => InstanceA.DropTenantDatabaseAsync(
+                new TenantDeletionHandle(leftover, Guid.NewGuid()) { OverriddenForeignMarker = overridden }, leftover));
+
+            AssertUniformConflict(exception, leftover);
+            Assert.True(await InstanceA.IsDatabaseExistingAsync(leftover));
+            Assert.Null(await OwnershipStore.GetAsync(leftover, Ct));
+        }
+        finally
+        {
+            await DropDatabaseQuietlyAsync(leftover);
+        }
+    }
+
+    private async Task<TenantOwnershipMarkerIdentity> GetMarkerIdentityAsync(string databaseName)
+    {
+        var marker = await OwnershipStore.GetAsync(databaseName, Ct);
+        Assert.NotNull(marker);
+        return new TenantOwnershipMarkerIdentity(marker!.OwnerSystemDatabaseName,
+            DateTime.SpecifyKind(marker.AttachedAtUtc, DateTimeKind.Utc));
     }
 
     [Fact]
@@ -397,7 +516,10 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
         try
         {
             var exception = await Assert.ThrowsAsync<TenantException>(() => InstanceA.DropTenantDatabaseAsync(
-                new TenantDeletionHandle(tenantOfB, Guid.NewGuid()) { ForeignOwnershipOverridden = true },
+                new TenantDeletionHandle(tenantOfB, Guid.NewGuid())
+                {
+                    OverriddenForeignMarker = new TenantOwnershipMarkerIdentity(SystemDatabaseB, DateTime.UtcNow)
+                },
                 "dgdeleted"));
 
             AssertUniformConflict(exception, tenantOfB);
