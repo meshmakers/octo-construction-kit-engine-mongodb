@@ -360,8 +360,8 @@ public class TenantDatabasePrefixTests(TenantDatabasePrefixFixture fixture)
             {
                 var result = await SystemContext.RestoreTenantAsync(targetId, targetId, archivePath);
 
-                Assert.False(result.Success);
-                Assert.Contains("tenant-database prefix", result.Error);
+                // The caller sees the uniform conflict; the prefix reason is in the server log only.
+                RestoreRefusalAssert.IsUniform(result, targetId);
                 // Refused before mongorestore: no database, no tenant.
                 Assert.False(await SystemContext.IsDatabaseExistingAsync(targetId));
                 Assert.Null(await SystemContext.TryFindTenantContextAsync(targetId));

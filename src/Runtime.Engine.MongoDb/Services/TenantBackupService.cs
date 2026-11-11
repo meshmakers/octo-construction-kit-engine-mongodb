@@ -202,11 +202,8 @@ internal class TenantBackupService(
             if (string.Equals(normalizedTargetDatabaseName, systemContext.DatabaseName,
                     StringComparison.OrdinalIgnoreCase))
             {
-                var errorMessage =
-                    $"Database '{databaseName}' is the system database. Refusing to restore tenant " +
-                    $"'{tenantId}' into it, because the restore would overwrite the entire platform.";
-                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
-                return CommandResult.Failure(errorMessage);
+                return CommandResult.Failure(RefuseRestore(tenantId, normalizedTargetDatabaseName,
+                    "it is the system database of this instance; the restore would overwrite the entire platform"));
             }
 
             if (string.Equals(normalizedTargetDatabaseName, "admin", StringComparison.OrdinalIgnoreCase) ||
@@ -438,7 +435,9 @@ internal class TenantBackupService(
     /// <summary>
     ///     Cross-instance ownership guard of the restore (AB#8672). Returns the refusal message when the
     ///     target database belongs to another OctoMesh instance on the same MongoDB server, or null when the
-    ///     restore may proceed. A database belongs to another instance when it is that instance's system
+    ///     restore may proceed. The refusal message is the uniform conflict of attach and delete
+    ///     (<see cref="TenantException.DatabaseNameNotAvailable" />); the reason with the owner is logged only
+    ///     (<see cref="RefuseRestore" />). A database belongs to another instance when it is that instance's system
     ///     database, when its ownership marker (AB#4945) names another instance, or when another instance's
     ///     system database registers it (a tenant from before the marker shipped). A deliberate
     ///     <paramref name="overrideForeignOwnership" /> lets the restore proceed into another instance's
@@ -463,12 +462,10 @@ internal class TenantBackupService(
 
         if (isOwnSystemDatabase || owner?.IsSystemDatabase == true)
         {
-            var systemDatabaseMessage =
-                $"Database '{databaseName}' is the system database of another OctoMesh instance on this MongoDB " +
-                $"server. Refusing to restore tenant '{tenantId}' into it, because the restore would overwrite " +
-                "that entire instance. This refusal cannot be overridden.";
-            logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, systemDatabaseMessage);
-            return systemDatabaseMessage;
+            var whose = isOwnSystemDatabase ? "this instance" : "another OctoMesh instance on this MongoDB server";
+            return RefuseRestore(tenantId, databaseName,
+                $"it is the system database of {whose}; the restore would overwrite that entire instance. " +
+                "This refusal cannot be overridden");
         }
 
         if (owner == null)
@@ -486,14 +483,11 @@ internal class TenantBackupService(
 
         if (overrideForeignOwnership && attachTenant && foreignRegistrations.Count > 0)
         {
-            var doubleRegistrationMessage =
-                $"Database '{databaseName}' is registered as a tenant database by another OctoMesh instance " +
-                $"(system database '{string.Join("', '", foreignRegistrations)}'). The ownership override cannot " +
-                $"restore and attach tenant '{tenantId}' into it, because the attach would register one database " +
-                "in two instances. Detach the tenant in that instance first, or restore without attaching.";
-            logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId,
-                doubleRegistrationMessage);
-            return doubleRegistrationMessage;
+            return RefuseRestore(tenantId, databaseName,
+                $"it is registered as a tenant database by another OctoMesh instance (system database " +
+                $"'{string.Join("', '", foreignRegistrations)}'); the ownership override cannot restore and attach " +
+                "into it, because the attach would register one database in two instances. Detach the tenant in " +
+                "that instance first, or restore without attaching");
         }
 
         if (overrideForeignOwnership)
@@ -505,12 +499,9 @@ internal class TenantBackupService(
             return null;
         }
 
-        var errorMessage =
-            $"Database '{databaseName}' {foreignOwner}. Refusing to restore tenant '{tenantId}' into it, because " +
-            "the restore would overwrite the other instance's data. Detach the tenant in the owning instance " +
-            "first, choose another database name, or override the ownership guard deliberately.";
-        logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
-        return errorMessage;
+        return RefuseRestore(tenantId, databaseName,
+            $"it {foreignOwner}; the restore would overwrite the other instance's data. Detach the tenant in the " +
+            "owning instance first, choose another database name, or override the ownership guard deliberately");
     }
 
     /// <summary>
@@ -537,11 +528,23 @@ internal class TenantBackupService(
             return (null, targetDatabaseName);
         }
 
-        var refusal =
-            $"Database '{targetDatabaseName}' does not start with this instance's tenant-database prefix '{prefix}' " +
-            $"(System:TenantDatabasePrefix). Refusing to restore tenant '{tenantId}' into it; use a name with the " +
-            "prefix, or restore over the tenant's own existing database.";
-        logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, refusal);
+        var refusal = RefuseRestore(tenantId, targetDatabaseName,
+            $"it does not start with this instance's tenant-database prefix '{prefix}' (System:TenantDatabasePrefix); " +
+            "use a name with the prefix, or restore over the tenant's own existing database");
         return (refusal, null);
+    }
+
+    /// <summary>
+    ///     A refused restore (AB#8672) returns the uniform conflict of attach and delete,
+    ///     <see cref="TenantException.DatabaseNameNotAvailable" />: naming the owner instance, its tenant or its
+    ///     system database to the caller would let it probe the other instances on the MongoDB server (AB#4763).
+    ///     The full reason goes to the server log as a warning.
+    /// </summary>
+    private string RefuseRestore(string tenantId, string databaseName, string reason)
+    {
+        logger.LogWarning(
+            "Refused the restore of tenant '{TenantId}' into database '{DatabaseName}' because {Reason}. " +
+            "The caller only sees a generic conflict message.", tenantId, databaseName, reason);
+        return TenantException.DatabaseNameNotAvailable(databaseName).Message;
     }
 }

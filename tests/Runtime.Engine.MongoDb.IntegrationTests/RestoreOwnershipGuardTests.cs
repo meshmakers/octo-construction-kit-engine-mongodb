@@ -34,7 +34,7 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
     private static string NewArchivePath() => Path.Combine(Path.GetTempPath(), $"rstguard_{Guid.NewGuid():N}.gz");
 
     [Fact]
-    public async Task Restore_IntoTenantDatabaseOfAnotherInstance_IsRefusedNamingTheOwner_AndKeepsItsData()
+    public async Task Restore_IntoTenantDatabaseOfAnotherInstance_IsRefusedNamingTheOwnerInTheLog_AndKeepsItsData()
     {
         var sourceTenantId = NewName("rgsrc");
         var foreignTenantId = NewName("rgforeign");
@@ -49,10 +49,8 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
 
             var result = await InstanceA.RestoreTenantAsync(restoredTenantId, foreignTenantId, archivePath);
 
-            Assert.False(result.Success);
-            Assert.Contains("another OctoMesh instance", result.Error);
-            Assert.Contains(SystemDatabaseB, result.Error);
-            Assert.Contains(foreignTenantId, result.Error);
+            RestoreRefusalAssert.IsUniformAndLogged(result, fixture.Logs, restoredTenantId, foreignTenantId,
+                "another OctoMesh instance", SystemDatabaseB, $"tenant '{foreignTenantId}'");
 
             // Nothing was dropped or attached: B still owns and resolves its tenant.
             var marker = await OwnershipStoreA.GetAsync(foreignTenantId, Ct);
@@ -71,7 +69,7 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
     }
 
     [Fact]
-    public async Task Restore_IntoUnmarkedTenantDatabaseRegisteredByAnotherInstance_IsRefusedNamingTheOwner()
+    public async Task Restore_IntoUnmarkedTenantDatabaseRegisteredByAnotherInstance_IsRefusedNamingTheOwnerInTheLog()
     {
         // A tenant of B from before the ownership marker shipped: only B's registry says it is B's.
         var sourceTenantId = NewName("rgsrc");
@@ -87,9 +85,8 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
 
             var result = await InstanceA.RestoreTenantAsync(legacyTenantId, legacyTenantId, archivePath);
 
-            Assert.False(result.Success);
-            Assert.Contains("registered as a tenant database by another OctoMesh instance", result.Error);
-            Assert.Contains(SystemDatabaseB, result.Error);
+            RestoreRefusalAssert.IsUniformAndLogged(result, fixture.Logs, legacyTenantId, legacyTenantId,
+                "registered as a tenant database by another OctoMesh instance", SystemDatabaseB);
             Assert.Null(await InstanceA.TryFindTenantContextAsync(legacyTenantId));
             Assert.NotNull(await InstanceB.TryFindTenantContextAsync(legacyTenantId));
         }
@@ -115,14 +112,16 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
         {
             await BackupAsync(InstanceA, sourceTenantId, archivePath);
 
-            var refused = await InstanceA.RestoreTenantAsync(NewName("rgsys"), SystemDatabaseB, archivePath);
-            var refusedWithOverride = await InstanceA.RestoreTenantAsync(NewName("rgsys"), SystemDatabaseB,
-                archivePath, overrideForeignOwnership: true);
+            var refusedTenantId = NewName("rgsys");
+            var refusedWithOverrideTenantId = NewName("rgsys");
+            var refused = await InstanceA.RestoreTenantAsync(refusedTenantId, SystemDatabaseB, archivePath);
+            var refusedWithOverride = await InstanceA.RestoreTenantAsync(refusedWithOverrideTenantId,
+                SystemDatabaseB, archivePath, overrideForeignOwnership: true);
 
-            Assert.False(refused.Success);
-            Assert.Contains("system database of another OctoMesh instance", refused.Error);
-            Assert.False(refusedWithOverride.Success);
-            Assert.Contains("cannot be overridden", refusedWithOverride.Error);
+            RestoreRefusalAssert.IsUniformAndLogged(refused, fixture.Logs, refusedTenantId, SystemDatabaseB,
+                "system database of another OctoMesh instance");
+            RestoreRefusalAssert.IsUniformAndLogged(refusedWithOverride, fixture.Logs, refusedWithOverrideTenantId,
+                SystemDatabaseB, "cannot be overridden");
 
             // B is untouched: its system tenant still resolves its tenant.
             Assert.True(await InstanceB.IsSystemTenantExistingAsync());
@@ -131,6 +130,32 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
         finally
         {
             await ThrowawayTenant.DropAsync(InstanceB, tenantOfB);
+            await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
+            DeleteQuietly(archivePath);
+        }
+    }
+
+    [Fact]
+    public async Task Restore_IntoOwnSystemDatabase_IsRefusedWithTheUniformConflict_AndLogsTheReason()
+    {
+        var sourceTenantId = NewName("rgsrc");
+        var refusedTenantId = NewName("rgownsys");
+        var archivePath = NewArchivePath();
+
+        await CreateTenantAsync(InstanceA, sourceTenantId);
+        try
+        {
+            await BackupAsync(InstanceA, sourceTenantId, archivePath);
+
+            var refused = await InstanceA.RestoreTenantAsync(refusedTenantId, SystemDatabaseA, archivePath);
+
+            RestoreRefusalAssert.IsUniformAndLogged(refused, fixture.Logs, refusedTenantId, SystemDatabaseA,
+                "system database of this instance");
+            Assert.True(await InstanceA.IsSystemTenantExistingAsync());
+            Assert.Null(await InstanceA.TryFindTenantContextAsync(refusedTenantId));
+        }
+        finally
+        {
             await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
             DeleteQuietly(archivePath);
         }
@@ -306,8 +331,8 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
             var result = await InstanceA.RestoreTenantAsync(orphanTenantId, orphanTenantId, archivePath,
                 overrideForeignOwnership: true);
 
-            Assert.False(refused.Success);
-            Assert.Contains(SystemDatabaseB, refused.Error);
+            RestoreRefusalAssert.IsUniformAndLogged(refused, fixture.Logs, orphanTenantId, orphanTenantId,
+                SystemDatabaseB);
             Assert.True(result.Success, $"Restore with override should succeed. Error: {result.Error}");
             Assert.NotNull(await InstanceA.TryFindTenantContextAsync(orphanTenantId));
             var marker = await OwnershipStoreA.GetAsync(orphanTenantId, Ct);
@@ -346,9 +371,8 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
             var result = await InstanceA.RestoreTenantAsync(foreignTenantId, foreignTenantId, archivePath,
                 overrideForeignOwnership: true);
 
-            Assert.False(result.Success);
-            Assert.Contains("register one database in two instances", result.Error);
-            Assert.Contains(SystemDatabaseB, result.Error);
+            RestoreRefusalAssert.IsUniformAndLogged(result, fixture.Logs, foreignTenantId, foreignTenantId,
+                "register one database in two instances", SystemDatabaseB);
             Assert.Null(await InstanceA.TryFindTenantContextAsync(foreignTenantId));
             var marker = await OwnershipStoreA.GetAsync(foreignTenantId, Ct);
             Assert.NotNull(marker);

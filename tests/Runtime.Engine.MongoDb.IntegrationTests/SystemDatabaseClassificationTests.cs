@@ -227,10 +227,11 @@ public class SystemDatabaseClassificationTests(TwoInstanceFixture fixture)
         DeleteQuietly(archivePath);
         var backup = await InstanceA.BackupTenantAsync(sourceTenantId, archivePath);
         Assert.True(backup.Success, $"Backup should succeed. Error: {backup.Error}");
-        var restore = await InstanceA.RestoreTenantAsync(NewName("screstore"), SystemDatabaseB, archivePath,
+        var restoreTenantId = NewName("screstore");
+        var restore = await InstanceA.RestoreTenantAsync(restoreTenantId, SystemDatabaseB, archivePath,
             overrideForeignOwnership: true);
-        Assert.False(restore.Success);
-        Assert.Contains("system database of another OctoMesh instance", restore.Error);
+        RestoreRefusalAssert.IsUniformAndLogged(restore, fixture.Logs, restoreTenantId, SystemDatabaseB,
+            "system database of another OctoMesh instance", "cannot be overridden");
 
         await RegisterDirectlyAsync(InstanceA, corruptIdA, SystemDatabaseB);
         var delete = await Assert.ThrowsAsync<TenantException>(() =>

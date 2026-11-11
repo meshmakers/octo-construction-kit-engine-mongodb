@@ -64,14 +64,16 @@ public class SystemDatabaseMarkerTests(TwoInstanceFixture fixture)
             var backup = await InstanceA.BackupTenantAsync(sourceTenantId, archivePath);
             Assert.True(backup.Success, $"Backup should succeed. Error: {backup.Error}");
 
-            var refused = await InstanceA.RestoreTenantAsync(NewName("smsys"), freshSystemDatabase, archivePath);
-            var refusedWithOverride = await InstanceA.RestoreTenantAsync(NewName("smsys"), freshSystemDatabase,
-                archivePath, overrideForeignOwnership: true);
+            var refusedTenantId = NewName("smsys");
+            var refusedWithOverrideTenantId = NewName("smsys");
+            var refused = await InstanceA.RestoreTenantAsync(refusedTenantId, freshSystemDatabase, archivePath);
+            var refusedWithOverride = await InstanceA.RestoreTenantAsync(refusedWithOverrideTenantId,
+                freshSystemDatabase, archivePath, overrideForeignOwnership: true);
 
-            Assert.False(refused.Success);
-            Assert.Contains("system database of another OctoMesh instance", refused.Error);
-            Assert.False(refusedWithOverride.Success);
-            Assert.Contains("cannot be overridden", refusedWithOverride.Error);
+            RestoreRefusalAssert.IsUniformAndLogged(refused, fixture.Logs, refusedTenantId, freshSystemDatabase,
+                "system database of another OctoMesh instance");
+            RestoreRefusalAssert.IsUniformAndLogged(refusedWithOverride, fixture.Logs, refusedWithOverrideTenantId,
+                freshSystemDatabase, "cannot be overridden");
             Assert.True(await fresh.GetSystemContext().IsSystemTenantExistingAsync());
         }
         finally
