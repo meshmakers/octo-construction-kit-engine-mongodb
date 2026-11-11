@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts.AuditTrails;
 using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 
@@ -36,7 +37,38 @@ public class DataPermissionTestFixture : ImportTestCkModelFixture
     {
         // Last registration wins over the TryAddSingleton in AddRuntimeEngine.
         Services.AddSingleton<IDataPermissionResolver>(Resolver);
+        // AB#7279: the host sink the engine's AggregatingAuditEventSink wraps.
+        Services.AddSingleton<IAuditEventSink>(AuditSink);
     }
 
     public TestDataPermissionResolver Resolver { get; } = new();
+
+    public CapturingAuditEventSink AuditSink { get; } = new();
+}
+
+/// <summary>Records every audit event that reaches the host sink.</summary>
+public sealed class CapturingAuditEventSink : IAuditEventSink
+{
+    private readonly List<AuditEvent> _events = [];
+
+    public IReadOnlyList<AuditEvent> Events
+    {
+        get
+        {
+            lock (_events)
+            {
+                return [.. _events];
+            }
+        }
+    }
+
+    public Task PublishAsync(AuditEvent auditEvent, CancellationToken cancellationToken = default)
+    {
+        lock (_events)
+        {
+            _events.Add(auditEvent);
+        }
+
+        return Task.CompletedTask;
+    }
 }

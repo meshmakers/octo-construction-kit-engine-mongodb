@@ -7,6 +7,7 @@ using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.AuditTrails;
+using Meshmakers.Octo.Runtime.Engine.AuditTrails;
 using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
@@ -177,14 +178,16 @@ internal class TenantRepository(
     ///     Builds the caller's data-permission read filter for this query (AB#4973). Null for system
     ///     sessions and unrestricted tenants — query shapes and cache keys then stay byte-identical to
     ///     the pre-permission behavior. Publishes an audit event when the queried type is restricted by
-    ///     AuditOnly policies only.
+    ///     AuditOnly policies only; <paramref name="action" /> names what the filter is used for (AB#7279): a
+    ///     query (<c>read</c>) or the pre-filter of an update, replace or delete, so a write is not reported
+    ///     as a read.
     /// </summary>
     private Task<RtDataSecurityQueryFilter?> CreateSecurityFilterAsync(IOctoSession session,
-        CkTypeGraph queriedCkTypeGraph)
+        CkTypeGraph queriedCkTypeGraph, string action = DataPermissionAudit.Actions.Read)
     {
         return CreateSecurityFilterAsync(session,
             queriedCkTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId().SemanticVersionedFullName),
-            queriedCkTypeGraph.CkTypeId.ToRtCkId().SemanticVersionedFullName);
+            queriedCkTypeGraph.CkTypeId.ToRtCkId().SemanticVersionedFullName, action);
     }
 
     /// <summary>
@@ -193,7 +196,7 @@ internal class TenantRepository(
     ///     AuditOnly policy.
     /// </summary>
     private async Task<RtDataSecurityQueryFilter?> CreateSecurityFilterAsync(IOctoSession session,
-        IEnumerable<string> queriedTypeIds, string queriedName)
+        IEnumerable<string> queriedTypeIds, string queriedName, string action = DataPermissionAudit.Actions.Read)
     {
         if (dataSecurityFilterFactory == null)
         {
@@ -216,11 +219,10 @@ internal class TenantRepository(
         {
             if (queriedTypeIds.Any(t => securityFilter.AuditDeniedCkTypeIds.Contains(t)))
             {
-                await AuditEventSink.PublishAsync(new AuditEvent(TenantId, AuditEventLevel.Warning,
-                        "DataPermissions.ReadViolation",
-                        $"Subject '{securityContext.SubjectId}' read protected type " +
-                        $"'{queriedName}' without a grant " +
-                        "(AuditOnly policy — not blocked)."))
+                // Aggregated per (tenant, subject, type, action) by the AggregatingAuditEventSink the tenant
+                // context hands in (AB#7279): this runs once per repository call, i.e. per query of a ForEach.
+                await DataPermissionAudit.PublishReadViolationAsync(AuditEventSink, TenantId,
+                        securityContext.SubjectId, queriedName, action)
                     .ConfigureAwait(false);
             }
         }
@@ -241,7 +243,8 @@ internal class TenantRepository(
             mongoDbRepositoryDataSource, deleteOptions);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         mutation.SetSecurityPreFilter(
-            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph,
+                DataPermissionAudit.Actions.Delete)));
         await mutation.DeleteManyAsync(session).ConfigureAwait(false);
     }
 
@@ -254,7 +257,8 @@ internal class TenantRepository(
             mongoDbRepositoryDataSource, deleteOptions);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         mutation.SetSecurityPreFilter(
-            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph,
+                DataPermissionAudit.Actions.Delete)));
         await mutation.DeleteOneAsync(session).ConfigureAwait(false);
     }
 
@@ -267,7 +271,8 @@ internal class TenantRepository(
             mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         mutation.SetSecurityPreFilter(
-            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph,
+                DataPermissionAudit.Actions.Update)));
         await mutation.UpdateOneAsync(session, rtEntity).ConfigureAwait(false);
     }
 
@@ -280,7 +285,8 @@ internal class TenantRepository(
             mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         mutation.SetSecurityPreFilter(
-            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph,
+                DataPermissionAudit.Actions.Update)));
         await mutation.UpdateManyAsync(session, rtEntity).ConfigureAwait(false);
     }
 
@@ -293,7 +299,8 @@ internal class TenantRepository(
             mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         mutation.SetSecurityPreFilter(
-            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph,
+                DataPermissionAudit.Actions.Replace)));
         await mutation.ReplaceOneAsync(session, rtEntity).ConfigureAwait(false);
     }
 

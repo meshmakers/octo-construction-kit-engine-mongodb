@@ -326,6 +326,43 @@ public class DataPermissionEnforcementTests(DataPermissionTestFixture fixture)
     }
 
     [Fact]
+    public async Task AuditOnlyViolations_NameTheRealAction_AndRepeatedReadsAreAggregated()
+    {
+        // AB#7279: a unique subject keeps the singleton aggregator's keys of other tests out of the way.
+        var subject = RtSecurityContext.ForUser("user-audit-" + Guid.NewGuid().ToString("N"), ["TestOther"]);
+        var (repository, _, _, _) = await SeedAsync();
+        fixture.Resolver.Table = BuildTable(auditOnly: true);
+        try
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                Assert.Equal(3, (await ReadAllAsync(repository, subject)).Items.Count());
+            }
+
+            using var session = await repository.GetSessionAsync(subject);
+            session.StartTransaction();
+            await repository.DeleteOneRtEntityAsync<RtContinent>(session,
+                FieldFilterCriteria.Create().FieldEquals(nameof(RtContinent.Name), "Emp2-C"), DeleteOptions.Erase);
+            await session.CommitTransactionAsync();
+        }
+        finally
+        {
+            fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        }
+
+        var violations = fixture.AuditSink.Events
+            .Where(e => e.Category == "DataPermissions.ReadViolation" &&
+                        Equals(e.Metadata?["SubjectId"], subject.SubjectId))
+            .ToList();
+        // Three reads: the first is published, the two repetitions wait for the window summary.
+        var read = Assert.Single(violations, e => Equals(e.Metadata!["Action"], "read"));
+        Assert.Contains("read protected type", read.Message, StringComparison.Ordinal);
+        // The delete's pre-filter is reported as a delete, not as a read.
+        var delete = Assert.Single(violations, e => Equals(e.Metadata!["Action"], "delete"));
+        Assert.Contains("performed 'delete' on protected type", delete.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task PoliciesOnOtherTypes_LeaveTypeOpen()
     {
         var (repository, _, _, _) = await SeedAsync();
