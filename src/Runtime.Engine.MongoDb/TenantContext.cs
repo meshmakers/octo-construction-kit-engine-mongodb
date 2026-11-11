@@ -1070,7 +1070,8 @@ public class TenantContext : ITenantContext
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
-    public async Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId, bool dropStreamData = false)
+    public async Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId, bool dropStreamData = false,
+        bool overrideForeignOwnership = false)
     {
         // Single-call convenience: delete the metadata and drop the database in one go, within the
         // caller's transaction. Suitable for callers that have no concurrent tenant-resolve to race
@@ -1078,13 +1079,14 @@ public class TenantContext : ITenantContext
         // delete a live tenant (e.g. the tenant delete REST endpoint) must instead call
         // DeleteChildTenantMetadataAsync, commit, then DropTenantDatabaseAsync so the physical drop
         // happens after the record deletion is durably gone. See DeleteChildTenantMetadataAsync.
-        var handle = await DeleteChildTenantMetadataAsync(adminSession, tenantId, dropStreamData);
+        var handle = await DeleteChildTenantMetadataAsync(adminSession, tenantId, dropStreamData,
+            overrideForeignOwnership);
         await DropTenantDatabaseAsync(handle, tenantId);
     }
 
     /// <inheritdoc />
     public async Task<TenantDeletionHandle> DeleteChildTenantMetadataAsync(IOctoAdminSession adminSession,
-        string tenantId, bool dropStreamData = false)
+        string tenantId, bool dropStreamData = false, bool overrideForeignOwnership = false)
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
@@ -1102,14 +1104,19 @@ public class TenantContext : ITenantContext
         // RemoveStaleChildTenantEntryAsync removes just the stale row.
         await EnsureLiveChildRowAsync(adminSession, octoTenant, "delete");
 
+        Guid correlationId = Guid.NewGuid();
+
+        // AB#8807: the delete drops the database, and on a shared MongoDB server that database can belong to
+        // another OctoMesh instance (a double registration from before AB#4945). Refuse before any event or write.
+        await EnsureDatabaseNotOwnedByAnotherInstanceAsync(tenantId, octoTenant.DatabaseName,
+            overrideForeignOwnership, correlationId);
+
         // Collected BEFORE the record deletion: this is the last moment the child resolves, and the
         // archive entities are gone with its database. Only when the caller drops the tenant for good;
         // a database swap (restore over an existing tenant) keeps the archives and their tables.
         var (streamDataArchives, streamDataModelPresent) = dropStreamData
             ? await CollectStreamDataArchivesAsync(adminSession, tenantId)
             : ([], false);
-
-        Guid correlationId = Guid.NewGuid();
 
         await _tenantNotifications.NotifyPreTenantDeleteAsync(tenantId, correlationId);
 
@@ -1588,6 +1595,60 @@ public class TenantContext : ITenantContext
                 $"'{string.Join("', '", otherRegistrations)}' of another OctoMesh instance on this server; " +
                 "detach it there first");
         }
+    }
+
+    /// <summary>
+    ///     Cross-instance ownership guard of the delete (AB#8807). Throws the uniform database-name conflict of
+    ///     AB#4763 when <paramref name="databaseName" /> belongs to another OctoMesh instance on the same MongoDB
+    ///     server (see <see cref="TenantDatabaseForeignOwnership" />); the owner goes to the log only. A deliberate
+    ///     <paramref name="overrideForeignOwnership" /> lets the delete drop a database that only carries the marker
+    ///     of another instance (an orphaned marker: no other instance registers it) and logs that as a warning
+    ///     starting with "OWNERSHIP OVERRIDE". Another instance's system database and a database another instance
+    ///     still registers are never dropped.
+    /// </summary>
+    /// <remarks>
+    ///     Strict for double registrations: a database that this instance's marker names but another instance's
+    ///     system database also registers is refused too, because that instance may still work on it. Detach the
+    ///     tenant in the instance that does not use it first.
+    /// </remarks>
+    private async Task EnsureDatabaseNotOwnedByAnotherInstanceAsync(string tenantId, string databaseName,
+        bool overrideForeignOwnership, Guid correlationId)
+    {
+        var normalizedTenantId = tenantId.NormalizeString();
+        var normalizedDatabaseName = NormalizeDatabaseName(databaseName);
+
+        var owner = await TenantDatabaseForeignOwnership.FindAsync(GetTenantOwnershipStore(),
+            _serviceProvider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
+            _systemConfiguration.Value.SystemDatabaseName, normalizedDatabaseName, normalizedTenantId);
+        if (owner == null)
+        {
+            return;
+        }
+
+        if (!owner.CanBeOverridden)
+        {
+            // Odin 2026-11-11: the override never drops a system database nor a database another live instance
+            // still registers; it only covers an orphaned foreign marker.
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                $"the delete would drop a database that {owner.Description}; this refusal cannot be overridden" +
+                (owner.IsSystemDatabase
+                    ? string.Empty
+                    : " while that instance registers it - detach the tenant in the instance that does not use it"));
+        }
+
+        if (overrideForeignOwnership)
+        {
+            _logger.LogWarning(
+                "OWNERSHIP OVERRIDE: deleting tenant '{TenantId}' drops database '{DatabaseName}', which {ForeignOwner} " +
+                "(correlation {CorrelationId}). The administrator overrode the cross-instance ownership guard; the " +
+                "other instance loses the data of this database", normalizedTenantId, normalizedDatabaseName,
+                owner.Description, correlationId);
+            return;
+        }
+
+        throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+            $"the delete would drop a database that {owner.Description}; detach the tenant in this instance " +
+            "instead (keeps the database), or override the ownership guard deliberately");
     }
 
     /// <summary>

@@ -27,7 +27,15 @@ internal static class ThrowawayTenant
     ///     way already dropped it — that is the normal case, and then this only costs one existence
     ///     check.
     /// </summary>
-    internal static Task DropAsync(ISystemContext systemContext, string tenantId, bool dropStreamData = true)
+    /// <param name="systemContext">The instance whose child tenant is dropped.</param>
+    /// <param name="tenantId">The tenant to drop.</param>
+    /// <param name="dropStreamData">Whether the tenant's stream data tables go with it.</param>
+    /// <param name="overrideForeignOwnership">
+    ///     For tests that leave an orphaned foreign ownership marker on a database: drops it anyway (the delete
+    ///     guard of AB#8807 refuses it otherwise and the database leaks).
+    /// </param>
+    internal static Task DropAsync(ISystemContext systemContext, string tenantId, bool dropStreamData = true,
+        bool overrideForeignOwnership = false)
     {
         return RunProgress.RunBoundedAsync($"clean up throwaway tenant '{tenantId}'", async () =>
         {
@@ -46,7 +54,7 @@ internal static class ThrowawayTenant
 
             using var session = await systemContext.GetAdminSessionAsync();
             session.StartTransaction();
-            await systemContext.DropChildTenantAsync(session, tenantId, dropStreamData);
+            await systemContext.DropChildTenantAsync(session, tenantId, dropStreamData, overrideForeignOwnership);
             await session.CommitTransactionAsync();
         }, DropTimeout);
     }

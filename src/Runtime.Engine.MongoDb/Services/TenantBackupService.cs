@@ -310,7 +310,10 @@ internal class TenantBackupService(
                         tenantId);
                     using var session = await systemContext.GetAdminSessionAsync();
                     session.StartTransaction();
-                    await systemContext.DropChildTenantAsync(session, tenantId);
+                    // The delete has its own ownership guard (AB#8807) for the existing tenant's database; the
+                    // administrator's deliberate override of the restore covers it as well.
+                    await systemContext.DropChildTenantAsync(session, tenantId,
+                        overrideForeignOwnership: overrideForeignOwnership);
                     await session.CommitTransactionAsync();
                     logger.LogInformation("Tenant '{TenantId}' dropped successfully", tenantId);
                 }

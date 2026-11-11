@@ -3038,7 +3038,7 @@ Lifecycle:
 | `AttachChildTenantAsync` | The gate consults the marker (attach mode, after the existence check): foreign owner → **uniform, reason-free rejection** per the AB#4763 rule (the owner is logged, never returned — no cross-instance oracle). **STRICT by decision: no force override** — the owning instance must detach first. On pass, the attach stamps first thing in the try; a marker THIS call created is removed again in the catch (best-effort) so a failed attach never leaves the database locked for other instances. |
 | `DetachChildTenantAsync` | Removes the marker LAST inside the try — the one sanctioned ownership handover. Deliberately not best-effort: a removal failure aborts the caller's transaction, the registry rows are restored, and the database stays consistently attached here. Removes it **only when it names this instance** (`RemoveIfOwnedByAsync`, AB#8796): detaching a double-registered tenant in the non-owning instance leaves the owner's claim intact. |
 | Tenant-resolve (`TryGetChildTenantContextAsync`) | Lazy claim: stamps insert-if-absent (once per process per tenant, guard cleared by `ClearTenantResolveImportGuards`), so the existing fleet becomes owned without a migration script. Insert-if-absent means a pre-guard double attachment across two instances is won by the first writer and never flaps. AB#8796: the stamp returns the marker (`StampIfAbsentAndGetAsync`); a marker of ANOTHER instance logs one warning per process and tenant and is recorded in `TenantOwnershipConflictTracker` (`ITenantOwnershipConflicts`), which turns `TenantContextHealthCheck` **Degraded** with tenant, database and owner. Resolve is never refused, the marker never overwritten; `InvalidateTenantResolveImportGuards` and detach clear the conflict. |
-| `ClearChildTenantAsync` / delete | Clear re-stamps via its internal `CreateChildTenantAsync`; delete drops the database and the marker with it. |
+| `ClearChildTenantAsync` / delete | Delete drops the database and the marker with it, **after the delete guard (AB#8807, below)**; Clear goes through the same delete and re-stamps via its internal `CreateChildTenantAsync`. |
 
 The collection is deliberately NOT in `InfrastructureCollections` — that registry is the
 system-database shell allowlist (AB#4854), and the marker is never written into a system database
@@ -3074,6 +3074,22 @@ registers when `attachTenant` is true: the attach gate above would refuse it aft
 replaced, and a successful attach would register one database in two instances. After mongorestore the
 archive's ownership marker and system-database marker are removed, so a backup of another instance (or
 of a system database) restores as a tenant database the restoring instance owns after the attach.
+
+**Delete guard (AB#8807).** `DeleteChildTenantMetadataAsync` (and so `DropChildTenantAsync`, the REST
+two-phase delete and `ClearChildTenantAsync`) calls `EnsureDatabaseNotOwnedByAnotherInstanceAsync`
+right after the stale-row check, before the pre-delete event and any write.
+`TenantDatabaseForeignOwnership.FindAsync` (same folder; the restore guard still has its own
+`CheckForeignOwnershipAsync` with the same rules) decides: another instance's system database, a marker
+naming another instance, or another system database registering the database (also the owner side of a
+double registration) -> uniform `DatabaseNameNotAvailable` conflict, the owner in the log only.
+`overrideForeignOwnership: true` drops a database that only carries an orphaned foreign marker (no other
+instance registers it) and logs `OWNERSHIP OVERRIDE ...` with the owner; another instance's system
+database and a database another live instance still registers are never dropped
+(`TenantDatabaseForeignOwner.CanBeOverridden`). A corrupt own row that registers another instance's
+system database hides it from the registry rule of `IsSystemDatabase` (registered = tenant database)
+when that instance has not stamped its system-database marker yet, so the delete also looks into an
+unmarked database: registry rows that name other parents than the deleted tenant mean a system database
+(`GetRegistryParentTenantIdsAsync`). Tests: `DeleteOwnershipGuardTests` (TwoInstance collection).
 
 Tests: `TenantOwnershipGuardTests` (create stamps; detach removes + re-attach re-stamps;
 foreign-owned attach conflicts uniformly with the foreign claim untouched; unstamped legacy DB is

@@ -44,6 +44,8 @@ internal sealed class TenantDatabaseRegistrationLookup
 
     private const string DatabaseNameAttribute = "databaseName";
 
+    private const string ParentTenantIdAttribute = "parentTenantId";
+
     private static readonly HashSet<string> MongoInternalDatabases =
         new(StringComparer.OrdinalIgnoreCase) { "admin", "local", "config" };
 
@@ -179,19 +181,49 @@ internal sealed class TenantDatabaseRegistrationLookup
     }
 
     /// <summary>
+    ///     Returns the parent tenant ids of the rows in the tenant registry of <paramref name="databaseName" /> itself,
+    ///     normalized; empty when the database holds no registry. Rows without a parent id are skipped. Used by the
+    ///     delete guard (AB#8807) to tell the registry of a parent tenant (its rows name that tenant as parent) from a
+    ///     system database that a corrupt row of this instance registers as a tenant database, which
+    ///     <see cref="TenantDatabaseRegistrations.IsSystemDatabase" /> cannot see because the row hides it.
+    /// </summary>
+    public async Task<IReadOnlySet<string>> GetRegistryParentTenantIdsAsync(string databaseName,
+        CancellationToken cancellationToken = default)
+    {
+        var database = GetDatabase(Normalize(databaseName));
+        var rows = await database.GetCollection<BsonDocument>(TenantRegistryCollectionName)
+            .Find(FilterDefinition<BsonDocument>.Empty)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        var parents = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var parent = ReadStringAttribute(row, ParentTenantIdAttribute);
+            if (parent != null)
+            {
+                parents.Add(parent);
+            }
+        }
+
+        return parents;
+    }
+
+    /// <summary>
     ///     Reads the registered database name of a System/Tenant row. CK attributes are stored under
     ///     <c>attributes</c> in camelCase; a top-level field is accepted as well so a storage-layout
     ///     change cannot make every registration invisible without a failing test.
     /// </summary>
-    private static string? ReadDatabaseName(BsonDocument row)
+    private static string? ReadDatabaseName(BsonDocument row) => ReadStringAttribute(row, DatabaseNameAttribute);
+
+    private static string? ReadStringAttribute(BsonDocument row, string attributeName)
     {
         if (row.TryGetValue("attributes", out var attributes) && attributes.IsBsonDocument &&
-            attributes.AsBsonDocument.TryGetValue(DatabaseNameAttribute, out var nested) && nested.IsString)
+            attributes.AsBsonDocument.TryGetValue(attributeName, out var nested) && nested.IsString)
         {
             return Normalize(nested.AsString);
         }
 
-        if (row.TryGetValue(DatabaseNameAttribute, out var topLevel) && topLevel.IsString)
+        if (row.TryGetValue(attributeName, out var topLevel) && topLevel.IsString)
         {
             return Normalize(topLevel.AsString);
         }
