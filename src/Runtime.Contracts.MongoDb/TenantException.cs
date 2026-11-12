@@ -34,6 +34,15 @@ public class TenantException : PersistenceException
     /// </summary>
     public bool IsTenantNotFound { get; private init; }
 
+    /// <summary>
+    /// True when the tenant's metadata was already deleted and committed, but the physical database drop that
+    /// follows was refused because the database belongs to another OctoMesh instance by now (AB#8807): the tenant
+    /// record is gone, the database is left untouched and the delete's tombstone stays for the settle sweep. The
+    /// message is the uniform database conflict (<see cref="IsConflict" /> is true as well); this flag only tells
+    /// the caller which state the delete left behind.
+    /// </summary>
+    public bool IsDatabaseDropPending { get; private init; }
+
     internal static Exception SystemModelNotFoundInCatalog(CkModelId ckModelId)
     {
         return new TenantException($"System model {ckModelId} not found in any catalog.");
@@ -92,6 +101,18 @@ public class TenantException : PersistenceException
     public static Exception DatabaseNameNotAvailable(string databaseName)
     {
         return new TenantException($"Database name '{databaseName}' is not available.") { IsConflict = true };
+    }
+
+    /// <summary>
+    /// The database drop after a committed metadata deletion was refused (<see cref="IsDatabaseDropPending" />).
+    /// Same uniform message as <see cref="DatabaseNameNotAvailable" />; the reason goes to the log only (AB#4763).
+    /// </summary>
+    public static TenantException DatabaseDropRefused(string databaseName)
+    {
+        return new TenantException($"Database name '{databaseName}' is not available.")
+        {
+            IsConflict = true, IsDatabaseDropPending = true
+        };
     }
 
     /// <summary>

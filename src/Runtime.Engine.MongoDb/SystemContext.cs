@@ -5,6 +5,8 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using Microsoft.Extensions.DependencyInjection;
@@ -99,6 +101,10 @@ public class SystemContext : TenantContext, ISystemContext
 
             await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
                 new TenantDatabaseSourceIdentifier(null, ckModelRepository, normalizedTenantId));
+
+            // AB#8672: mark the database as a system database at once, so an instance without any tenant
+            // is recognised by the other instances on the server.
+            await TryStampSystemDatabaseMarkerAsync();
 
             // Distribute updates (post) to inform other services.
             await _tenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId, correlationId);
@@ -362,6 +368,21 @@ public class SystemContext : TenantContext, ISystemContext
             result.TotalCount, null, null);
     }
 
+    /// <inheritdoc />
+    public async Task<TenantOwnershipReviewResult> ReviewTenantOwnershipAsync(IOctoAdminSession adminSession,
+        bool stamp = false)
+    {
+        var tenants = new List<(string TenantId, string DatabaseName, bool DatabaseExists)>();
+        foreach (var tenant in (await GetAllTenantsAsync(adminSession)).Items)
+        {
+            var databaseName = NormalizeDatabaseName(tenant.DatabaseName);
+            tenants.Add((tenant.TenantId.NormalizeString(), databaseName, await IsDatabaseExistingAsync(databaseName)));
+        }
+
+        return await _serviceProvider.GetRequiredService<TenantOwnershipReview>().RunAsync(
+            NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName), tenants, stamp);
+    }
+
     /// <summary>
     ///     Start of the conflict reason for a stale parent-local row (AB#6759); a dry run lists them under this marker.
     /// </summary>
@@ -527,6 +548,40 @@ public class SystemContext : TenantContext, ISystemContext
             // CK v2 (review G3 E-M2): archives of the system tenant are checked after a System import too.
             await RevalidateArchiveAccessAsync();
         }
+
+        // AB#8672: the service that ensures the System CK model on every start (identity) stamps the
+        // system-database marker, so an instance that predates the marker gets it on its first start with
+        // this version. Only over an existing system tenant: on a virgin server the bootstrap stamps it.
+        if (await IsSystemTenantExistingAsync())
+        {
+            await TryStampSystemDatabaseMarkerAsync();
+        }
+    }
+
+    /// <summary>
+    ///     Stamps the system-database marker (AB#8672, idempotent). A failure never fails the bootstrap or the start:
+    ///     the instance keeps running, logs a warning and its health check reports <c>Degraded</c> with the reason
+    ///     (<see cref="ITenantOwnershipConflicts.SystemDatabaseMarkerProblem" />), because without the marker the
+    ///     other instances on the server recognise this system database only while it registers a tenant. The next
+    ///     successful stamp clears the state.
+    /// </summary>
+    private async Task TryStampSystemDatabaseMarkerAsync()
+    {
+        var tracker = _serviceProvider.GetRequiredService<TenantOwnershipConflictTracker>();
+        try
+        {
+            await _serviceProvider.GetRequiredService<SystemDatabaseMarkerStore>()
+                .StampIfAbsentAsync(DatabaseName, TenantId);
+            tracker.ClearSystemDatabaseMarkerProblem();
+        }
+        catch (Exception ex)
+        {
+            tracker.ReportSystemDatabaseMarkerProblem($"stamping '{DatabaseName}' failed ({ex.GetType().Name}: {ex.Message})");
+            _serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<SystemContext>().LogWarning(ex,
+                "Could not stamp the system-database marker into '{DatabaseName}'; other OctoMesh instances on " +
+                "this server recognise it as a system database only while it registers a tenant. The health check " +
+                "reports Degraded until the next successful stamp", DatabaseName);
+        }
     }
 
     #endregion Construction Kit Model Handling
@@ -542,11 +597,11 @@ public class SystemContext : TenantContext, ISystemContext
 
     public Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName, string archiveFilePath,
         string? sourceDatabaseName = null, bool dropExistingTenant = true, bool attachTenant = true,
-        TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
+        TimeSpan? timeout = null, CancellationToken? cancellationToken = null, bool overrideForeignOwnership = false)
     {
         var backupService = _serviceProvider.GetRequiredService<ITenantBackupService>();
         return backupService.RestoreTenantAsync(tenantId, databaseName, archiveFilePath, sourceDatabaseName,
-            dropExistingTenant, attachTenant, timeout, cancellationToken);
+            dropExistingTenant, attachTenant, timeout, cancellationToken, overrideForeignOwnership);
     }
 
     public Task<CommandResult> CloneTenantToTempAsync(string sourceTenantId, string tempTenantId,

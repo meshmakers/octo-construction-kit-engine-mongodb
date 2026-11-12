@@ -250,7 +250,18 @@ public interface ITenantContext
     ///     the database - a restore over an existing tenant, a create-rollback - and must leave the
     ///     tables of the archives that continue to exist afterwards alone (AB#4255).
     /// </param>
-    Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId, bool dropStreamData = false);
+    /// <param name="overrideForeignOwnership">
+    ///     Deliberate administrator override of the cross-instance ownership guard of the delete (AB#8807). By
+    ///     default the delete is refused before any side effect when the tenant's database belongs to another
+    ///     OctoMesh instance on the same MongoDB server: its ownership marker (AB#4945) names another system
+    ///     database, or another instance's system database registers it. The refusal is the uniform conflict of
+    ///     AB#4763; the owner is written to the server log only. When true, the delete drops a database that only
+    ///     carries another instance's marker (an orphaned marker: no other instance registers it) and logs the
+    ///     override as a warning starting with "OWNERSHIP OVERRIDE" that names the owner. Another instance's system
+    ///     database and a database another instance still registers are never dropped.
+    /// </param>
+    Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId, bool dropStreamData = false,
+        bool overrideForeignOwnership = false);
 
     /// <summary>
     ///     Deletes only the tenant metadata records (in the current and system tenant repositories)
@@ -280,9 +291,14 @@ public interface ITenantContext
     ///     anything is deleted. False (the default) leaves the tables alone, see
     ///     <see cref="DropChildTenantAsync" /> (AB#4255).
     /// </param>
+    /// <param name="overrideForeignOwnership">
+    ///     Deliberate override of the cross-instance ownership guard (AB#8807), see
+    ///     <see cref="DropChildTenantAsync" />. The guard runs here, before the pre-delete notification and the
+    ///     record deletion, so a refused delete leaves the tenant, its records and its database untouched.
+    /// </param>
     /// <returns>A handle carrying the database name, correlation id and archives for the drop phase.</returns>
     Task<TenantDeletionHandle> DeleteChildTenantMetadataAsync(IOctoAdminSession adminSession, string tenantId,
-        bool dropStreamData = false);
+        bool dropStreamData = false, bool overrideForeignOwnership = false);
 
     /// <summary>
     ///     Drops the physical tenant database and raises the post-delete notification. Must be called
@@ -298,6 +314,16 @@ public interface ITenantContext
     ///     the tenant is already deleted, a failure is logged as an error naming the tables that have
     ///     to be dropped manually. Detach does not go through here and keeps the tables for a later
     ///     attach.
+    ///     <para>
+    ///         Right before the drop the cross-instance ownership is checked again (AB#8807), for every
+    ///         caller - also the delete settle sweep, which drops a resurrected database from a handle built
+    ///         out of the lifecycle record. A database that belongs to another OctoMesh instance on the server
+    ///         (its system database, registered by it, or carrying its marker) is never dropped: the call throws
+    ///         the uniform <see cref="TenantException.DatabaseNameNotAvailable" /> conflict and leaves the database
+    ///         untouched; the cache invalidation and the post-delete notification still run. Only an override the
+    ///         metadata deletion granted for an orphaned foreign marker
+    ///         (<see cref="TenantDeletionHandle.ForeignOwnershipOverridden" />) lets that case through.
+    ///     </para>
     /// </remarks>
     /// <param name="handle">The handle returned by <see cref="DeleteChildTenantMetadataAsync" />.</param>
     /// <param name="tenantId">The tenant whose database is dropped (used for the notification).</param>

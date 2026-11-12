@@ -9,6 +9,14 @@ public class MongoRestoreOptions
     // Namespace mapping for restore
     public string? NsFrom { get; set; }
     public string? NsTo { get; set; }
+
+    /// <summary>
+    /// Namespaces of the archive that are never restored (<c>--nsExclude</c>, one per pattern; wildcards allowed,
+    /// matched against the archive's namespaces before any <see cref="NsFrom" />/<see cref="NsTo" /> mapping). With
+    /// <see cref="Drop" />, an excluded collection of the target is neither dropped nor overwritten. The tenant
+    /// restore excludes the ownership markers this way (AB#8672).
+    /// </summary>
+    public IReadOnlyList<string> NsExclude { get; set; } = [];
     
     // Input
     public string? InputDirectory { get; set; }

@@ -56,6 +56,24 @@ public class MongoToolArgumentsTests
     }
 
     [Fact]
+    public void BuildMongoRestoreArguments_WithExcludedNamespaces_EmitsOneNsExcludePerPattern()
+    {
+        // AB#8672: the tenant restore never restores the ownership markers of the archive.
+        var options = new MongoRestoreOptions
+        {
+            Database = "test",
+            Archive = "/tmp/archive.tar.gz",
+            NsExclude = ["*.tenant_ownership", "*.system_database_marker"]
+        };
+
+        var args = MongoToolArguments.BuildMongoRestoreArguments(options, ConnectionString, null, null);
+
+        args.Should().Contain("--nsExclude=*.tenant_ownership");
+        args.Should().Contain("--nsExclude=*.system_database_marker");
+        new MongoRestoreOptions { Database = "test" }.NsExclude.Should().BeEmpty();
+    }
+
+    [Fact]
     public void BuildMongoRestoreArguments_WithoutNamespaceMapping_DefaultsToTargetNamespace()
     {
         var options = new MongoRestoreOptions

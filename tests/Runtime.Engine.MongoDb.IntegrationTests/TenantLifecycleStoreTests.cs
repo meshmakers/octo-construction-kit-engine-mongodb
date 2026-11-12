@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle;
@@ -145,6 +146,44 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
         Assert.Equal($"db2-{tenantId}", updated.DatabaseName);
 
         await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
+    /// AB#8807: the delete records the ownership override its metadata guard granted in the tombstone before the
+    /// metadata commit, so the settle sweep finishes an interrupted delete with the same decision. The plain restamp
+    /// after the drop keeps it; a new delete (MarkDeleting) starts without it.
+    /// </summary>
+    [Fact]
+    public async Task EnsureDeleting_records_the_overridden_marker_the_plain_restamp_keeps_it_and_MarkDeleting_resets_it()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"t-{Guid.NewGuid():N}";
+        var correlationId = Guid.NewGuid();
+        try
+        {
+            var marker = new TenantOwnershipMarkerIdentity("octosystemgone",
+                new DateTime(2026, 11, 11, 10, 15, 30, 123, DateTimeKind.Utc));
+            await store.EnsureDeletingAsync(tenantId, $"db-{tenantId}", correlationId, marker, ct);
+            var recorded = await store.GetAsync(tenantId, ct);
+            Assert.Equal(marker, recorded!.GetOverriddenForeignMarker());
+            Assert.Equal($"db-{tenantId}", recorded.DatabaseName);
+            Assert.Equal(TenantLifecycleState.Deleting, recorded.State);
+
+            await store.EnsureDeletingAsync(tenantId, $"db-{tenantId}", correlationId, ct);
+            Assert.Equal(marker, (await store.GetAsync(tenantId, ct))!.GetOverriddenForeignMarker());
+
+            await store.MarkDeletingAsync(tenantId, ct);
+            Assert.Null((await store.GetAsync(tenantId, ct))!.GetOverriddenForeignMarker());
+
+            await store.EnsureDeletingAsync(tenantId, $"db-{tenantId}", correlationId, marker, ct);
+            await store.EnsureDeletingAsync(tenantId, $"db-{tenantId}", correlationId, null, ct);
+            Assert.Null((await store.GetAsync(tenantId, ct))!.GetOverriddenForeignMarker());
+        }
+        finally
+        {
+            await store.RemoveAsync(tenantId, ct);
+        }
     }
 
     /// <summary>

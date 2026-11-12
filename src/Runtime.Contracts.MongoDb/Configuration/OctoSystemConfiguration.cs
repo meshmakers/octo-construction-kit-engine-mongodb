@@ -43,6 +43,38 @@ public class OctoSystemConfiguration()
         }
     }
 
+    private string _tenantDatabasePrefix = string.Empty;
+
+    /// <summary>
+    /// Optional tenant-database prefix of this instance (AB#8797, Epic AB#4944). When set, a tenant created without
+    /// an explicit database name gets the database <c>&lt;prefix&gt;&lt;tenantId&gt;</c>, and a create or attach
+    /// with an explicit name that does not start with the prefix is refused with the generic "not available"
+    /// conflict. Two instances on one MongoDB server (different <see cref="SystemDatabaseName" />s) with different
+    /// prefixes can then create tenants with the same id. DEFAULT EMPTY: no prefix, every name exactly as before.
+    /// Tenants registered before a prefix was set keep their database names and keep working (no rename).
+    /// The MongoDB counterpart of <c>StreamData:SchemaInstancePrefix</c> (CrateDB); deliberately its own setting,
+    /// because existing instances may set one without the other. Environment variable
+    /// <c>OCTO_SYSTEM__TENANTDATABASEPREFIX</c>. Normalized to lower case; at most
+    /// <see cref="TenantDatabaseNames.MaxPrefixBytes" /> ASCII letters, digits, '-' and '_'. Anything else fails when
+    /// the configuration is bound, naming this option.
+    /// </summary>
+    public string TenantDatabasePrefix
+    {
+        get => _tenantDatabasePrefix;
+        set
+        {
+            var normalized = TenantDatabaseNames.NormalizePrefix(value);
+            var reason = TenantDatabaseNames.ValidatePrefix(normalized);
+            if (reason != null)
+            {
+                throw ConfigurationErrorException.InvalidConfigurationValue(nameof(TenantDatabasePrefix), value,
+                    reason);
+            }
+
+            _tenantDatabasePrefix = normalized;
+        }
+    }
+
     public string DatabaseUser { get; set; } = "octo-system-ds-user-{0}";
     public string? DatabaseUserPassword { get; set; }
     public string AdminUser { get; set; } = "octo-system-admin";

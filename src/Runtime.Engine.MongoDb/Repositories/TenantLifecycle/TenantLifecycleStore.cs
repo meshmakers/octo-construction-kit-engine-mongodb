@@ -1,5 +1,6 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
@@ -303,6 +304,8 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         // phantom Deleting record for a non-existent tenant and permanently 409 any re-create.
         var update = Builders<TenantLifecycleRecord>.Update
             .Set(r => r.State, TenantLifecycleState.Deleting)
+            .Set(r => r.OverriddenForeignMarkerOwner, (string?)null)
+            .Set(r => r.OverriddenForeignMarkerStampedUtc, (DateTime?)null)
             .Set(r => r.LeaseOwner, (string?)null)
             .Set(r => r.LeaseUntil, (DateTime?)null)
             .Set(r => r.LastTransitionUtc, DateTime.UtcNow);
@@ -311,8 +314,18 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
             .ConfigureAwait(false);
     }
 
-    public async Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
-        CancellationToken cancellationToken = default)
+    public Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
+        CancellationToken cancellationToken = default) =>
+        EnsureDeletingCoreAsync(tenantId, databaseName, correlationId, false, null, cancellationToken);
+
+    public Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
+        TenantOwnershipMarkerIdentity? overriddenForeignMarker, CancellationToken cancellationToken = default) =>
+        EnsureDeletingCoreAsync(tenantId, databaseName, correlationId, true, overriddenForeignMarker,
+            cancellationToken);
+
+    private async Task EnsureDeletingCoreAsync(string tenantId, string? databaseName, Guid correlationId,
+        bool writeOverride, TenantOwnershipMarkerIdentity? overriddenForeignMarker,
+        CancellationToken cancellationToken)
     {
         var collection = await GetCollectionAsync(ensureIndexes: true, cancellationToken).ConfigureAwait(false);
 
@@ -330,6 +343,15 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         if (!string.IsNullOrEmpty(databaseName))
         {
             update = update.Set(r => r.DatabaseName, databaseName);
+        }
+
+        // AB#8807: only the overload with the override writes it (null clears it); the plain restamp after the drop
+        // keeps what the delete recorded before its metadata commit.
+        if (writeOverride)
+        {
+            update = update
+                .Set(r => r.OverriddenForeignMarkerOwner, overriddenForeignMarker?.OwnerSystemDatabaseName)
+                .Set(r => r.OverriddenForeignMarkerStampedUtc, overriddenForeignMarker?.StampedAtUtc);
         }
 
         await collection.UpdateOneAsync(Eq(tenantId), update, new UpdateOptions { IsUpsert = true },

@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
+
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 
 /// <summary>
@@ -15,6 +17,32 @@ public sealed class TenantLifecycleRecord
 
     /// <summary>Correlation id tying this record to the tenant lifecycle events that drive it.</summary>
     public Guid CorrelationId { get; set; }
+
+    /// <summary>
+    /// Deleting tombstones only: the owner system database of the orphaned foreign ownership marker the delete's
+    /// metadata guard granted the deliberate override for (AB#8807,
+    /// <see cref="TenantDeletionHandle.OverriddenForeignMarker" />); null when no override was granted. Together with <see cref="OverriddenForeignMarkerStampedUtc" /> it identifies
+    /// that one marker: the drop honours the override only while exactly that marker is still on the database, so a
+    /// database another instance re-created under the same name in the meantime is never dropped. Written before the
+    /// metadata deletion commits, so the settle sweep finishes an interrupted delete with the same decision. Reset by
+    /// <see cref="ITenantLifecycleStore.MarkDeletingAsync" />.
+    /// </summary>
+    public string? OverriddenForeignMarkerOwner { get; set; }
+
+    /// <summary>
+    /// Deleting tombstones only: the stamp time of the overridden foreign marker
+    /// (see <see cref="OverriddenForeignMarkerOwner" />).
+    /// </summary>
+    public DateTime? OverriddenForeignMarkerStampedUtc { get; set; }
+
+    /// <summary>
+    /// The overridden foreign marker as one value, or null when the tombstone records no complete override.
+    /// </summary>
+    public TenantOwnershipMarkerIdentity? GetOverriddenForeignMarker() =>
+        OverriddenForeignMarkerOwner != null && OverriddenForeignMarkerStampedUtc.HasValue
+            ? new TenantOwnershipMarkerIdentity(OverriddenForeignMarkerOwner,
+                DateTime.SpecifyKind(OverriddenForeignMarkerStampedUtc.Value, DateTimeKind.Utc))
+            : null;
 
     public TenantLifecycleState State { get; set; }
 

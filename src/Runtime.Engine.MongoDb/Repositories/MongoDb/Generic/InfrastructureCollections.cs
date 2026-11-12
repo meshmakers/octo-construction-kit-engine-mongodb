@@ -17,6 +17,12 @@ internal static class InfrastructureCollections
     public const string CkMethodHandlerSnapshot = "ck_method_handler_snapshot";
     public const string SysLock = "SysLock";
 
+    /// <summary>
+    ///     The system-database marker (AB#8672, <c>SystemDatabaseMarkerStore</c>). A shell holding only the
+    ///     marker stays bootstrappable.
+    /// </summary>
+    public const string SystemDatabaseMarker = "system_database_marker";
+
     private static readonly IReadOnlySet<string> Names = new HashSet<string>(StringComparer.Ordinal)
     {
         TenantLifecycle,
@@ -24,6 +30,7 @@ internal static class InfrastructureCollections
         DisplayRuleSweep,
         CkMethodHandlerSnapshot,
         SysLock,
+        SystemDatabaseMarker,
     };
 
     /// <summary>

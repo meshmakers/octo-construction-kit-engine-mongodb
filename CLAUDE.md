@@ -2998,7 +2998,8 @@ tenant back, and that rollback used to drop whatever database the name pointed a
 
 Checks, in order: the configured system tenant id (reserved — the system tenant has no `RtTenant`
 self-record, so a registry lookup alone cannot cover it), the configured system database name,
-MongoDB's own `admin` / `local` / `config`, the platform-wide registry by tenant id, the registry by
+MongoDB's own `admin` / `local` / `config`, the instance's tenant-database prefix (AB#8797, see
+*Tenant-Database Prefix* below), the platform-wide registry by tenant id, the registry by
 database name, and finally physical existence — required for attach, forbidden for create.
 
 Two rules to preserve when touching it:
@@ -3054,23 +3055,158 @@ Lifecycle:
 | Point | Effect |
 |---|---|
 | `CreateChildTenantAsync` | Stamps right after the physical create — owned from birth; a stamp failure fails the create and the rollback drops the database we provably created. |
-| `AttachChildTenantAsync` | The gate consults the marker (attach mode, after the existence check): foreign owner → **uniform, reason-free rejection** per the AB#4763 rule (the owner is logged, never returned — no cross-instance oracle). **STRICT by decision: no force override** — the owning instance must detach first. On pass, the attach stamps first thing in the try; a marker THIS call created is removed again in the catch (best-effort) so a failed attach never leaves the database locked for other instances. |
-| `DetachChildTenantAsync` | Removes the marker LAST inside the try — the one sanctioned ownership handover. Deliberately not best-effort: a removal failure aborts the caller's transaction, the registry rows are restored, and the database stays consistently attached here. |
-| Tenant-resolve (`TryGetChildTenantContextAsync`) | Lazy claim: stamps insert-if-absent (once per process per tenant, guard cleared by `ClearTenantResolveImportGuards`), so the existing fleet becomes owned without a migration script. Insert-if-absent means a pre-guard double attachment across two instances is won by the first writer and never flaps. |
-| `ClearChildTenantAsync` / delete | Clear re-stamps via its internal `CreateChildTenantAsync`; delete drops the database and the marker with it. |
+| `AttachChildTenantAsync` | The gate consults the marker (attach mode, after the existence check): foreign owner → **uniform, reason-free rejection** per the AB#4763 rule (the owner is logged, never returned — no cross-instance oracle). **STRICT by decision: no force override** — the owning instance must detach first. On pass, the attach claims first thing in the try with `TenantOwnershipStore.ClaimAsync` (AB#8796): another instance's marker is never overwritten - when another instance attaching the same unmarked database won the claim between the gate's read and this write, the attach is refused with the same uniform conflict. **The claim is part of the caller's transaction** (every caller starts one): an own marker is re-stamped and a missing one inserted inside it, so the claim commits together with the registry rows, an abort takes it back (no rollback ever has to remove a claim another attach might rely on), and a concurrent attach of the same database - by this or another instance - collides with the uncommitted claim (write conflict) and is refused with the uniform conflict. Only without a transaction is the claim a plain write that the catch releases (`TryRemoveClaimAsync`: only while it is still exactly this call's claim - owner, tenant and claim time from `NewClaimTime` - and only when no own marker was there before). |
+| `DetachChildTenantAsync` | Removes the marker LAST inside the try — the one sanctioned ownership handover. Deliberately not best-effort: a removal failure aborts the caller's transaction, the registry rows are restored, and the database stays consistently attached here. Removes it **only when it names this instance** (`RemoveIfOwnedByAsync`, AB#8796): detaching a double-registered tenant in the non-owning instance leaves the owner's claim intact. |
+| Tenant-resolve (`TryGetChildTenantContextAsync`) | Lazy claim: stamps insert-if-absent (once per process per tenant, guard cleared by `ClearTenantResolveImportGuards`), so the existing fleet becomes owned without a migration script. Insert-if-absent means a pre-guard double attachment across two instances is won by the first writer and never flaps. AB#8796: the stamp returns the marker (`StampIfAbsentAndGetAsync`); a marker of ANOTHER instance logs one warning per process and tenant and is recorded in `TenantOwnershipConflictTracker` (`ITenantOwnershipConflicts`), which turns `TenantContextHealthCheck` **Degraded** with tenant, database and owner. Resolve is never refused, the marker never overwritten; `InvalidateTenantResolveImportGuards` and detach clear the conflict. A recorded conflict is rechecked against its database at most once per `TenantOwnershipConflictTracker.RecheckInterval` (one minute) by the health check (`ITenantOwnershipConflicts.RecheckAsync`) and by every resolve of the conflicting tenant: while the other instance's marker stays, the conflict and Degraded stay; once the other instance detached the tenant (its marker is gone), the recheck claims the database insert-if-absent for this instance and forgets the conflict, so the health returns to Healthy. |
+| `ClearChildTenantAsync` / delete | Delete drops the database and the marker with it, **after the delete guard (AB#8807, below)**; Clear goes through the same delete and re-stamps via its internal `CreateChildTenantAsync`. |
 
 The collection is deliberately NOT in `InfrastructureCollections` — that registry is the
 system-database shell allowlist (AB#4854), and the marker is never written into a system database
 (the gate reserves the system database name before any marker access). Reads never materialize a
-database: every caller operates on a database whose existence the gate has already established.
+database: every caller operates on a database whose existence the gate has already established. The one
+write that may materialize one is the restore's claim on a new target name (AB#8672), which a failed
+restore drops again.
 
-Known residual: `TenantBackupService.RestoreTenantAsync` restores whatever marker the backup
-carries (own-instance backups restore their own marker — correct); restoring another instance's
-backup into this instance requires a detach-style marker removal first, which is intentional.
+**Cross-instance registrations (AB#8796).** Databases from before the marker carry none, so the
+marker alone lets another instance adopt them. `TenantDatabaseRegistrationLookup` (same folder) reads
+the `RtEntity_SystemTenant` registry of every database on the server with the admin client and answers
+which **system databases** register a database. A system database = a database with the
+system-database marker (AB#8672, `SystemDatabaseMarkerStore`: collection `system_database_marker` in
+the system database itself, listed in `InfrastructureCollections` so a marker-only shell stays
+bootstrappable; stamped insert-if-absent by `CreateSystemTenantAsync` and by `EnsureSystemCkModelAsync`
+over an existing system tenant — identity calls it on every start — best effort, a failed stamp only
+logs), or, as the fallback for instances without the marker, a database without ownership marker whose
+registry has at least one row (for another database) that carries a `parentTenantId`. The system
+registry writes the parent id into every row, the parent-local registry of a parent tenant never does,
+so a parent with children is never taken for a system database — attached or detached (a detached
+parent has no marker and no registration anywhere; the earlier rule "not registered by any other
+registry" refused every re-attach and restore of a tenant with children), and a corrupt own row that
+registers another instance's system database does not hide it. A system database whose rows all predate
+`parentTenantId` is recognised by its marker only (every instance stamps it on start). The marker
+recognises the system database of an instance without any tenant. Accepted gap (Odin 2026-11-11): the system
+database of an instance that runs an older version and has no tenant carries neither signal, so it is not
+recognised; rollout rule: upgrade all instances on one MongoDB server together. This snapshot is the ONE
+classification; attach, restore and delete all decide with `TenantDatabaseForeignOwnership.FindAsync`
+on top of it (attach: any foreign owner -> the same uniform conflict, no override). The lookup takes a fresh snapshot per call — admin paths only, never on
+resolve. `ISystemContext.ReviewTenantOwnershipAsync(session, stamp)` (`TenantOwnershipReview`) lists
+the own registry's databases that are `Unmarked`, `MarkedByOtherInstance`, `RegisteredByOtherInstance` or
+`SystemDatabase` (a corrupt row naming a system database, checked first) and with `stamp` writes the marker only
+for `Unmarked` ones (no marker, registered only here, not a system database; insert-if-absent): it never writes
+into another instance's system database or a database another instance registers. Missing databases are
+counted, never stamped. Asset repo:
+`POST system/v1/tenants/review-ownership`; octo-cli `ReviewTenantOwnership [--stamp]`.
+
+**Restore guard (AB#8672).** `TenantBackupService.RestoreTenantAsync` checks the target before any
+write (before `dropExistingTenant` and mongorestore; the "registered to another tenant of this instance" check runs
+there too now, so that refusal drops nothing either): another instance's system database is refused and
+never overridable; a database whose ownership marker names another instance, or that another system
+database registers, is refused naming the owner. `overrideForeignOwnership` lets the restore overwrite
+such a tenant database with an `OWNERSHIP OVERRIDE` warning — except a database another instance still
+registers when `attachTenant` is true: the attach gate above would refuse it after the data was
+replaced, and a successful attach would register one database in two instances. The override covers the
+checked target only: with `dropExistingTenant`, the existing tenant's database is dropped under the override only
+when it IS the target; a different existing database goes through the delete guard without it.
+The check only reads, so before the first destructive step the restore **claims** the target (`RestoreClaim`:
+insert-if-absent marker of this instance with a claim token; under a granted override the foreign marker is taken
+over, only while it is still the one the check saw) and holds the claim through the whole restore: another
+instance can neither attach nor restore the database in between (a claim it won in between refuses this restore
+with the uniform conflict before anything is dropped). A target that is the dropped existing tenant's database is
+claimed again right after that drop. mongorestore never restores the archive's markers (`MongoRestoreOptions.NsExclude`
+= `*.tenant_ownership`, `*.system_database_marker`), so the claim survives `--drop` and a backup of another instance
+(or of a system database) never looks like that instance's database. The attach at the end takes the claim over in
+its transaction; a restore without attach releases it (the database stays unowned like any detached one); a failed
+restore releases a claim it inserted and drops a database its claim materialized and nothing else got into, so a
+failed restore into a new name leaves no empty database behind. "Restored no data" is detected as "holds nothing but
+markers" (`HoldsOnlyMarkersAsync`).
+
+**Delete guard (AB#8807).** `DeleteChildTenantMetadataAsync` (and so `DropChildTenantAsync`, the REST
+two-phase delete and `ClearChildTenantAsync`) calls `EnsureDatabaseNotOwnedByAnotherInstanceAsync`
+right after the stale-row check, before the pre-delete event and any write of the engine. The asset repository's
+REST delete writes its `Deleting` lifecycle tombstone before it calls the engine; after a refusal (409) the
+tombstone stays and the delete settle sweep rolls it back once the settle period has passed, because the tenant
+is still fully registered (until then a re-create of that tenant id answers 409). `DropTenantDatabaseAsync` checks
+the same decision again right before the physical drop, for every caller - also the settle sweep in
+common-services, which re-drops a resurrected database from a `TenantDeletionHandle` built out of the lifecycle
+record after only a local lookup: a database claimed by another instance in the meantime is never dropped (uniform
+conflict, database untouched; cache invalidation and post-delete event still run). This refusal comes after the
+caller committed the metadata deletion, so the exception carries `TenantException.IsDatabaseDropPending` (also
+`IsConflict`, same uniform text): the tenant record is gone, the database stays and the tombstone stays for the
+sweep, which retries the drop each tick. The asset repository's REST delete answers it with a 409 that says so
+(record deleted, database left untouched, delete pending); `DropChildTenantAsync`, whose metadata deletion is not
+committed yet, turns it back into the plain conflict. After the read-only check the drop **reserves** the database
+until the drop (insert-if-absent marker of this instance; the marker goes with the database): an unmarked database
+can no longer be attached by another instance between the check and the drop, and a claim another instance won in
+between refuses the drop. Nothing is written into a database the check found foreign. Only an override the metadata
+phase granted (`TenantDeletionHandle.ForeignOwnershipOverridden`) passes there, and only while the database is
+still merely an orphaned foreign marker (re-checked at every drop; the marker is then taken over for the drop). The
+REST delete records the granted override in the tombstone (`TenantLifecycleRecord.ForeignOwnershipOverridden`,
+`ITenantLifecycleStore.EnsureDeletingAsync(..., foreignOwnershipOverridden)`) BEFORE it commits the metadata
+deletion, and the settle sweep builds its handle with it, so a delete interrupted between the commit and the drop is
+finished with the same decision; `MarkDeletingAsync` resets it for a new delete.
+`TenantDatabaseForeignOwnership.FindAsync` (same folder; also the decision of the attach gate and of the
+restore guard, whose `CheckForeignOwnershipAsync` only words the restore's messages) decides: another instance's system database, a marker
+naming another instance, or another system database registering the database (also the owner side of a
+double registration) -> uniform `DatabaseNameNotAvailable` conflict, the owner in the log only.
+`overrideForeignOwnership: true` drops a database that only carries an orphaned foreign marker (no other
+instance registers it) and logs `OWNERSHIP OVERRIDE ...` with the owner; another instance's system
+database and a database another live instance still registers are never dropped
+(`TenantDatabaseForeignOwner.CanBeOverridden`). A corrupt own row that registers another instance's
+system database does not hide it: the parent-id rule of the registry snapshot recognises it. Tests: `DeleteOwnershipGuardTests` (TwoInstance collection).
 
 Tests: `TenantOwnershipGuardTests` (create stamps; detach removes + re-attach re-stamps;
 foreign-owned attach conflicts uniformly with the foreign claim untouched; unstamped legacy DB is
-adopted and stamped; tenant-resolve lazily stamps an unmarked DB).
+adopted and stamped; tenant-resolve lazily stamps an unmarked DB). Two real instances on one server
+(`TwoInstanceFixture`, collection `TwoInstance`): `TenantDatabaseRegistrationLookupTests`,
+`TenantOwnershipCrossInstanceTests` (unmarked attach refused/allowed, other system database refused,
+resolve warning once + Degraded + detach in the non-owner keeps the marker, the attach claim inside the
+transaction (concurrent attach refused, abort releases it), Degraded rechecked: persists, bounded by the interval,
+Healthy once the owner detached, idempotent list/stamp with the ambiguous databases untouched),
+`RestoreOwnershipGuardTests` (incl. the restore claim against a concurrent attach of the other instance before and
+after mongorestore, and a failed restore that releases its claim and its materialized database), `SystemDatabaseMarkerTests` (fresh
+instance without tenants recognised and its system database refused as restore target, idempotent
+startup stamp with the registry rule as fallback, marker removed from a restored copy, a failing stamp still
+starts the instance and reports Degraded until the next stamp).
+
+**System-database marker stamp failure (AB#8672).** `SystemContext.TryStampSystemDatabaseMarkerAsync` (bootstrap
+and every `EnsureSystemCkModelAsync` over an existing system tenant) never fails the start: a failed stamp logs a
+warning and sets `ITenantOwnershipConflicts.SystemDatabaseMarkerProblem`, so `TenantContextHealthCheck` reports
+`Degraded` with the reason; the next successful stamp clears it.
+
+### Tenant-Database Prefix — per-instance names on a shared MongoDB (AB#8797 / Epic AB#4944)
+
+Two instances on one MongoDB server (different `SystemDatabaseName`) used to collide on equal tenant ids: the
+namespace gate refuses a database name that exists anywhere on the server (AB#4762), and clients name the
+database after the tenant id by convention. `OctoSystemConfiguration.TenantDatabasePrefix` (section `System`,
+env `OCTO_SYSTEM__TENANTDATABASEPREFIX`, **default empty**) gives each instance its own name space, the MongoDB
+counterpart of `StreamData:SchemaInstancePrefix` (CrateDB). It is its own setting on purpose: an instance may
+set either one without the other. Both default to empty. An operator may configure `TenantDatabasePrefix` on an
+existing instance: its existing tenants keep their database names (see the exemption rule below). This exemption
+is MongoDB-only: `StreamData:SchemaInstancePrefix` has none, so an existing instance must never set it, or its
+tenants' CrateDB schemas would move (see the Stream Data section).
+
+| Rule | Where |
+|---|---|
+| Format: normalized (trim, lower case), at most 30 bytes of ASCII letters, digits, `-`, `_`; anything else fails when `System` is bound (`ConfigurationErrorException` naming the option) | `TenantDatabaseNames.ValidatePrefix`, the setter |
+| Default name of a new tenant = `<prefix><tenantId>`, normalized; without a prefix the tenant id (unchanged convention) | `TenantDatabaseNames.DeriveDefault` (public, for the hosts: asset repository REST create without `databaseName`) |
+| Create and attach with a name that does not start with the prefix → the uniform `Database name '<x>' is not available.` (409); the prefix goes to the log only | `EnsureDatabaseNameCarriesTenantDatabasePrefix`, one call in the namespace gate after the reserved-name checks |
+| Tenants registered before the prefix keep their names: resolving never looks at the prefix; `ClearChildTenantAsync` re-creates under the old name inside `TenantDatabasePrefixExemption.Begin(name)` (an `AsyncLocal` scope for exactly that name and call) | `TenantDatabasePrefixExemption` |
+| The AB#4762 existence check is unchanged: a prefixed name that exists on the server is still refused | namespace gate |
+
+Restore (`TenantBackupService.RestoreTenantAsync`) attaches after `mongorestore`, so the attach's refusal would
+come after the data is written. `CheckTenantDatabasePrefixAsync` therefore runs right after the cross-instance
+ownership guard (AB#8672), before any drop or write: a target name without the prefix is refused with a descriptive
+`CommandResult.Failure`, unless it is the current database of the same tenant id (a restore over a tenant from
+before the prefix), which the restore then attaches inside the exemption scope. The scope is opened by the caller,
+not inside the async helper: an `AsyncLocal` set in an awaited method does not flow back. Without a prefix nothing
+of this runs differently.
+
+Tests: `TenantDatabasePrefixTests` (own collection; switches the prefix on the bound options object to emulate a
+restart: default name, explicit name refused on create and attach, prefixed attach, no prefix as before, legacy
+tenant resolves and survives a clear, taken prefixed name refused, restore into an unprefixed new name refused before
+anything is written, restore over a legacy tenant keeps its name), `TwoInstanceTenantDatabasePrefixTests` (two real
+instances on one server, `TwoInstanceCollection`: different prefixes create the same tenant id with the default name;
+without prefixes the second is refused) and `StreamData.UnitTests/TenantDatabaseNamesTests` (naming, validation,
+exemption scope).
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 

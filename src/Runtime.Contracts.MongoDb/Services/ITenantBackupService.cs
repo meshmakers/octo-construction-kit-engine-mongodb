@@ -29,10 +29,21 @@ internal interface ITenantBackupService
     /// <param name="attachTenant">If true, attaches the tenant after restore (default: true)</param>
     /// <param name="timeout">Timeout for restore operation</param>
     /// <param name="cancellationToken">Cancellation token</param>
+    /// <param name="overrideForeignOwnership">
+    /// Deliberate administrator override of the cross-instance ownership guard (AB#8672). By default the
+    /// restore is refused when the target database belongs to another OctoMesh instance on the same MongoDB
+    /// server: it is another instance's system database, its ownership marker names a different system
+    /// database, or another instance's system database registers it. When true, the restore overwrites a
+    /// tenant database of another instance anyway and logs the override as a warning naming the owner. Never
+    /// overrides the refusal of a system database (this instance's or another's), MongoDB's databases or a
+    /// database registered to another tenant of this instance. A database another instance still registers
+    /// is restored with the override only when <paramref name="attachTenant"/> is false: attaching it would
+    /// register one database in two instances, so detach it in that instance first.
+    /// </param>
     /// <returns>Command result indicating success or failure of the restore operation</returns>
     Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName, string archiveFilePath,
         string? sourceDatabaseName = null, bool dropExistingTenant = true, bool attachTenant = true,
-        TimeSpan? timeout = null, CancellationToken? cancellationToken = null);
+        TimeSpan? timeout = null, CancellationToken? cancellationToken = null, bool overrideForeignOwnership = false);
 
     /// <summary>
     /// Clones an existing tenant into a new temporary tenant by piping a

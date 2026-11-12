@@ -26,4 +26,10 @@ public class ConfigurationErrorException : Exception
         return new ConfigurationErrorException(
             $"Impossible to apply '{configurationName}' setting with value '{value}': Value is absent, empty or contains whitespaces.");
     }
+
+    public static Exception InvalidConfigurationValue(string configurationName, string? value, string reason)
+    {
+        return new ConfigurationErrorException(
+            $"Impossible to apply '{configurationName}' setting with value '{value}': {reason}.");
+    }
 }

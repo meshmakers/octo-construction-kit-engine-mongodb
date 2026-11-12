@@ -27,4 +27,11 @@ internal sealed class TenantOwnershipRecord
 
     /// <summary>When the owning instance stamped the marker (create, attach, or lazy claim).</summary>
     public DateTime AttachedAtUtc { get; set; }
+
+    /// <summary>
+    ///     Set while a drop attempt of this instance holds the database (AB#8807): until then no other drop attempt
+    ///     takes the reservation over. A failed drop leaves it behind; it expires, and the next attempt then reserves
+    ///     the database again. Null outside a drop.
+    /// </summary>
+    public DateTime? DropReservedUntilUtc { get; set; }
 }

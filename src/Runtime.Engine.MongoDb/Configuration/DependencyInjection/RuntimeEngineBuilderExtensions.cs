@@ -112,6 +112,27 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services
             .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipStore>();
 
+        // AB#8796 cross-instance view of the tenant registries on the server: which system databases
+        // register a tenant database. Read-only; used by the attach guard, the restore guard and the
+        // ownership list/stamp operation.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantDatabaseRegistrationLookup>();
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipReview>();
+
+        // AB#8672 system-database marker: lets the lookup recognise the system database of an instance
+        // that has no tenant yet. Stamped by the system context on create and on EnsureSystemCkModelAsync.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.SystemDatabaseMarkerStore>();
+
+        // AB#8796 ownership conflicts seen on tenant resolve (a marker of another instance); the
+        // system context health check reports Degraded while there is one.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipConflictTracker>();
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership.ITenantOwnershipConflicts>(sp =>
+                sp.GetRequiredService<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipConflictTracker>());
+
         // AB#4812 durable display-rule backfill sweep tasks. The import hook (TenantContext) enqueues a
         // task per type whose display rules changed; the sweep background service (opt-in via
         // AddDisplayRuleSweepBackgroundService) drains them lease-protected.
