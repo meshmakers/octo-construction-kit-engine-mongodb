@@ -1,4 +1,6 @@
 using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
@@ -29,6 +31,32 @@ public class CountOnlyDataPermissionTests(DataPermissionTestFixture fixture)
                 CountParityDataPermissionTests.Options(nameFilter));
             var count = await repository.CountRtEntitiesByTypeAsync(session, TestCkIds.RtCkContinentTypeId,
                 CountParityDataPermissionTests.Options(nameFilter));
+            await session.CommitTransactionAsync();
+
+            Assert.Equal(expected, count);
+            Assert.Equal(old.TotalCount, count);
+        }
+        finally
+        {
+            fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(CountParityDataPermissionTests.Callers), MemberType = typeof(CountParityDataPermissionTests))]
+    public async Task GraphCountOnly_CountsWhatTheCallerSees(string caller, long expected, string? nameFilter)
+    {
+        // The graph count (persistent query rows) applies the same data-permission filter as its item query.
+        var repository = await CountParityDataPermissionTests.SeedAsync(fixture);
+        fixture.Resolver.Table = CountParityDataPermissionTests.BuildTable();
+        try
+        {
+            using var session = await CountParityDataPermissionTests.OpenSessionAsync(repository, caller);
+            session.StartTransaction();
+            var old = await repository.GetRtEntitiesGraphByTypeAsync(session, TestCkIds.RtCkContinentTypeId,
+                CountParityDataPermissionTests.Options(nameFilter), new List<NavigationPair>());
+            var count = await repository.CountRtEntitiesGraphByTypeAsync(session, TestCkIds.RtCkContinentTypeId,
+                CountParityDataPermissionTests.Options(nameFilter), new List<NavigationPair>());
             await session.CommitTransactionAsync();
 
             Assert.Equal(expected, count);
