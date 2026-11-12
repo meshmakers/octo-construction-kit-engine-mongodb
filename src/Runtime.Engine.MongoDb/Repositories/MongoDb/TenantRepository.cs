@@ -1017,6 +1017,29 @@ internal class TenantRepository(
         RtEntityQueryOptions queryOptions, int? skip = null,
         int? take = null)
     {
+        var query = await CreateRtEntitiesByTypeQueryAsync<TEntity>(session, ckTypeId, queryOptions);
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    /// <inheritdoc />
+    public async Task<long> CountRtEntitiesByTypeAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
+        RtEntityQueryOptions queryOptions)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(queryOptions);
+
+        var query = await CreateRtEntitiesByTypeQueryAsync<RtEntity>(session, ckTypeId, queryOptions);
+        return await query.ExecuteCount(session);
+    }
+
+    /// <summary>
+    ///     The query behind <see cref="GetRtEntitiesByTypeAsync{TEntity}" /> and
+    ///     <see cref="CountRtEntitiesByTypeAsync" />: one construction, so the count always applies the same security,
+    ///     type, field, search and geospatial filters (and the same validation) as the item query (AB#8895).
+    /// </summary>
+    internal async Task<SingleOriginRtQuery<TEntity>> CreateRtEntitiesByTypeQueryAsync<TEntity>(IOctoSession session,
+        RtCkId<CkTypeId> ckTypeId, RtEntityQueryOptions queryOptions) where TEntity : RtEntity, new()
+    {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var query =
@@ -1031,8 +1054,7 @@ internal class TenantRepository(
         query.AddFieldAggregation(queryOptions.FieldAggregation);
         query.AddResultAggregation(queryOptions.ResultAggregation);
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
-
-        return await query.ExecuteQuery(session, skip, take);
+        return query;
     }
 
     /// <inheritdoc />
@@ -1096,9 +1118,26 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
-        RtCkId<CkTypeId> ckTypeId, RtEntityQueryOptions queryOptions,
-        ICollection<NavigationPair> navigationPairs, int? skip = null, int? take = null)
+    /// <inheritdoc />
+    public async Task<long> CountRtEntitiesGraphByTypeAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
+        RtEntityQueryOptions queryOptions, ICollection<NavigationPair> navigationPairs)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(queryOptions);
+        ArgumentNullException.ThrowIfNull(navigationPairs);
+
+        var (query, _) = await CreateRtEntitiesGraphByTypeQueryAsync(session, ckTypeId, queryOptions, navigationPairs);
+        return await query.ExecuteCount(session);
+    }
+
+    /// <summary>
+    ///     The query behind <see cref="GetRtEntitiesGraphByTypeAsync" /> and
+    ///     <see cref="CountRtEntitiesGraphByTypeAsync" /> (AB#8895), with the security filter the result cache keys on.
+    ///     Navigation field filters are merged into <paramref name="navigationPairs" /> here.
+    /// </summary>
+    internal async Task<(SingleOriginRtQuery<RtEntityGraphItem> Query, RtDataSecurityQueryFilter? SecurityFilter)>
+        CreateRtEntitiesGraphByTypeQueryAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
+            RtEntityQueryOptions queryOptions, ICollection<NavigationPair> navigationPairs)
     {
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
 
@@ -1125,6 +1164,15 @@ internal class TenantRepository(
         query.AddResultAggregation(queryOptions.ResultAggregation);
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
         query.AddNavigationProperties(navigationPairs, queryOptions.NavigationFilterMode);
+        return (query, securityQueryFilter);
+    }
+
+    public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
+        RtCkId<CkTypeId> ckTypeId, RtEntityQueryOptions queryOptions,
+        ICollection<NavigationPair> navigationPairs, int? skip = null, int? take = null)
+    {
+        var (query, securityQueryFilter) =
+            await CreateRtEntitiesGraphByTypeQueryAsync(session, ckTypeId, queryOptions, navigationPairs);
 
         // Use query result cache for Filter mode with navigation pairs and pagination
         if (!queryOptions.DisableCaching
