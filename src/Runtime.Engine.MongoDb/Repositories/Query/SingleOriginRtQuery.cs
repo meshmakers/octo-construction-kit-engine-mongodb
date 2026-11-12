@@ -800,6 +800,16 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         base.AddPostStagesToPipeline(pipelineStageDefinitions);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    ///     The geospatial stages only: they filter (and must come first). <see cref="AddPreStagesToPipelines" />
+    ///     adds the sort as well, which a count does not need; it adds no text-search stage, so neither does this.
+    /// </remarks>
+    protected override void AddCountPreStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
+    {
+        _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
+    }
+
     protected override void AddPostStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
     {
         _associationStageDefinitions.ForEach(pipelineStageDefinitions.Add);

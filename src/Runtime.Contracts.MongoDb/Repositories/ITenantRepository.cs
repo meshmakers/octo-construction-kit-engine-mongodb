@@ -390,6 +390,44 @@ public interface ITenantRepository : IRuntimeRepository
         RtCkId<CkInterfaceId> ckInterfaceId, RtEntityQueryOptions queryOptions, int skip, int take,
         bool includeTotalCount = false);
 
+    /// <summary>
+    ///     Counts the runtime entities of a CK type (derived types included) that match the query options, on the
+    ///     server and without loading any document (AB#8895): <c>$match</c> plus the stages the filters need, then
+    ///     <c>$count</c>. Use it when only the total count is asked for (e.g. a GraphQL selection of
+    ///     <c>totalCount</c> alone) instead of an unpaged <see cref="IRuntimeRepository.GetRtEntitiesByTypeAsync" />,
+    ///     which materialises every matching entity.
+    ///     <para>
+    ///         The count equals <see cref="IResultSet{TEntity}.TotalCount" /> of
+    ///         <see cref="IRuntimeRepository.GetRtEntitiesByTypeAsync" /> with the same options: the same data
+    ///         permissions of the session's caller, type, field, attribute-search and geospatial filters and the
+    ///         archived flag apply. Sort orders and aggregations of the options are validated but do not change the
+    ///         count.
+    ///     </para>
+    /// </summary>
+    /// <param name="session">The session; its security context decides which entities the caller may see.</param>
+    /// <param name="ckTypeId">The runtime id of the CK type.</param>
+    /// <param name="queryOptions">The filters of the query.</param>
+    /// <returns>The number of matching entities.</returns>
+    Task<long> CountRtEntitiesByTypeAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
+        RtEntityQueryOptions queryOptions);
+
+    /// <summary>
+    ///     Counts the runtime entities of a graph query (a CK type with navigation pairs, as a persistent query uses)
+    ///     without loading any document (AB#8895). Navigation pairs that filter (filter mode, association count
+    ///     filters, navigation field filters) narrow the count as in
+    ///     <see cref="IRuntimeRepository.GetRtEntitiesGraphByTypeAsync" />; pairs that only enrich the result (include
+    ///     mode) are not evaluated. The count equals the <see cref="IResultSet{TEntity}.TotalCount" /> of that method
+    ///     with the same arguments.
+    /// </summary>
+    /// <param name="session">The session; its security context decides which entities the caller may see.</param>
+    /// <param name="ckTypeId">The runtime id of the CK type.</param>
+    /// <param name="queryOptions">The filters of the query, including the navigation filter mode.</param>
+    /// <param name="navigationPairs">The navigation pairs of the query; navigation field filters are merged into
+    /// them.</param>
+    /// <returns>The number of matching entities.</returns>
+    Task<long> CountRtEntitiesGraphByTypeAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
+        RtEntityQueryOptions queryOptions, ICollection<NavigationPair> navigationPairs);
+
     #endregion Data query
     
     #region Subscriptions / Watch

@@ -54,6 +54,20 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         }
     }
 
+    /// <summary>
+    ///     The stages of <see cref="AddPreStagesToPipelines" /> that narrow the result set, without the stages that
+    ///     only order it (AB#8895: a count-only query never sorts). Override together with
+    ///     <see cref="AddPreStagesToPipelines" />, so that the count always covers exactly the entities the item
+    ///     query returns.
+    /// </summary>
+    protected virtual void AddCountPreStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
+    {
+        if (_textFilter != null)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(_textFilter));
+        }
+    }
+
     protected virtual void AddPostStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
     {
         if (_sortDefinitions.Any())

@@ -104,6 +104,50 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     }
 
     /// <summary>
+    ///     The pipeline of a count-only query (AB#8895): the stages that narrow the result set exactly as the item
+    ///     query does - geospatial/text pre-stages, the <c>$match</c> of security, type and field filters, and the
+    ///     association stages navigation filters need - followed by <c>$count</c>. No sort, no paging, no
+    ///     enrichment lookup: the pipeline returns one count document and never a runtime entity.
+    /// </summary>
+    internal IReadOnlyList<IPipelineStageDefinition> CreateCountPipelineStageDefinitions()
+    {
+        var pipelineStageDefinitions = new List<IPipelineStageDefinition>();
+
+        AddCountPreStagesToPipeline(pipelineStageDefinitions);
+        var filterDefinitions = CreateFilterDefinitions();
+        if (filterDefinitions != null)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+        }
+
+        // Association existence and count filters narrow the result set; the enrichment lookups do not.
+        AddPrePaginationPostStagesToPipeline(pipelineStageDefinitions);
+
+        pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Count<TEntity>());
+        return pipelineStageDefinitions;
+    }
+
+    /// <summary>
+    ///     Counts the entities the item query would return, on the server and without loading any document
+    ///     (AB#8895). The count equals <see cref="ResultSet{TEntity}.TotalCount" /> of <see cref="ExecuteQuery" />
+    ///     for the same query; skip and take do not apply (the total count ignores paging).
+    /// </summary>
+    internal async Task<long> ExecuteCount(IOctoSession octoSession)
+    {
+        using var meter = _metricsContext.CreateRuntimeMeter();
+        var pipeline = PipelineDefinition<TEntity, AggregateCountResult>.Create(CreateCountPipelineStageDefinitions());
+
+        meter.SetCheckpoint("count pipeline created");
+
+        var countResult = await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).FirstOrDefaultAsync();
+
+        meter.SetCheckpoint("count executed");
+
+        // $count emits no document when nothing matches.
+        return countResult?.Count ?? 0;
+    }
+
+    /// <summary>
     /// Executes enrichment pipeline on a given set of entity IDs.
     /// Used when serving pages from the query result cache.
     /// </summary>
