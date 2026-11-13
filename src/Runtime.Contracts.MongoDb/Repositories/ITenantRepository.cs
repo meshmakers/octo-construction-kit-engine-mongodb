@@ -428,6 +428,49 @@ public interface ITenantRepository : IRuntimeRepository
     Task<long> CountRtEntitiesGraphByTypeAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
         RtEntityQueryOptions queryOptions, ICollection<NavigationPair> navigationPairs);
 
+    /// <summary>
+    ///     <see cref="IRuntimeRepository.GetRtEntitiesByTypeAsync" /> with control over the total count (AB#8896). The
+    ///     overload without <paramref name="includeTotalCount" /> always counts and is unchanged.
+    ///     <para>
+    ///         A paged query (<paramref name="skip" /> or <paramref name="take" /> set) reads one page - at most
+    ///         <paramref name="take" /> documents - and, when <paramref name="includeTotalCount" /> is true, counts the
+    ///         matching entities with a separate server-side count that returns no document. Page and count are two
+    ///         reads, not one snapshot: outside a transaction a write in between can make them disagree.
+    ///     </para>
+    /// </summary>
+    /// <param name="session">The session; its security context decides which entities the caller may see.</param>
+    /// <param name="ckTypeId">The runtime id of the CK type.</param>
+    /// <param name="queryOptions">Filters, sort orders, aggregations of the query.</param>
+    /// <param name="skip">Number of entities to skip, or null.</param>
+    /// <param name="take">Maximum number of entities to return, or null.</param>
+    /// <param name="includeTotalCount">
+    ///     When false a paged query runs no count, and <see cref="IResultSet{TEntity}.TotalCount" /> is only a lower
+    ///     bound: <paramref name="skip" /> plus the number of returned entities, or 0 for an empty page. Use it when
+    ///     the caller does not need the total (e.g. a GraphQL connection without <c>totalCount</c> and
+    ///     <c>pageInfo</c>). An unpaged query returns every matching entity and its number in either case.
+    /// </param>
+    Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
+        RtEntityQueryOptions queryOptions, int? skip, int? take, bool includeTotalCount);
+
+    /// <summary>
+    ///     <see cref="IRuntimeRepository.GetRtEntitiesGraphByTypeAsync" /> with control over the total count
+    ///     (AB#8896); the semantics of <paramref name="includeTotalCount" /> are those of
+    ///     <see cref="GetRtEntitiesByTypeAsync(IOctoSession, RtCkId{CkTypeId}, RtEntityQueryOptions, int?, int?, bool)" />.
+    ///     A page served from the query result cache keeps the cached total count, which costs no read. The overload
+    ///     without <paramref name="includeTotalCount" /> always counts and is unchanged.
+    /// </summary>
+    /// <param name="session">The session; its security context decides which entities the caller may see.</param>
+    /// <param name="ckTypeId">The runtime id of the CK type.</param>
+    /// <param name="queryOptions">Filters, sort orders, aggregations and the navigation filter mode.</param>
+    /// <param name="navigationPairs">The navigation pairs of the query; navigation field filters are merged into
+    /// them.</param>
+    /// <param name="skip">Number of entities to skip, or null.</param>
+    /// <param name="take">Maximum number of entities to return, or null.</param>
+    /// <param name="includeTotalCount">When false a paged query runs no count (see above).</param>
+    Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
+        RtCkId<CkTypeId> ckTypeId, RtEntityQueryOptions queryOptions, ICollection<NavigationPair> navigationPairs,
+        int? skip, int? take, bool includeTotalCount);
+
     #endregion Data query
     
     #region Subscriptions / Watch
