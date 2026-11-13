@@ -1937,9 +1937,10 @@ Semantics preserved:
   (AB#7659): the probe-derived width drifted with every data gap (one year of 15-minute windows, `limit` 365: 367 buckets of
   85,929 s instead of 365 of 86,400 s); a request finer than the window length is clamped to one window (AB#4246 protection).
   A `Period` is only a window length (windows may sit at any phase, e.g. 00:05–00:20), so the time-range origin does not
-  snap to the grain like a rollup's: one `MIN(window_start)` probe over the same source filters
-  (`CompileWindowPhaseProbeQuery`) finds the phase of the stored windows, and `From` is snapped down to the last instant
-  `≡ window_start (mod Period)` (AB#8962). No window in range, or a failing probe, keeps `From`. Before AB#8962 the raw
+  snap to the grain like a rollup's: one probe over the same source filters (`CompileWindowPhaseProbeQuery`:
+  `MIN`/`MAX` of `window_start` in epoch ms modulo the `Period`) finds the phase of the stored windows. When all windows
+  in range share one phase, `From` is snapped down to the last instant `≡ window_start (mod Period)` (AB#8962). No
+  window in range, series at different phases (no single origin keeps them all) or a failing probe keep `From`. Before AB#8962 the raw
   `From` was the origin: a relative "last 2 days" request (From 18:37:42) put every bin edge inside a stored 15-minute
   window and the §7 predicate dropped all of them (FH lab: 0/192 bins with a value, resolution-aware charts empty until
   the resolver switched to a rollup).

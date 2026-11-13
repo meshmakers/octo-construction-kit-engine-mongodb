@@ -1171,29 +1171,44 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// Returns the start of the earliest stored window the downsampling query of <paramref name="q"/> will read
-    /// (AB#8962), so <see cref="DownsamplingBinQuantizer.QuantizeToGrain"/> can snap the axis origin of a
-    /// time-range archive into the phase its windows are stored in. One <c>MIN(window_start)</c> over the same
-    /// source filters. Null when the range holds no window or the probe fails - the axis then starts at From
-    /// (the AB#7659 behaviour): with no window in range there is nothing to drop.
+    /// Probes the phase of the stored windows the downsampling query of <paramref name="q"/> will read (AB#8962),
+    /// so <see cref="DownsamplingBinQuantizer.QuantizeToGrain"/> can snap the axis origin of a time-range archive
+    /// into it. One aggregate over the same source filters (<c>MIN</c>/<c>MAX</c> of the phase). Null when the range
+    /// holds no window, the windows sit at different phases, or the probe fails - the axis then starts at From (the
+    /// AB#7659 behaviour).
     /// </summary>
-    private async Task<DateTime?> ProbeWindowPhaseAnchorAsync(CrateQueryBuilder q)
+    private async Task<DateTime?> ProbeWindowPhaseAnchorAsync(CrateQueryBuilder q, TimeSpan window)
     {
+        var windowMilliseconds = window.Ticks / TimeSpan.TicksPerMillisecond;
+        if (windowMilliseconds <= 0 || window.Ticks % TimeSpan.TicksPerMillisecond != 0)
+        {
+            return null;
+        }
+
         try
         {
-            var sql = new CrateQueryCompiler().CompileWindowPhaseProbeQuery(q);
+            var sql = new CrateQueryCompiler().CompileWindowPhaseProbeQuery(q, windowMilliseconds);
             _logger.LogDebug("Executing downsampling window-phase probe SQL: {Sql}", sql);
             var data = await _databaseClient.GetDataAsync(_tenantId, sql);
-            var first = data.FirstOrDefault();
-            return first?.Attributes != null && first.Attributes.TryGetValue("s", out var start)
-                ? AsUtcDateTimeFlexible(start)
-                : null;
+            var row = data.FirstOrDefault()?.Attributes;
+            var anchor = DownsamplingBinQuantizer.PhaseAnchor(PhaseValue(row, "pmin"), PhaseValue(row, "pmax"));
+            if (anchor is null && PhaseValue(row, "pmin") is not null)
+            {
+                _logger.LogDebug("Time-range windows in range sit at different phases; the bin axis starts at From");
+            }
+
+            return anchor;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Downsampling window-phase probe failed; the bin axis starts at From");
             return null;
         }
+
+        static long? PhaseValue(IReadOnlyDictionary<string, object?>? row, string column)
+            => row != null && row.TryGetValue(column, out var value) && value is not null
+                ? Convert.ToInt64(value, CultureInfo.InvariantCulture)
+                : null;
     }
 
     public async Task<StreamDataQueryResult> ExecuteDownsamplingQueryAsync(
@@ -1315,7 +1330,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 options.From.Value, options.To.Value, grain,
                 alignOriginToGrain: snapshot.RollupAggregations is not null,
                 windowPhaseAnchor: snapshot.RollupAggregations is null
-                    ? await ProbeWindowPhaseAnchorAsync(q)
+                    ? await ProbeWindowPhaseAnchorAsync(q, grain)
                     : null) is { } quantized)
         {
             // AB#8962: a time-range archive's origin is From snapped down in the phase of its stored windows

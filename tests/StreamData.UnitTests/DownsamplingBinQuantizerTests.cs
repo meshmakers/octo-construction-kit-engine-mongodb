@@ -323,4 +323,35 @@ public class DownsamplingBinQuantizerTests
 
         Assert.Equal(Anchor.AddHours(6), result?.Origin);
     }
+
+    [Fact]
+    public void PhaseAnchor_OnePhase_IsAnInstantOnThatPhase()
+    {
+        var anchor = DownsamplingBinQuantizer.PhaseAnchor(300_000, 300_000);
+
+        Assert.Equal(DateTime.UnixEpoch.AddMinutes(5), anchor);
+        Assert.Equal(DateTimeKind.Utc, anchor!.Value.Kind);
+    }
+
+    [Fact]
+    public void PhaseAnchor_DifferentPhasesOrNoWindow_IsNull()
+    {
+        // Several series at different phases: no single origin keeps every series' windows, the axis keeps From.
+        Assert.Null(DownsamplingBinQuantizer.PhaseAnchor(0, 300_000));
+        Assert.Null(DownsamplingBinQuantizer.PhaseAnchor(null, null));
+    }
+
+    [Fact]
+    public void Grain_LocalBounds_AreNormalisedToUtcBeforeTheBinCount()
+    {
+        // DateTime subtraction ignores Kind: a Local To against the UTC origin would shift the bin count by the
+        // UTC offset (review of PR #246).
+        var fromUtc = Anchor.AddHours(18).AddMinutes(37).AddSeconds(42);
+        var toLocal = fromUtc.AddDays(2).ToLocalTime();
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(192, fromUtc, toLocal, QuarterHour,
+            alignOriginToGrain: false, windowPhaseAnchor: Anchor);
+
+        Assert.Equal((193, 900, Anchor.AddHours(18).AddMinutes(30)), result);
+    }
 }
