@@ -810,6 +810,18 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    ///     The geospatial stages only (AB#8896): the sort of <see cref="AddPreStagesToPipelines" /> is repeated by
+    ///     <see cref="AddPostStagesToPipeline" /> after the association stages, and the last sort alone decides the
+    ///     order. Without the first one the page pipeline sorts once, right before <c>$skip</c>/<c>$limit</c>, and
+    ///     never sorts the whole matching set ahead of the association lookups.
+    /// </remarks>
+    protected override void AddPagePreStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
+    {
+        _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
+    }
+
     protected override void AddPostStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
     {
         _associationStageDefinitions.ForEach(pipelineStageDefinitions.Add);
