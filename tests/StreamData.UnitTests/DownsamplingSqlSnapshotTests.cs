@@ -116,7 +116,45 @@ public class DownsamplingSqlSnapshotTests
 
         Assert.Equal(
             "SELECT DATE_BIN('86400 seconds'::INTERVAL, d.\"window_start\", '2026-01-01 00:00:00.000Z'::TIMESTAMP) AS \"T\", COUNT(d.\"amount\") AS \"Count_amount\", COUNT(d.\"window_end\") AS \"__binCount\" FROM \"snap\".\"archive_aa0000000000000000007361\" AS d WHERE 1 = 1 AND d.\"window_end\" <= DATE_BIN('86400 seconds'::INTERVAL, d.\"window_start\", '2026-01-01 00:00:00.000Z'::TIMESTAMP) + '86400 seconds'::INTERVAL AND d.\"cktypeid\" = 'Test/Meter' AND d.\"window_start\" < '2027-01-01 00:00:00.000Z' AND d.\"window_end\" > '2026-01-01 00:00:00.000Z' GROUP BY DATE_BIN('86400 seconds'::INTERVAL, d.\"window_start\", '2026-01-01 00:00:00.000Z'::TIMESTAMP) ORDER BY DATE_BIN('86400 seconds'::INTERVAL, d.\"window_start\", '2026-01-01 00:00:00.000Z'::TIMESTAMP) ASC",
-            Assert.Single(_sql));
+            _sql.Last());
+        // AB#8962: the time-range grain route first probes the phase of the stored windows (same source filters);
+        // the downsampling SQL itself is unchanged when From already sits on a window start.
+        Assert.Equal(
+            "SELECT MIN(d.\"window_start\") AS \"s\" FROM \"snap\".\"archive_aa0000000000000000007361\" AS d WHERE 1 = 1 AND d.\"cktypeid\" = 'Test/Meter' AND d.\"window_start\" < '2027-01-01 00:00:00.000Z' AND d.\"window_end\" > '2026-01-01 00:00:00.000Z'",
+            _sql.First());
+        Assert.Equal(2, _sql.Count);
+    }
+
+    [Fact]
+    public async Task TimeRange_RelativeWindow_SnapsTheOriginToTheProbedWindowPhase()
+    {
+        // AB#8962: "last 2 days" starting at 18:37:42 over 15-minute windows stored at :00/:15/:30/:45. The probe
+        // returns a stored window start; the DATE_BIN origin and the lower source bound move to 18:30.
+        var from = new DateTime(2026, 3, 28, 18, 37, 42, DateTimeKind.Utc);
+        A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>.That.StartsWith("SELECT MIN(")))
+            .Invokes((string _, string sql) => _sql.Add(sql))
+            .Returns(Task.FromResult(new List<DataPointDto>
+            {
+                new(new Dictionary<string, object?> { ["s"] = new DateTime(2026, 3, 28, 18, 30, 0, DateTimeKind.Utc) })
+            }));
+
+        await NewSut().ExecuteDownsamplingQueryAsync(TimeRange, Query(from, from.AddDays(2), 192, AggregationFunction.Sum));
+
+        Assert.Equal(2, _sql.Count);
+        Assert.Contains("DATE_BIN('900 seconds'::INTERVAL, d.\"window_start\", '2026-03-28 18:30:00.000Z'::TIMESTAMP)", _sql.Last());
+        Assert.Contains("d.\"window_end\" > '2026-03-28 18:30:00.000Z'", _sql.Last());
+    }
+
+    [Fact]
+    public async Task TimeRange_ProbeFails_KeepsFromAsTheOrigin()
+    {
+        var from = new DateTime(2026, 3, 28, 18, 37, 42, DateTimeKind.Utc);
+        A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>.That.StartsWith("SELECT MIN(")))
+            .Throws(new InvalidOperationException("probe down"));
+
+        await NewSut().ExecuteDownsamplingQueryAsync(TimeRange, Query(from, from.AddDays(2), 192, AggregationFunction.Sum));
+
+        Assert.Contains("'2026-03-28 18:37:42.000Z'::TIMESTAMP", Assert.Single(_sql));
     }
 
     [Fact]

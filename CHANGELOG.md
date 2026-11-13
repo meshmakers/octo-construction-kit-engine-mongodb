@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- AB#8962 Fix: downsampling a time-range archive over a window that does not start on a stored window start (a
+  relative "last N days" ending at now) returns the stored values again. The bin axis started at the raw `From`
+  (AB#7659), so every 15-minute bin straddled two stored windows and the fully-contained predicate dropped all of them:
+  resolution-aware line charts on raw time-range archives stayed empty until the resolver switched to a rollup
+  (~9 days). The engine now probes the phase of the stored windows (`MIN(window_start)` over the same source filters)
+  and snaps the origin down to the last window start at or before `From` (windows at :05/:20/... keep their phase).
+  The first bin may start up to one window before `From` and the axis may have one bin more, as on rollups. Requests
+  that already start on a window start, rollups and raw archives are unchanged; with no window in range the axis
+  starts at `From`. One extra cheap query per time-range downsampling.
 - AB#8895 New: a runtime-entity query that asks only for the total count counts on the server without loading any
   document. `ITenantRepository.CountRtEntitiesByTypeAsync` (type query) and `CountRtEntitiesGraphByTypeAsync` (type
   query with navigation pairs, as persistent queries use) run `$match` - plus the geospatial stage and the association

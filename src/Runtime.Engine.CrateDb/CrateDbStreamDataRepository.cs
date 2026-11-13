@@ -1170,6 +1170,32 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return requestedLimit;
     }
 
+    /// <summary>
+    /// Returns the start of the earliest stored window the downsampling query of <paramref name="q"/> will read
+    /// (AB#8962), so <see cref="DownsamplingBinQuantizer.QuantizeToGrain"/> can snap the axis origin of a
+    /// time-range archive into the phase its windows are stored in. One <c>MIN(window_start)</c> over the same
+    /// source filters. Null when the range holds no window or the probe fails - the axis then starts at From
+    /// (the AB#7659 behaviour): with no window in range there is nothing to drop.
+    /// </summary>
+    private async Task<DateTime?> ProbeWindowPhaseAnchorAsync(CrateQueryBuilder q)
+    {
+        try
+        {
+            var sql = new CrateQueryCompiler().CompileWindowPhaseProbeQuery(q);
+            _logger.LogDebug("Executing downsampling window-phase probe SQL: {Sql}", sql);
+            var data = await _databaseClient.GetDataAsync(_tenantId, sql);
+            var first = data.FirstOrDefault();
+            return first?.Attributes != null && first.Attributes.TryGetValue("s", out var start)
+                ? AsUtcDateTimeFlexible(start)
+                : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Downsampling window-phase probe failed; the bin axis starts at From");
+            return null;
+        }
+    }
+
     public async Task<StreamDataQueryResult> ExecuteDownsamplingQueryAsync(
         OctoObjectId archiveRtId, StreamDataDownsamplingQueryOptions options)
     {
@@ -1243,7 +1269,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // route only when they declare no Period. AB#7659: a time-range archive WITH a Period uses the
         // grain route too — the probe-derived width (range / COUNT(DISTINCT window_start)) drifts as
         // soon as the data has gaps (367 buckets of 85,929 s instead of 365 of 86,400 s). Its Period is only
-        // a window length (windows may sit at any phase), so the axis starts at From instead of snapping to the grain.
+        // a window length (windows may sit at any phase), so the axis snaps in the phase of a stored window
+        // (AB#8962) instead of on the grain.
         int effectiveLimit;
         // A calendar-aligned rollup rung (CalendarDay / Iso8601Week / CalendarMonth /
         // CalendarQuarter / CalendarYear) bins on its own stored calendar windows: each variable-
@@ -1286,9 +1313,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             && snapshot.Period is { } grain
             && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit!.Value,
                 options.From.Value, options.To.Value, grain,
-                alignOriginToGrain: snapshot.RollupAggregations is not null) is { } quantized)
+                alignOriginToGrain: snapshot.RollupAggregations is not null,
+                windowPhaseAnchor: snapshot.RollupAggregations is null
+                    ? await ProbeWindowPhaseAnchorAsync(q)
+                    : null) is { } quantized)
         {
-            // The quantizer's Origin is the requested start snapped down to the grain, and it is
+            // AB#8962: a time-range archive's origin is From snapped down in the phase of its stored windows
+            // (probed above), not the raw From. With the raw From a relative window ("last 2 days" starting at
+            // 18:37:42) put every bin edge inside a stored 15-minute window and the §7 predicate dropped all of
+            // them - the resolution-aware chart read empty until the resolver switched to a rollup.
+            // The quantizer's Origin is the requested start snapped down (rollups: to the grain), and it is
             // passed as the query's lower bound as well: the source filter matches OVERLAPPING
             // windows, so a bin that starts before the requested instant must read from its own
             // start or it sums only the tail of its source windows. Callers therefore no longer

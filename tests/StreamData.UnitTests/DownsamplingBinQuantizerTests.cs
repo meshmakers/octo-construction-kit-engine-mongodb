@@ -225,4 +225,102 @@ public class DownsamplingBinQuantizerTests
         Assert.Equal(0, interval % 3600);
         Assert.Equal(0, (origin - Anchor).Ticks % TimeSpan.FromHours(1).Ticks);
     }
+
+    // --- Time-range archives: snap in the phase of the stored windows (AB#8962) -------------------
+    // AB#7659 kept the raw From for time-range archives so windows at any phase survive; a relative
+    // "last 2 days" request (From 18:37:42) then put every bin edge inside a stored 15-minute window
+    // and the §7 predicate dropped all of them (FH lab: 0/192 bins with a value).
+
+    private static readonly TimeSpan QuarterHour = TimeSpan.FromMinutes(15);
+
+    [Fact]
+    public void Phase_GrainAlignedWindowsAndAlignedFrom_LeavesTheAxisExactlyWhereItIs()
+    {
+        var from = Anchor.AddHours(18).AddMinutes(30);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(192, from, from.AddDays(2), QuarterHour,
+            alignOriginToGrain: false, windowPhaseAnchor: Anchor.AddHours(18).AddMinutes(45));
+
+        Assert.Equal((192, 900, from), result);
+    }
+
+    [Fact]
+    public void Phase_GrainAlignedWindowsAndUnalignedFrom_SnapsDownToTheLastWindowStart()
+    {
+        // The FH lab case: windows at :00/:15/:30/:45, relative window starting 18:37:42.
+        var from = Anchor.AddHours(18).AddMinutes(37).AddSeconds(42);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(192, from, from.AddDays(2), QuarterHour,
+            alignOriginToGrain: false, windowPhaseAnchor: Anchor.AddHours(18).AddMinutes(30));
+
+        Assert.NotNull(result);
+        var (limit, interval, origin) = result.Value;
+        Assert.Equal(Anchor.AddHours(18).AddMinutes(30), origin);
+        Assert.Equal(900, interval);
+        // The axis starts 7:42 before the request and still reaches its end: one bin more.
+        Assert.Equal(193, limit);
+        Assert.True(origin.AddSeconds((double)interval * limit) >= from.AddDays(2));
+    }
+
+    [Fact]
+    public void Phase_OffsetPhaseWindows_SnapInTheirPhaseNotOnTheGrain()
+    {
+        // Windows at :05/:20/:35/:50 (AB#7659's case): the origin is the last window start at or before
+        // From, 18:35, not 18:30 (that would cut every window in two) and not 18:37:42.
+        var from = Anchor.AddHours(18).AddMinutes(37).AddSeconds(42);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(48, from, from.AddHours(24), QuarterHour,
+            alignOriginToGrain: false, windowPhaseAnchor: Anchor.AddMinutes(5));
+
+        Assert.NotNull(result);
+        Assert.Equal(Anchor.AddHours(18).AddMinutes(35), result.Value.Origin);
+        Assert.Equal(1800, result.Value.IntervalSeconds);
+    }
+
+    [Fact]
+    public void Phase_OffsetPhaseWindowsAndFromOnTheirStart_KeepsFrom()
+    {
+        // AB#7659's integration case stays unchanged: From 00:05 on windows at :05/:20/...
+        var from = Anchor.AddMinutes(5);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(24, from, from.AddHours(24), QuarterHour,
+            alignOriginToGrain: false, windowPhaseAnchor: from.AddMinutes(45));
+
+        Assert.Equal((24, 3600, from), result);
+    }
+
+    [Fact]
+    public void Phase_AnchorAfterFrom_StillSnapsDown()
+    {
+        // The probe returns the earliest window that overlaps the range; when the data starts later than
+        // From, the anchor lies after From and the grid must be extended backwards.
+        var from = Anchor.AddHours(18).AddMinutes(37).AddSeconds(42);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(192, from, from.AddDays(2), QuarterHour,
+            alignOriginToGrain: false, windowPhaseAnchor: Anchor.AddDays(1).AddHours(3));
+
+        Assert.Equal(Anchor.AddHours(18).AddMinutes(30), result?.Origin);
+    }
+
+    [Fact]
+    public void Phase_NoWindowInRange_KeepsFromAsTheOrigin()
+    {
+        var from = Anchor.AddHours(18).AddMinutes(37).AddSeconds(42);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(192, from, from.AddDays(2), QuarterHour,
+            alignOriginToGrain: false, windowPhaseAnchor: null);
+
+        Assert.Equal((192, 900, from), result);
+    }
+
+    [Fact]
+    public void Phase_IgnoredForRollups_WhichSnapToTheGrain()
+    {
+        var from = Anchor.AddHours(6).AddMinutes(42);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(24, from, from.AddHours(24), TimeSpan.FromHours(1),
+            alignOriginToGrain: true, windowPhaseAnchor: Anchor.AddMinutes(5));
+
+        Assert.Equal(Anchor.AddHours(6), result?.Origin);
+    }
 }

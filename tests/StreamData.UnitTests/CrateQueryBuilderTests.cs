@@ -802,6 +802,38 @@ public class CrateQueryBuilderTests
         Assert.Contains("d.\"timestamp\" <= '2024-01-01", sql);
     }
 
+    // AB#8962: the window-phase probe reads the earliest window_start under the same source filters the
+    // downsampling query uses, so the time-range axis snaps into the phase of the windows it will read.
+    [Fact]
+    public void WindowPhaseProbeQuery_Windowed_SelectsMinWindowStartWithFilters()
+    {
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.WithCkTypeIdFilter("Test/123");
+        queryBuilder.WithTimeFilter(from, to);
+        queryBuilder.AddFieldFilter(Constants.RtId, StreamDataFieldFilterOperator.In, string.Empty,
+            valueList: ["r1", "r2"]);
+
+        var sql = new CrateQueryCompiler().CompileWindowPhaseProbeQuery(queryBuilder);
+
+        Assert.Contains($"SELECT MIN(d.\"window_start\") AS \"s\" FROM {Table} AS d WHERE 1 = 1", sql);
+        Assert.Contains("d.\"cktypeid\" = 'Test/123'", sql);
+        Assert.Contains("d.\"window_start\" < '2024-01-01", sql);
+        Assert.Contains("d.\"window_end\" > '2024-01-01", sql);
+        Assert.Contains("d.\"rtid\" IN ('r1', 'r2')", sql);
+    }
+
+    [Fact]
+    public void WindowPhaseProbeQuery_RawSource_Throws()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithTimeFilter(DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+
+        Assert.Throws<InvalidOperationException>(() => new CrateQueryCompiler().CompileWindowPhaseProbeQuery(queryBuilder));
+    }
+
     // AB#4246: the bin interval is rounded to the nearest second (was integer-truncated). For 1222
     // bins over a day, 86400/1222 = 70.7 -> 71s, not 70s.
     [Fact]

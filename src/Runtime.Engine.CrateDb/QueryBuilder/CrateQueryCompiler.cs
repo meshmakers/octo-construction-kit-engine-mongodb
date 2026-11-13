@@ -275,6 +275,29 @@ internal class CrateQueryCompiler
     }
 
     /// <summary>
+    /// Compiles the window-phase probe of a time-range downsampling query (AB#8962): the earliest
+    /// <c>window_start</c> among the source windows the downsampling query will read (same source
+    /// filters, so the same overlap range, rtIds, field filters). A time-range archive's period is only a
+    /// window length and its windows may be stored at any phase; one stored start fixes the phase the bin
+    /// axis must be snapped to, or the §7 fully-contained predicate drops every straddling window.
+    /// Returns no value (<c>NULL</c>) when the range holds no window.
+    /// </summary>
+    public string CompileWindowPhaseProbeQuery(CrateQueryBuilder queryBuilder)
+    {
+        if (queryBuilder.TimeColumn != Constants.WindowEnd)
+        {
+            throw new InvalidOperationException("The window-phase probe needs a windowed source.");
+        }
+
+        var query = new StringBuilder();
+        query.Append($"SELECT MIN(d.\"{Constants.WindowStart}\") AS \"s\"");
+        query.Append($" FROM {queryBuilder.TenantId} AS d");
+        query.Append(" WHERE 1 = 1");
+        AppendDownsamplingSourceFilters(query, queryBuilder, isWindowed: true, queryBuilder.TimeColumn);
+        return query.ToString();
+    }
+
+    /// <summary>
     /// Compiles the probe of a local-day downsampling query over a windowed source (AB#7360, PR #226 review): the number
     /// of source windows in range whose <c>window_end</c> overruns the end of the local-day bin their
     /// <c>window_start</c> falls in - exactly the windows the §7 containment of <see cref="CompileDownsamplingQuery"/>
