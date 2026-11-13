@@ -148,10 +148,11 @@ internal static class DownsamplingBinQuantizer
         int requestedLimit, DateTime from, DateTime to, TimeSpan grain, bool alignOriginToGrain = true,
         DateTime? windowPhaseAnchor = null)
     {
-        // The origin is UTC and DateTime subtraction ignores Kind, so both bounds are normalised first, with the
-        // rule BucketBoundary applies to the rollup origin (Unspecified counts as UTC).
-        from = AsUtc(from);
-        to = AsUtc(to);
+        // The origin is UTC and DateTime subtraction ignores Kind, so both bounds are normalised first - with
+        // ToUniversalTime, the rule the query builder and the SQL literals apply to From/To, so the bin axis and
+        // the SQL source range agree for every Kind (Unspecified counts as local time there, too).
+        from = from.ToUniversalTime();
+        to = to.ToUniversalTime();
         var range = to - from;
         if (requestedLimit <= 0 || range <= TimeSpan.Zero || grain <= TimeSpan.Zero)
         {
@@ -209,8 +210,8 @@ internal static class DownsamplingBinQuantizer
     /// </summary>
     internal static DateTime AlignDownToPhase(DateTime from, DateTime anchor, TimeSpan grain)
     {
-        var fromTicks = AsUtc(from).Ticks;
-        var offset = (fromTicks - AsUtc(anchor).Ticks) % grain.Ticks;
+        var fromTicks = from.ToUniversalTime().Ticks;
+        var offset = (fromTicks - anchor.ToUniversalTime().Ticks) % grain.Ticks;
         if (offset < 0)
         {
             offset += grain.Ticks;
@@ -218,12 +219,4 @@ internal static class DownsamplingBinQuantizer
 
         return new DateTime(fromTicks - offset, DateTimeKind.Utc);
     }
-
-    /// <summary>The Kind rule of <c>BucketBoundary</c>: Local is converted, Unspecified counts as UTC.</summary>
-    private static DateTime AsUtc(DateTime t) => t.Kind switch
-    {
-        DateTimeKind.Utc => t,
-        DateTimeKind.Local => t.ToUniversalTime(),
-        _ => DateTime.SpecifyKind(t, DateTimeKind.Utc),
-    };
 }

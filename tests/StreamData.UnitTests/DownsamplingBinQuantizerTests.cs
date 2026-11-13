@@ -354,4 +354,19 @@ public class DownsamplingBinQuantizerTests
 
         Assert.Equal((193, 900, Anchor.AddHours(18).AddMinutes(30)), result);
     }
+
+    [Fact]
+    public void Grain_UnspecifiedBounds_FollowTheQueryBuildersUtcRule()
+    {
+        // Review of PR #246: the SQL literals convert From/To with ToUniversalTime (Unspecified = local time); the
+        // bin count must use the same bounds, or the axis and the SQL source range disagree on a non-UTC host.
+        var fromUtc = Anchor.AddHours(18).AddMinutes(30);
+        var toUnspecified = DateTime.SpecifyKind(fromUtc.AddDays(2), DateTimeKind.Unspecified);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(192, fromUtc, toUnspecified, QuarterHour,
+            alignOriginToGrain: false, windowPhaseAnchor: Anchor);
+
+        var expectedLimit = (int)Math.Ceiling((toUnspecified.ToUniversalTime() - fromUtc).TotalSeconds / 900);
+        Assert.Equal((Math.Max(1, expectedLimit), 900, fromUtc), result);
+    }
 }

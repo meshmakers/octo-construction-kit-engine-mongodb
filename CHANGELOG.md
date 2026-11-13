@@ -13,7 +13,7 @@
   raw archives are unchanged. With no window in range, or with series stored at different phases, the axis starts at
   `From` as before; there, windows of a phase other than `From`'s that straddle a bin edge are still dropped. The fix
   adds one cheap aggregate query per time-range downsampling. The grain route also normalises `From`/`To` to UTC
-  before it computes the bin count.
+  (`ToUniversalTime`, as the SQL literals do) before it computes the bin count.
 - AB#8895 New: a runtime-entity query that asks only for the total count counts on the server without loading any
   document. `ITenantRepository.CountRtEntitiesByTypeAsync` (type query) and `CountRtEntitiesGraphByTypeAsync` (type
   query with navigation pairs, as persistent queries use) run `$match` - plus the geospatial stage and the association
