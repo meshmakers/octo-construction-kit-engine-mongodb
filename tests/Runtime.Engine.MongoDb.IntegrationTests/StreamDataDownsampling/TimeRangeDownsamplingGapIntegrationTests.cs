@@ -29,7 +29,8 @@ public class TimeRangeDownsamplingGapIntegrationTests(CrateStagingCopyFixture fi
 
     private sealed record Archive(OctoObjectId RtId, CrateDbStreamDataRepository Repository);
 
-    private async Task<Archive> CreateArchiveAsync(IReadOnlyCollection<DateTime> windowStarts, TimeSpan window)
+    private async Task<Archive> CreateArchiveAsync(IReadOnlyCollection<DateTime> windowStarts, TimeSpan window,
+        IReadOnlyCollection<DateTime>? secondSeriesWindowStarts = null)
     {
         var tenant = CrateStagingCopyFixture.NewTenantId();
         var rtId = OctoObjectId.GenerateNewId();
@@ -37,14 +38,17 @@ public class TimeRangeDownsamplingGapIntegrationTests(CrateStagingCopyFixture fi
         await fixture.SqlAsync(ArchiveDdlGenerator.GenerateCreateWindowedTable(table,
             [new ArchiveColumnDdl("Amount", new CrateColumnType.Primitive("DOUBLE PRECISION"), false, true)], 2, 0));
 
-        var rtEntity = OctoObjectId.GenerateNewId().ToString();
-        foreach (var chunk in windowStarts.Chunk(500))
+        foreach (var series in new[] { windowStarts, secondSeriesWindowStarts ?? [] })
         {
-            var sql = new StringBuilder(
-                $"INSERT INTO {table} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"amount\") VALUES ");
-            sql.AppendJoin(", ", chunk.Select(w =>
-                $"('{Iso(w)}', '{Iso(w + window)}', '{rtEntity}', '{MeterTypeLiteral}', 1.0)"));
-            await fixture.SqlAsync(sql.ToString());
+            var rtEntity = OctoObjectId.GenerateNewId().ToString();
+            foreach (var chunk in series.Chunk(500))
+            {
+                var sql = new StringBuilder(
+                    $"INSERT INTO {table} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"amount\") VALUES ");
+                sql.AppendJoin(", ", chunk.Select(w =>
+                    $"('{Iso(w)}', '{Iso(w + window)}', '{rtEntity}', '{MeterTypeLiteral}', 1.0)"));
+                await fixture.SqlAsync(sql.ToString());
+            }
         }
 
         await fixture.SqlAsync($"REFRESH TABLE {table}");
@@ -162,5 +166,67 @@ public class TimeRangeDownsamplingGapIntegrationTests(CrateStagingCopyFixture fi
         Assert.Equal(24, buckets.Count);
         Assert.Equal(from, buckets[0].Start);
         Assert.All(buckets, b => Assert.Equal(4, b.Count));
+    }
+
+    [Fact]
+    public async Task ARelativeWindowNotOnAWindowStart_SnapsTheAxisToTheStoredWindows()
+    {
+        // AB#8962 (FH lab, 0/192 bins with a value): "last 2 days" ending at now starts at 18:37:42. With the raw
+        // From as the origin every 15-minute bin straddled two stored windows and the §7 predicate dropped all of
+        // them. The axis now starts at the last window start at or before From (18:30) and reads every window.
+        var day = new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
+        var starts = new List<DateTime>();
+        for (var t = day; t < day.AddDays(4); t += Window) starts.Add(t);
+        var from = day.AddHours(18).AddMinutes(37).AddSeconds(42);
+        var to = from.AddDays(2);
+
+        var archive = await CreateArchiveAsync(starts, Window);
+        var buckets = await CountAsync(archive, from, to, 192);
+
+        Assert.Equal(193, buckets.Count);
+        Assert.Equal(day.AddHours(18).AddMinutes(30), buckets[0].Start);
+        for (var i = 0; i < buckets.Count; i++)
+        {
+            Assert.Equal(buckets[0].Start.AddMinutes(15 * i), buckets[i].Start);
+        }
+
+        Assert.All(buckets, b => Assert.Equal(1, b.Count));
+    }
+
+    [Fact]
+    public async Task ARelativeWindowOnOffsetPhaseWindows_SnapsInTheirPhase()
+    {
+        // Windows at :05/:20/:35/:50 and From 18:37:42: the origin is 18:35 (a window start), not 18:30.
+        var day = new DateTime(2026, 5, 1, 0, 5, 0, DateTimeKind.Utc);
+        var starts = new List<DateTime>();
+        for (var t = day; t < day.AddDays(2); t += Window) starts.Add(t);
+        var from = new DateTime(2026, 5, 1, 18, 37, 42, DateTimeKind.Utc);
+
+        var archive = await CreateArchiveAsync(starts, Window);
+        var buckets = await CountAsync(archive, from, from.AddHours(24), 24);
+
+        Assert.Equal(25, buckets.Count);
+        Assert.Equal(new DateTime(2026, 5, 1, 18, 35, 0, DateTimeKind.Utc), buckets[0].Start);
+        Assert.All(buckets.Take(24), b => Assert.Equal(4, b.Count));
+        // The last bin reaches past To (18:37:42 next day) and reads only the window that starts before To.
+        Assert.Equal(1, buckets[^1].Count);
+    }
+
+    [Fact]
+    public async Task SeriesAtDifferentPhases_KeepTheRequestedFromAsTheOrigin()
+    {
+        // Review of PR #246: one series at :00/:15/..., one at :05/:20/... in the same archive. No single origin keeps
+        // both, so the axis stays at From (here the :05 series' phase, whose windows all count).
+        var from = new DateTime(2026, 5, 1, 0, 5, 0, DateTimeKind.Utc);
+        var onTheHour = Enumerable.Range(0, 96).Select(i => from.AddMinutes(-5 + 15 * i)).ToList();
+        var offset = Enumerable.Range(0, 96).Select(i => from.AddMinutes(15 * i)).ToList();
+
+        var archive = await CreateArchiveAsync(onTheHour, Window, offset);
+        var buckets = await CountAsync(archive, from, from.AddHours(24), 24);
+
+        Assert.Equal(24, buckets.Count);
+        Assert.Equal(from, buckets[0].Start);
+        // 4 windows of the :05 series and the 3 of the :00 series that do not straddle a bin edge.
+        Assert.All(buckets.Take(23), b => Assert.Equal(7, b.Count));
     }
 }

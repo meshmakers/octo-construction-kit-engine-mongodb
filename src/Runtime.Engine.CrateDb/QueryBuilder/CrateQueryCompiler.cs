@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Globalization;
+using System.Text;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
@@ -271,6 +272,34 @@ internal class CrateQueryCompiler
         query.Append($" FROM {queryBuilder.TenantId} AS d");
         query.Append(" WHERE 1 = 1");
         AppendDownsamplingSourceFilters(query, queryBuilder, isWindowed, queryBuilder.TimeColumn);
+        return query.ToString();
+    }
+
+    /// <summary>
+    /// Compiles the window-phase probe of a time-range downsampling query (AB#8962): the smallest and the largest
+    /// phase of the source windows the downsampling query will read (same source filters, so the same overlap
+    /// range, rtIds and field filters). The phase is <c>window_start</c> in epoch milliseconds modulo the window
+    /// length. A time-range archive's period is only a window length and its windows may be stored at any phase;
+    /// when all windows in range share one phase, the bin axis is snapped into it, or the §7 fully-contained
+    /// predicate drops every straddling window. Both columns are <c>NULL</c> when the range holds no window.
+    /// </summary>
+    /// <param name="queryBuilder">The configured downsampling query (windowed source).</param>
+    /// <param name="windowMilliseconds">The archive's window length in milliseconds, &gt; 0.</param>
+    public string CompileWindowPhaseProbeQuery(CrateQueryBuilder queryBuilder, long windowMilliseconds)
+    {
+        if (queryBuilder.TimeColumn != Constants.WindowEnd)
+        {
+            throw new InvalidOperationException("The window-phase probe needs a windowed source.");
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(windowMilliseconds);
+
+        var phase = $"CAST(d.\"{Constants.WindowStart}\" AS BIGINT) % {windowMilliseconds.ToString(CultureInfo.InvariantCulture)}";
+        var query = new StringBuilder();
+        query.Append($"SELECT MIN({phase}) AS \"pmin\", MAX({phase}) AS \"pmax\"");
+        query.Append($" FROM {queryBuilder.TenantId} AS d");
+        query.Append(" WHERE 1 = 1");
+        AppendDownsamplingSourceFilters(query, queryBuilder, isWindowed: true, queryBuilder.TimeColumn);
         return query.ToString();
     }
 

@@ -38,7 +38,9 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 /// straddle two source windows and the §7 predicate drops them. <see cref="QuantizeToGrain"/>
 /// therefore snaps the origin down to the grain itself instead of assuming the caller did
 /// (AB#5157 review) — a no-op for every already-aligned window, so the axis of a calendar-period or
-/// midnight-aligned selection is unchanged.
+/// midnight-aligned selection is unchanged. Time-range archives snap in the phase of their stored
+/// windows instead of on the grain (AB#8962; AB#7659 had kept the raw request start, which emptied
+/// every relative "last N days" chart on 15-minute data).
 /// </para>
 /// </remarks>
 internal static class DownsamplingBinQuantizer
@@ -123,17 +125,34 @@ internal static class DownsamplingBinQuantizer
     /// </param>
     /// <param name="alignOriginToGrain">
     /// True (default, rollup archives) snaps the axis origin down to the grain: rollup windows are
-    /// grain-aligned by construction. False (time-range archives, AB#7659) keeps <paramref name="from"/>
-    /// as the origin: the declared period is only a window <em>length</em>, windows may be stored at any
-    /// phase (e.g. 00:05–00:20), and the axis must start where the caller asked it to start.
+    /// grain-aligned by construction. False (time-range archives, AB#7659): the declared period is only a
+    /// window <em>length</em>, windows may be stored at any phase (e.g. 00:05–00:20), so the origin follows
+    /// <paramref name="windowPhaseAnchor"/> instead.
+    /// </param>
+    /// <param name="windowPhaseAnchor">
+    /// Only read when <paramref name="alignOriginToGrain"/> is false: the start of one stored source window
+    /// (AB#8962), from <see cref="PhaseAnchor"/> — null when the windows in range do not share one phase.
+    /// The origin is snapped down to the latest instant at or before <paramref name="from"/> that
+    /// lies on the grid of windows through this anchor (<c>origin ≡ anchor mod grain</c>), so every bin edge
+    /// lands on a stored window start in the phase the archive actually uses — 15-minute windows at
+    /// :00/:15/:30/:45 and a relative "last 2 days" request starting at 18:37:42 get an axis from 18:30:00,
+    /// windows at :05/:20/:35/:50 one from 18:35:00. Null (no window in range) keeps
+    /// <paramref name="from"/> as the origin. A no-op whenever <paramref name="from"/> already sits on a
+    /// window start.
     /// </param>
     /// <returns>
     /// The bucket count, bin width and axis origin to run the query with, or null when the inputs
     /// are out of contract (caller should fall back to the probe-based <see cref="Quantize"/> route).
     /// </returns>
     public static (int EffectiveLimit, int IntervalSeconds, DateTime Origin)? QuantizeToGrain(
-        int requestedLimit, DateTime from, DateTime to, TimeSpan grain, bool alignOriginToGrain = true)
+        int requestedLimit, DateTime from, DateTime to, TimeSpan grain, bool alignOriginToGrain = true,
+        DateTime? windowPhaseAnchor = null)
     {
+        // The origin is UTC and DateTime subtraction ignores Kind, so both bounds are normalised first - with
+        // ToUniversalTime, the rule the query builder and the SQL literals apply to From/To, so the bin axis and
+        // the SQL source range agree for every Kind (Unspecified counts as local time there, too).
+        from = from.ToUniversalTime();
+        to = to.ToUniversalTime();
         var range = to - from;
         if (requestedLimit <= 0 || range <= TimeSpan.Zero || grain <= TimeSpan.Zero)
         {
@@ -161,8 +180,43 @@ internal static class DownsamplingBinQuantizer
         // Snap to the GRAIN, not to the (possibly merged) bin width: every bin edge then still lands
         // on a source window start, while an already-grain-aligned window keeps the exact axis it
         // has today. Aligning to the wider bin would move the axis of queries that work fine.
-        var origin = alignOriginToGrain ? BucketBoundary.AlignDown(from, BucketAlignment.FixedSize, grain) : from;
+        var origin = alignOriginToGrain
+            ? BucketBoundary.AlignDown(from, BucketAlignment.FixedSize, grain)
+            : windowPhaseAnchor is { } anchor
+                ? AlignDownToPhase(from, anchor, grain)
+                : from;
         var effectiveLimit = (int)Math.Ceiling((to - origin).TotalSeconds / intervalSeconds);
         return (Math.Max(1, effectiveLimit), (int)intervalSeconds, origin);
+    }
+
+    /// <summary>
+    /// Turns the window-phase probe of a time-range archive (AB#8962) into the anchor for
+    /// <see cref="QuantizeToGrain"/>: the smallest and the largest phase (<c>window_start</c> in epoch
+    /// milliseconds modulo the window length) of the windows in range. One phase → an instant on that phase.
+    /// No window (both null) or windows at different phases (several series stored at different phases,
+    /// review of PR #246) → null, so the axis keeps <c>From</c>: no single origin keeps every series' windows,
+    /// and snapping onto one series' phase would drop the windows of a series whose phase <c>From</c> already
+    /// matches.
+    /// </summary>
+    internal static DateTime? PhaseAnchor(long? minPhaseMilliseconds, long? maxPhaseMilliseconds)
+        => minPhaseMilliseconds is { } min && maxPhaseMilliseconds is { } max && min == max
+            ? DateTime.UnixEpoch.AddMilliseconds(min)
+            : null;
+
+    /// <summary>
+    /// The latest instant at or before <paramref name="from"/> on the grid
+    /// <c>anchor + k × grain</c> (k any integer, so the anchor may lie before or after
+    /// <paramref name="from"/>). Works in UTC ticks; the result is UTC.
+    /// </summary>
+    internal static DateTime AlignDownToPhase(DateTime from, DateTime anchor, TimeSpan grain)
+    {
+        var fromTicks = from.ToUniversalTime().Ticks;
+        var offset = (fromTicks - anchor.ToUniversalTime().Ticks) % grain.Ticks;
+        if (offset < 0)
+        {
+            offset += grain.Ticks;
+        }
+
+        return new DateTime(fromTicks - offset, DateTimeKind.Utc);
     }
 }
