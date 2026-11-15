@@ -67,7 +67,18 @@ public class DownsamplingSqlSnapshotTests
         A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>._))
             .Invokes((string _, string sql) => _sql.Add(sql))
             .Returns(Task.FromResult(new List<DataPointDto>()));
+        // AB#8992: the window-phase probe runs once, outside the resilience pipeline.
+        A.CallTo(() => _db.QueryRowsOnceAsync(A<string>._, A<string>._, A<TimeSpan>._, A<CancellationToken>._))
+            .Invokes((string _, string sql, TimeSpan _, CancellationToken _) => _sql.Add(sql))
+            .Returns(Task.FromResult<IReadOnlyList<IReadOnlyDictionary<string, object?>>>([]));
     }
+
+    private void ProbeAnswers(long? pmin, long? pmax) =>
+        A.CallTo(() => _db.QueryRowsOnceAsync(A<string>._, A<string>.That.StartsWith("SELECT MIN("), A<TimeSpan>._,
+                A<CancellationToken>._))
+            .Invokes((string _, string sql, TimeSpan _, CancellationToken _) => _sql.Add(sql))
+            .Returns(Task.FromResult<IReadOnlyList<IReadOnlyDictionary<string, object?>>>(
+                [new Dictionary<string, object?> { ["pmin"] = pmin, ["pmax"] = pmax }]));
 
     private CrateDbStreamDataRepository NewSut() =>
         new(NullLogger<CrateDbStreamDataRepository>.Instance, A.Fake<ICkCacheService>(), _db,
@@ -131,12 +142,7 @@ public class DownsamplingSqlSnapshotTests
         // AB#8962: "last 2 days" starting at 18:37:42 over 15-minute windows stored at :00/:15/:30/:45. The probe
         // finds one phase (0 ms past the quarter hour); the DATE_BIN origin and the lower source bound move to 18:30.
         var from = new DateTime(2026, 3, 28, 18, 37, 42, DateTimeKind.Utc);
-        A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>.That.StartsWith("SELECT MIN(")))
-            .Invokes((string _, string sql) => _sql.Add(sql))
-            .Returns(Task.FromResult(new List<DataPointDto>
-            {
-                new(new Dictionary<string, object?> { ["pmin"] = 0L, ["pmax"] = 0L })
-            }));
+        ProbeAnswers(0L, 0L);
 
         await NewSut().ExecuteDownsamplingQueryAsync(TimeRange, Query(from, from.AddDays(2), 192, AggregationFunction.Sum));
 
@@ -151,12 +157,7 @@ public class DownsamplingSqlSnapshotTests
         // Review of PR #246: two series stored at different phases (:00 and :05). Snapping onto one of them would
         // drop the windows of the other, so the axis keeps From.
         var from = new DateTime(2026, 3, 28, 18, 5, 0, DateTimeKind.Utc);
-        A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>.That.StartsWith("SELECT MIN(")))
-            .Invokes((string _, string sql) => _sql.Add(sql))
-            .Returns(Task.FromResult(new List<DataPointDto>
-            {
-                new(new Dictionary<string, object?> { ["pmin"] = 0L, ["pmax"] = 300_000L })
-            }));
+        ProbeAnswers(0L, 300_000L);
 
         await NewSut().ExecuteDownsamplingQueryAsync(TimeRange, Query(from, from.AddDays(1), 24, AggregationFunction.Sum));
 
@@ -167,12 +168,16 @@ public class DownsamplingSqlSnapshotTests
     public async Task TimeRange_ProbeFails_KeepsFromAsTheOrigin()
     {
         var from = new DateTime(2026, 3, 28, 18, 37, 42, DateTimeKind.Utc);
-        A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>.That.StartsWith("SELECT MIN(")))
+        A.CallTo(() => _db.QueryRowsOnceAsync(A<string>._, A<string>.That.StartsWith("SELECT MIN("), A<TimeSpan>._,
+                A<CancellationToken>._))
             .Throws(new InvalidOperationException("probe down"));
 
         await NewSut().ExecuteDownsamplingQueryAsync(TimeRange, Query(from, from.AddDays(2), 192, AggregationFunction.Sum));
 
         Assert.Contains("'2026-03-28 18:37:42.000Z'::TIMESTAMP", Assert.Single(_sql));
+        // AB#8992: a failed probe is not repeated.
+        A.CallTo(() => _db.QueryRowsOnceAsync(A<string>._, A<string>._, A<TimeSpan>._, A<CancellationToken>._))
+            .MustHaveHappenedOnceExactly();
     }
 
     [Fact]

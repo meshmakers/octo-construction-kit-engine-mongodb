@@ -63,7 +63,14 @@ internal sealed class RecomputeProcessState
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Drops everything remembered about the rollup with the given live table — its tables are gone.
+    /// The window phases the downsampling probe found for time-range archives, and the probes running per key
+    /// (AB#8992). Not about recompute, but it describes tables per process exactly like the memos above, and it has
+    /// to go with the table (<see cref="Forget"/>).
+    /// </summary>
+    public WindowPhaseCache WindowPhases { get; } = new();
+
+    /// <summary>
+    /// Drops everything remembered about the archive with the given live table — its tables are gone.
     /// </summary>
     public void Forget(string qualifiedLiveTable)
     {
@@ -73,5 +80,6 @@ internal sealed class RecomputeProcessState
         EnsuredOriginColumns.TryRemove(qualifiedLiveTable, out _);
         ReclaimPassDone.TryRemove(qualifiedLiveTable, out _);
         PendingReclaims.TryRemove(qualifiedLiveTable, out _);
+        WindowPhases.Forget(qualifiedLiveTable);
     }
 }

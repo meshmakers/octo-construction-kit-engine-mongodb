@@ -110,6 +110,22 @@ public interface IStreamDataDatabaseClient
     Task<List<DataPointDto>> GetDataAsync(string tenantId, string query);
 
     /// <summary>
+    /// Runs an optional read query exactly once (AB#8992): outside the resilience pipeline (no retry, no
+    /// circuit-breaker sample), and the wait for a pooled connection plus the statement together are bounded by
+    /// <paramref name="budget"/>. For auxiliary probes whose failure the caller handles with a fallback - a probe
+    /// must never hold a pool slot longer than the query it prepares, and it must not be repeated by the retry.
+    /// </summary>
+    /// <returns>The rows as case-preserving dictionaries of column name to value.</returns>
+    /// <exception cref="OperationCanceledException">The budget ran out or <paramref name="cancellationToken"/> was cancelled.</exception>
+    /// <remarks>
+    /// The default implementation (for implementers written before AB#8992) runs <see cref="GetDataAsync"/> and is
+    /// therefore neither bounded nor free of retries.
+    /// </remarks>
+    async Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>> QueryRowsOnceAsync(string tenantId, string query,
+        TimeSpan budget, CancellationToken cancellationToken = default) =>
+        (await GetDataAsync(tenantId, query)).Select(x => (IReadOnlyDictionary<string, object?>)x.Attributes).ToList();
+
+    /// <summary>
     /// Streams the raw rows of an arbitrary read query without buffering the whole result set in
     /// memory. Each row is yielded as a case-preserving dictionary of physical CrateDB column name →
     /// value, exactly as the driver returns it. Used by the archive-data export path (AB#4230), which
