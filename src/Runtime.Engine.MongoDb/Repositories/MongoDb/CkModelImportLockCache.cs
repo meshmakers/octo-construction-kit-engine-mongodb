@@ -22,12 +22,11 @@ internal interface ICkModelImportLockScope
 ///     MongoDB round-trip per request in every service.
 ///     <para>
 ///         One entry per tenant database and process holds the last answer for at most <see cref="TimeToLive" />.
-///         An import lock acquired or released in this process invalidates the entry at once
-///         (<see cref="NotifyImportLockChanged" />), so a reader in the same process sees the import with its next
-///         resolve. A reader in another process sees it at most <see cref="TimeToLive" /> late; the importer therefore
-///         waits <see cref="TimeToLive" /> after acquiring the lock before it removes the installed version
-///         (<see cref="WaitUntilForeignSnapshotsExpiredAsync" />), so no reader can still trust a snapshot taken before
-///         the import began when the model disappears.
+///         Readers of an expired entry share one query (single flight). An import lock acquired or released in this
+///         process invalidates the entry at once (<see cref="NotifyImportLockChanged" />), so a reader in the same
+///         process sees the import with its next resolve. A reader in another process, or one whose importer runs an
+///         older package without this signal, may use an answer up to <see cref="TimeToLive" /> old; that is why
+///         <c>IsExistingAsync</c> asks the lock collection directly whenever it finds no matching version.
 ///     </para>
 ///     <para>
 ///         The failure paths (the CK cache load retry, the import's own failure classification) and the wait loop
@@ -36,7 +35,7 @@ internal interface ICkModelImportLockScope
 /// </summary>
 internal sealed class CkModelImportLockCache
 {
-    /// <summary>Default lifetime of a cached answer: the worst-case detection delay in another process.</summary>
+    /// <summary>Default lifetime of a cached answer.</summary>
     internal static readonly TimeSpan DefaultTimeToLive = TimeSpan.FromSeconds(2);
 
     private readonly TimeProvider _timeProvider;
@@ -53,31 +52,27 @@ internal sealed class CkModelImportLockCache
         _timeProvider = timeProvider;
     }
 
-    /// <summary>How long an answer is reused; also the worst-case delay before another process sees an import.</summary>
+    /// <summary>How long an answer is reused.</summary>
     internal TimeSpan TimeToLive { get; }
 
     /// <summary>
     ///     The names of the models being imported in the database of <paramref name="dataSource" />: the cached answer
     ///     when it is younger than <see cref="TimeToLive" /> and no import lock changed in this process since, otherwise
-    ///     a fresh <see cref="ICkMongoDbRepositoryDataSource.GetModelsBeingImportedAsync" />.
+    ///     a fresh <see cref="ICkMongoDbRepositoryDataSource.GetModelsBeingImportedAsync" />, shared by all readers that
+    ///     ask while it runs.
     /// </summary>
-    internal async Task<IReadOnlyList<string>> GetModelsBeingImportedAsync(ICkMongoDbRepositoryDataSource dataSource,
+    internal Task<IReadOnlyList<string>> GetModelsBeingImportedAsync(ICkMongoDbRepositoryDataSource dataSource,
         CancellationToken cancellationToken = default)
     {
         var entry = EntryOf(dataSource);
-        var now = _timeProvider.GetUtcNow();
         var snapshot = entry.Snapshot;
-        var generation = entry.Generation;
-        if (snapshot != null && snapshot.Generation == generation && now - snapshot.TakenAt < TimeToLive)
+        if (snapshot != null && snapshot.Generation == entry.Generation &&
+            _timeProvider.GetUtcNow() - snapshot.TakenAt < TimeToLive)
         {
-            return snapshot.ModelNames;
+            return Task.FromResult(snapshot.ModelNames);
         }
 
-        // The generation is read before the query: an import lock that changes while the query runs makes the
-        // stored answer stale at once (its generation no longer matches), so the next reader asks again.
-        var modelNames = await dataSource.GetModelsBeingImportedAsync(cancellationToken).ConfigureAwait(false);
-        entry.Snapshot = new Snapshot(modelNames, now, generation);
-        return modelNames;
+        return entry.RefreshAsync(dataSource, _timeProvider, cancellationToken);
     }
 
     /// <summary>An import lock of the database was acquired or released in this process: drop the cached answer.</summary>
@@ -85,23 +80,6 @@ internal sealed class CkModelImportLockCache
     {
         EntryOf(dataSource).Invalidate();
     }
-
-    /// <summary>
-    ///     Waits until <see cref="TimeToLive" /> has passed since <paramref name="lockAcquiredAt" />: by then every
-    ///     snapshot another process took before the lock was acquired has expired, and its next resolve of the model
-    ///     sees the import.
-    /// </summary>
-    internal Task WaitUntilForeignSnapshotsExpiredAsync(DateTimeOffset lockAcquiredAt,
-        CancellationToken cancellationToken = default)
-    {
-        var remaining = lockAcquiredAt + TimeToLive - _timeProvider.GetUtcNow();
-        return remaining > TimeSpan.Zero
-            ? Task.Delay(remaining, _timeProvider, cancellationToken)
-            : Task.CompletedTask;
-    }
-
-    /// <summary>The current time of the cache's clock.</summary>
-    internal DateTimeOffset UtcNow => _timeProvider.GetUtcNow();
 
     private Entry EntryOf(ICkMongoDbRepositoryDataSource dataSource)
     {
@@ -114,21 +92,72 @@ internal sealed class CkModelImportLockCache
 
     private sealed class Entry
     {
+        private readonly Lock _gate = new();
         private long _generation;
         private Snapshot? _snapshot;
+        private Task<IReadOnlyList<string>>? _inFlight;
+        private long _inFlightGeneration;
 
         public long Generation => Interlocked.Read(ref _generation);
 
-        public Snapshot? Snapshot
+        public Snapshot? Snapshot => Volatile.Read(ref _snapshot);
+
+        /// <summary>
+        ///     Joins the running query of this entry, or starts one. A query started before the last lock change is never
+        ///     joined: it may have read the old state. The query is not cancelled by one reader; each reader stops waiting
+        ///     on its own token.
+        /// </summary>
+        public Task<IReadOnlyList<string>> RefreshAsync(ICkMongoDbRepositoryDataSource dataSource,
+            TimeProvider timeProvider, CancellationToken cancellationToken)
         {
-            get => Volatile.Read(ref _snapshot);
-            set => Volatile.Write(ref _snapshot, value);
+            TaskCompletionSource<IReadOnlyList<string>>? owner = null;
+            Task<IReadOnlyList<string>> query;
+            long generation;
+            lock (_gate)
+            {
+                generation = Generation;
+                if (_inFlight == null || _inFlight.IsCompleted || _inFlightGeneration != generation)
+                {
+                    owner = new TaskCompletionSource<IReadOnlyList<string>>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    _inFlight = owner.Task;
+                    _inFlightGeneration = generation;
+                }
+
+                query = _inFlight;
+            }
+
+            if (owner != null)
+            {
+                _ = QueryAsync(dataSource, timeProvider, generation, owner);
+            }
+
+            return query.WaitAsync(cancellationToken);
         }
 
         public void Invalidate()
         {
             Interlocked.Increment(ref _generation);
             Volatile.Write(ref _snapshot, null);
+        }
+
+        private async Task QueryAsync(ICkMongoDbRepositoryDataSource dataSource, TimeProvider timeProvider,
+            long generation, TaskCompletionSource<IReadOnlyList<string>> owner)
+        {
+            try
+            {
+                var takenAt = timeProvider.GetUtcNow();
+                var modelNames = await dataSource.GetModelsBeingImportedAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+                // Stored with the generation read before the query: if a lock changed meanwhile, the answer is stale
+                // at once and the next reader asks again.
+                Volatile.Write(ref _snapshot, new Snapshot(modelNames, takenAt, generation));
+                owner.SetResult(modelNames);
+            }
+            catch (Exception exception)
+            {
+                owner.SetException(exception);
+            }
         }
     }
 }

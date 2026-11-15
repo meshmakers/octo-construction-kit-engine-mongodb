@@ -2466,19 +2466,23 @@ retry applies). Tests: `CkRangeRetentionImportTests.InPlaceUpgrade_WhileDependen
 
 **The resolve reads the held import locks from a cache (AB#8947).** `IsExistingAsync(range)` runs on every tenant lookup of every request
 (`SystemContext.TryFindTenantContextAsync` -> `IsSystemTenantExistingAsync` -> `IsCkModelSatisfiedAsync`), so a lock query per call was one
-MongoDB `find` on `SysLock` per request in every service. It asks `CkModelImportLockCache` instead: one answer per tenant database
+MongoDB `find` on `SysLock` per request in every service. It asks `CkModelImportLockCache` first: one answer per tenant database
 (`ICkModelImportLockScope.ImportLockScopeKey` = servers + database, shared by the admin and user data source instances) and process, reused
-for at most `DefaultTimeToLive` (2 s) and dropped at once when this process acquires or releases a model import lock
-(`MongoDbRepositoryDataSource.AcquireModelImportLockAsync` and the release of its handle). Another process sees an import at most one TTL
-late; `ExecuteImport` therefore waits one TTL after acquiring the lock (`WaitUntilForeignSnapshotsExpiredAsync`) before
-`InsertModelWithImportingState` when it replaces an installed version, so no reader trusts a snapshot from before the import when the old
-row disappears. A first install does not wait. Rules: the wait loop (`CkModelImportInProgress`), `TenantRepository.TryGetModelsBeingImportedAsync`
-and `MarkIfOtherImportsRunAsync` keep reading the lock collection directly - never route them through the cache (a stale "running" there
-would misclassify a failure, a stale "not running" would end a wait early); a new reader on a hot path uses the cache. Tests:
-`CkModelImportLockCacheTests` (unit: once per TTL, local invalidation, a change during the query, shared scope, `IsExistingAsync` with a
-counting fake), `CkModelImportLockCacheIntegrationTests` (worst-case delay of another process, reader of another process during an in-place
-upgrade never sees "does not exist", `SysLock` reads per tenant lookup counted with the MongoDB profiler: one per lookup before, at most one
-per TTL after). Follow-up outside this change: `IsSystemTenantExistingAsync` still costs `listDatabases` and a `CkModel` find per lookup.
+for at most `DefaultTimeToLive` (2 s), one query in flight per entry (concurrent readers share it), and dropped at once when this process
+acquires or releases a model import lock (`MongoDbRepositoryDataSource.AcquireModelImportLockAsync` and the release of its handle). That
+answer can predate an import in another process, or by a service on an older package (rolling deployment). Therefore a **miss** (no matching
+version) is never believed from the cache: `IsExistingAsync` asks the lock collection directly and waits for a running import of the model,
+then reads again. Hits are not re-checked. The importer does not wait for the cache. Rules: the wait loop (`CkModelImportInProgress`),
+`TenantRepository.TryGetModelsBeingImportedAsync` and `MarkIfOtherImportsRunAsync` keep reading the lock collection directly - never route
+them through the cache (a stale "running" would misclassify a failure, a stale "not running" would end a wait early); a new reader on a hot
+path uses the cache and re-checks its misses. Cost: one `SysLock` read per tenant database, process and TTL for hits, one per miss. The race
+of AB#8677 stays as it was (a reader that found the Available row just before the lock was taken can read elements being replaced). Tests:
+`CkModelImportLockCacheTests` (unit: once per TTL, local invalidation, a change during the query, single flight, a cancelled reader, shared
+scope, `IsExistingAsync` with a counting fake, direct check on a miss, stale answer during an upgrade), `CkModelImportLockCacheIntegrationTests`
+(worst-case delay of another process, reader of another process during an in-place upgrade never sees "does not exist", rolling deployment
+with an importer that does not signal the cache and a never-expiring reader answer, `SysLock` reads per tenant lookup counted with the
+MongoDB profiler: one per lookup before, at most one per TTL window after; the two reader tests are red without the miss check). Follow-up
+outside this change: `IsSystemTenantExistingAsync` still costs `listDatabases` and a `CkModel` find per lookup.
 
 **Import guard (message 91, CkLanguageNotSupported):** `ExecuteImport` refuses a model whose `CkLanguage` is
 above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine

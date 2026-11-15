@@ -76,9 +76,9 @@ public class CkModelImportLockCacheIntegrationTests(CkModelImportMigrationFixtur
 
     /// <summary>
     ///     AC 3: a reader in another process resolves a model again and again while the model is upgraded in place. Its
-    ///     cached "no import running" from before the import is never trusted when the installed version disappears:
-    ///     the importer waits one TTL after acquiring the lock, so the reader always finds a version (the old one, or
-    ///     the new one after waiting for the import) and never "does not exist".
+    ///     cached "no import running" may predate the import (the importer does not wait for it), but a miss is checked
+    ///     against the lock collection directly, so the reader always finds a version (the old one, or the new one
+    ///     after waiting for the import) and never "does not exist".
     /// </summary>
     [Fact]
     public async Task ReaderInAnotherProcess_DuringAnInPlaceUpgrade_AlwaysResolvesAVersion()
@@ -118,14 +118,12 @@ public class CkModelImportLockCacheIntegrationTests(CkModelImportMigrationFixtur
                 }
             }, CancellationToken.None);
 
-            var import = Stopwatch.StartNew();
             try
             {
                 await tenant.ImportCkModelAsync(OnSystem("LockUpg-1.1.0", system));
             }
             finally
             {
-                import.Stop();
                 // One more round after the import, so the last answer is the new version.
                 await Task.Delay(CkModelImportLockCache.DefaultTimeToLive + TimeSpan.FromMilliseconds(200),
                     CancellationToken.None);
@@ -137,9 +135,65 @@ public class CkModelImportLockCacheIntegrationTests(CkModelImportMigrationFixtur
             Assert.True(answers.Count > 10, $"reader ran only {answers.Count} times");
             Assert.DoesNotContain(null, answers);
             Assert.Equal(new CkModelId("LockUpg-1.1.0"), answers[^1]);
-            // The importer waited one TTL before it removed the installed version.
-            Assert.True(import.Elapsed >= CkModelImportLockCache.DefaultTimeToLive,
-                $"the upgrade took {import.Elapsed}, less than the TTL");
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
+    ///     Rolling deployment: the importer runs an older package that neither signals this cache nor waits, and the
+    ///     reader's cached answer ("nothing running") never expires (frozen clock). While the import holds the lock and
+    ///     the model has no Available version, the reader does not answer "does not exist": it finds the import through
+    ///     the direct check on its miss, waits, and resolves the version the import leaves behind.
+    /// </summary>
+    [Fact]
+    public async Task RollingDeployment_ImporterWithoutTheSignal_ReaderWithAStaleAnswer_WaitsInsteadOfMissing()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"lockroll{Guid.NewGuid():N}"[..20];
+        var ct = TestContext.Current.CancellationToken;
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            await tenant.ImportCkModelAsync(OnSystem("LockRoll-1.0.0", system));
+            var models = AdminDatabase(tenantId.ToLowerInvariant()).GetCollection<BsonDocument>("CkModel");
+            var row = new BsonDocument("_id", "LockRoll-1.0.0");
+
+            var reader = new DatabaseCkModelRepository(NullLogger<DatabaseCkModelRepository>.Instance,
+                fixture.GetService<IRepositoryModelResolver>(), fixture.GetService<ICkModelImportAuditTrail>(),
+                new CkModelImportLockCache(CkModelImportLockCache.DefaultTimeToLive, new ManualTimeProvider()));
+            var source = new TenantDatabaseSourceIdentifier(null, NewDataSource(tenantId), tenantId)
+            {
+                CancellationToken = ct
+            };
+            var range = new CkModelIdVersionRange("LockRoll", "[1.0,2.0)");
+            // The stale answer: taken before the import, and it never expires.
+            Assert.True((await reader.IsExistingAsync(range, source)).Exists);
+
+            // The "old" importer: its lock is invisible to the reader's cache. Then it removes the Available version.
+            var importer = NewDataSource(tenantId);
+            var importLock = await importer.AcquireModelImportLockAsync("LockRoll", ct);
+            await models.UpdateOneAsync(row, new BsonDocument("$set", new BsonDocument("modelState", 0)),
+                cancellationToken: ct);
+            Assert.Equal(1, await models.CountDocumentsAsync(
+                new BsonDocument { { "_id", "LockRoll-1.0.0" }, { "modelState", 0 } }, cancellationToken: ct));
+
+            var resolve = reader.IsExistingAsync(range, source with { ImportWaitDeadline = new() });
+            await Task.Delay(TimeSpan.FromMilliseconds(800), ct);
+            Assert.False(resolve.IsCompleted, "the reader answered while the import still held the lock");
+
+            // The import finishes: the version is Available again and the lock is released.
+            await models.UpdateOneAsync(row, new BsonDocument("$set", new BsonDocument("modelState", 1)),
+                cancellationToken: ct);
+            await importLock.DisposeAsync();
+
+            var result = await resolve;
+            Assert.True(result.Exists);
+            Assert.Equal(new CkModelId("LockRoll-1.0.0"), result.ModelId);
         }
         finally
         {
@@ -190,6 +244,7 @@ public class CkModelImportLockCacheIntegrationTests(CkModelImportMigrationFixtur
             }
 
             var lockReadsAfterBeforeRounds = await CountLockReadsAsync(profiled, ct);
+            var afterRounds = Stopwatch.StartNew();
             var afterCommands = 0;
             for (var i = 0; i < lookups; i++)
             {
@@ -200,6 +255,7 @@ public class CkModelImportLockCacheIntegrationTests(CkModelImportMigrationFixtur
                 }
             }
 
+            afterRounds.Stop();
             var lockReadsBefore = lockReadsAfterBeforeRounds - lockReadsAtStart;
             var lockReadsAfter = await CountLockReadsAsync(profiled, ct) - lockReadsAfterBeforeRounds;
 
@@ -207,10 +263,13 @@ public class CkModelImportLockCacheIntegrationTests(CkModelImportMigrationFixtur
                 $"{lookups} tenant lookups: SysLock reads before {lockReadsBefore}, after {lockReadsAfter}; " +
                 $"MongoDB commands before {beforeCommands}, after {afterCommands}");
             Assert.Equal(lookups, lockReadsBefore);
-            // At most one, when the TTL ran out during the loop on a slow agent.
-            Assert.True(lockReadsAfter <= 1, $"{lockReadsAfter} SysLock reads in {lookups} lookups");
-            Assert.True(beforeCommands - afterCommands >= lookups - 1,
-                $"MongoDB commands for {lookups} lookups: before {beforeCommands}, after {afterCommands}");
+            // One read per TTL window the "after" rounds touched: a slow agent may cross a few windows.
+            var ttlWindows = (int)(afterRounds.Elapsed / CkModelImportLockCache.DefaultTimeToLive) + 1;
+            Assert.True(lockReadsAfter <= ttlWindows,
+                $"{lockReadsAfter} SysLock reads in {lookups} lookups over {afterRounds.Elapsed} ({ttlWindows} TTL windows)");
+            Assert.True(beforeCommands - afterCommands >= lookups - ttlWindows,
+                $"MongoDB commands for {lookups} lookups: before {beforeCommands}, after {afterCommands}, " +
+                $"{ttlWindows} TTL windows");
         }
         finally
         {

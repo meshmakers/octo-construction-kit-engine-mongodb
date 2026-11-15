@@ -145,30 +145,35 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         // transaction instead, see TenantRepository.RefreshCkCacheServiceAsync), and the importer's own re-validation
         // of the dependents runs in one.
         // AB#8947: this runs on every tenant lookup of every request (SystemContext.IsSystemTenantExistingAsync), so the
-        // held import locks come from CkModelImportLockCache, not from a query on the lock collection per call. The
-        // lock collection is read at most once per tenant database, process and TTL (default 2 s), and again at once
-        // after an import lock of this process was acquired or released. An import in another process is seen at most
-        // one TTL late; the importer waits one TTL after acquiring the lock before it replaces an installed version
-        // (ExecuteImport), so a reader never trusts a snapshot from before the import when the old version disappears.
-        // The wait below and the failure paths read the lock collection directly.
-        if (session is not IOctoSessionInternal { IsTransactionActive: true })
+        // held import locks come from CkModelImportLockCache (one query per tenant database, process and 2 s, dropped
+        // at once when this process acquires or releases an import lock), not from a query on the lock collection per
+        // call. That answer may be up to 2 s old when the import runs in another process, or in a service on an older
+        // package that does not signal the cache. So when no matching version is found, the lock collection is asked
+        // directly before the miss is believed: a running import of the model is then waited for as above. A hit is
+        // never re-checked. Remaining race, unchanged since AB#8677: a reader that found the Available row just before
+        // an import took the lock can still read elements while they are replaced (the cache load retry or the
+        // caller's retry applies). The wait itself and the failure paths read the lock collection directly.
+        var outsideTransaction = session is not IOctoSessionInternal { IsTransactionActive: true };
+        var waitedForImport = false;
+        if (outsideTransaction)
         {
             var running = await _importLockCache.GetModelsBeingImportedAsync(dataSource,
                 sourceIdentifierObject.CancellationToken);
-            if (running.Contains(modelIdVersionRange.Name, StringComparer.Ordinal))
-            {
-                _logger.LogInformation(
-                    "Dependency '{Dependency}' is resolved while CK model '{CkModelName}' is being imported; waiting for the import",
-                    modelIdVersionRange, modelIdVersionRange.Name);
-                // One deadline for the whole resolve, cancelled with its caller (AB#8677).
-                await CkModelImportInProgress.WaitUntilFinishedAsync(dataSource,
-                    name => name == modelIdVersionRange.Name, sourceIdentifierObject.ImportWaitDeadline,
-                    sourceIdentifierObject.CancellationToken);
-            }
+            waitedForImport = await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject);
         }
 
         var satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
             sourceIdentifierObject.IncludeResolveFailedModels);
+
+        if (!satisfiedModels.Any() && outsideTransaction && !waitedForImport)
+        {
+            var running = await dataSource.GetModelsBeingImportedAsync(sourceIdentifierObject.CancellationToken);
+            if (await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject))
+            {
+                satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
+                    sourceIdentifierObject.IncludeResolveFailedModels);
+            }
+        }
 
         if (!satisfiedModels.Any())
         {
@@ -181,6 +186,28 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             .First();
 
         return new ModelExistingResult { Exists = true, ModelId = latestSatisfiedModel.Id };
+    }
+
+    /// <summary>
+    ///     AB#8677: waits for the import of the model of <paramref name="modelIdVersionRange" /> when
+    ///     <paramref name="running" /> names it. Returns whether it waited.
+    /// </summary>
+    private async Task<bool> WaitIfBeingImportedAsync(IReadOnlyList<string> running,
+        CkModelIdVersionRange modelIdVersionRange, TenantDatabaseSourceIdentifier sourceIdentifier)
+    {
+        if (!running.Contains(modelIdVersionRange.Name, StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        _logger.LogInformation(
+            "Dependency '{Dependency}' is resolved while CK model '{CkModelName}' is being imported; waiting for the import",
+            modelIdVersionRange, modelIdVersionRange.Name);
+        // One deadline for the whole resolve, cancelled with its caller (AB#8677).
+        await CkModelImportInProgress.WaitUntilFinishedAsync(sourceIdentifier.MongoDbRepositoryDataSource,
+            name => name == modelIdVersionRange.Name, sourceIdentifier.ImportWaitDeadline,
+            sourceIdentifier.CancellationToken);
+        return true;
     }
 
     private static async Task<List<CkModel>> FindSatisfyingModelsAsync(ICkMongoDbRepositoryDataSource dataSource,
@@ -669,7 +696,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         // Pass the caller's cancellation token so the polling loop is interruptable.
         await using var importLock = await mongoDbRepositoryDataSource.AcquireModelImportLockAsync(
             compiledModel.ModelId.Name, cancellationToken ?? CancellationToken.None);
-        var lockAcquiredAt = _importLockCache.UtcNow;
 
         // Link the caller's token with the lock's LockLostToken: if the heartbeat detects we no
         // longer own the lock (e.g. our TTL expired under load and another service claimed it),
@@ -679,7 +705,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         cancellationToken = linkedImportCts.Token;
 
         var guardedIdentifier = sourceIdentifier as TenantDatabaseSourceIdentifier;
-        bool replacesInstalledVersion;
         if (guardedIdentifier is { GuardAgainstDowngrade: true })
         {
             // CK v2 F1.0-S1 (AB#5900, G-H1): an embedded/startup import repeats the by-name decision under the
@@ -698,8 +723,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                 guardedIdentifier.ImportOutcome.InstalledModelId = installed!.ModelId;
                 return;
             }
-
-            replacesInstalledVersion = installed != null;
         }
         else
         {
@@ -716,19 +739,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                     compiledModel.ModelId);
                 return;
             }
-
-            replacesInstalledVersion = await EmbeddedCkModelImportGuard.FindInstalledAsync(mongoDbRepositoryDataSource,
-                compiledModel.ModelId.Name) != null;
-        }
-
-        // AB#8947: readers in other processes see the held lock through CkModelImportLockCache at most one TTL late.
-        // Before the installed version of the model is removed, wait until every snapshot they took before the lock was
-        // acquired has expired, so their next resolve of the model waits for this import (AB#8677). A first install
-        // removes nothing a reader could have seen and does not wait.
-        if (replacesInstalledVersion)
-        {
-            await _importLockCache.WaitUntilForeignSnapshotsExpiredAsync(lockAcquiredAt,
-                cancellationToken ?? CancellationToken.None);
         }
 
         // Insert model with Importing state (now safe because we have the lock)
