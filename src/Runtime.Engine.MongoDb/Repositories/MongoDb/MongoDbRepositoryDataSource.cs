@@ -20,7 +20,8 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
-internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongoDbRepositoryDataSource
+internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongoDbRepositoryDataSource,
+    ICkModelImportLockScope
 {
     /// <summary>Prefix of the lock id of a CK model import lock; the model name follows it.</summary>
     internal const string ModelImportLockIdPrefix = "ck_model_import_";
@@ -34,6 +35,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private readonly ILogger<MongoDbRepositoryDataSource> _logger;
     private readonly IndexStateService _indexStateService;
     private readonly ICkCacheService? _ckCacheService;
+    private readonly Lazy<string> _importLockScopeKey;
 
     public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger,
         IUserRepositoryAccess repositoryAccess, string databaseName,
@@ -89,7 +91,17 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // Initialize index state service
         _indexStateService = new IndexStateService(_ckTypes, logger);
+
+        _importLockScopeKey = new Lazy<string>(() =>
+        {
+            var database = _repository.GetCollection(new LockMongoDataSourceMapper()).GetMongoCollection().Database;
+            var servers = string.Join(",", database.Client.Settings.Servers.Select(server => server.ToString()));
+            return $"{servers}/{database.DatabaseNamespace.DatabaseName}";
+        });
     }
+
+    /// <inheritdoc />
+    public string ImportLockScopeKey => _importLockScopeKey.Value;
 
     public async Task<IOctoSession> GetSessionAsync()
     {
@@ -1543,7 +1555,28 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             throw;
         }
 
-        return lockService;
+        // AB#8947: readers in this process see the import with their next resolve, not only after the cache TTL.
+        CkModelImportLockCache.Shared.NotifyImportLockChanged(this);
+        return new CacheNotifyingLockHandle(lockService, this);
+    }
+
+    /// <summary>AB#8947: releases the import lock and drops the process's cached answer of the running imports.</summary>
+    private sealed class CacheNotifyingLockHandle(IDistributedLockHandle inner, ICkMongoDbRepositoryDataSource dataSource)
+        : IDistributedLockHandle
+    {
+        public CancellationToken LockLostToken => inner.LockLostToken;
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await inner.DisposeAsync();
+            }
+            finally
+            {
+                CkModelImportLockCache.Shared.NotifyImportLockChanged(dataSource);
+            }
+        }
     }
 
     /// <inheritdoc />

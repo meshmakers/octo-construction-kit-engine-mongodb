@@ -101,6 +101,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     private readonly IRepositoryModelResolver _repositoryModelResolver;
     private readonly ICkModelImportAuditTrail _importAuditTrail;
     private readonly ILogger<DatabaseCkModelRepository> _logger;
+    private readonly CkModelImportLockCache _importLockCache;
 
     /// <summary>
     ///     Creates a new instance of the <see cref="DatabaseCkModelRepository" /> class.
@@ -108,10 +109,20 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     public DatabaseCkModelRepository(ILogger<DatabaseCkModelRepository> logger,
         IRepositoryModelResolver repositoryModelResolver,
         ICkModelImportAuditTrail importAuditTrail)
+        : this(logger, repositoryModelResolver, importAuditTrail, CkModelImportLockCache.Shared)
+    {
+    }
+
+    /// <summary>Test seam (AB#8947): a cache of the running imports with its own clock and lifetime.</summary>
+    internal DatabaseCkModelRepository(ILogger<DatabaseCkModelRepository> logger,
+        IRepositoryModelResolver repositoryModelResolver,
+        ICkModelImportAuditTrail importAuditTrail,
+        CkModelImportLockCache importLockCache)
     {
         _logger = logger;
         _repositoryModelResolver = repositoryModelResolver;
         _importAuditTrail = importAuditTrail;
+        _importLockCache = importLockCache;
     }
 
     /// <inheritdoc />
@@ -133,9 +144,17 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         // Not inside a transaction: its snapshot never sees the end of the import (the cache load retries its
         // transaction instead, see TenantRepository.RefreshCkCacheServiceAsync), and the importer's own re-validation
         // of the dependents runs in one.
+        // AB#8947: this runs on every tenant lookup of every request (SystemContext.IsSystemTenantExistingAsync), so the
+        // held import locks come from CkModelImportLockCache, not from a query on the lock collection per call. The
+        // lock collection is read at most once per tenant database, process and TTL (default 2 s), and again at once
+        // after an import lock of this process was acquired or released. An import in another process is seen at most
+        // one TTL late; the importer waits one TTL after acquiring the lock before it replaces an installed version
+        // (ExecuteImport), so a reader never trusts a snapshot from before the import when the old version disappears.
+        // The wait below and the failure paths read the lock collection directly.
         if (session is not IOctoSessionInternal { IsTransactionActive: true })
         {
-            var running = await dataSource.GetModelsBeingImportedAsync();
+            var running = await _importLockCache.GetModelsBeingImportedAsync(dataSource,
+                sourceIdentifierObject.CancellationToken);
             if (running.Contains(modelIdVersionRange.Name, StringComparer.Ordinal))
             {
                 _logger.LogInformation(
@@ -650,6 +669,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         // Pass the caller's cancellation token so the polling loop is interruptable.
         await using var importLock = await mongoDbRepositoryDataSource.AcquireModelImportLockAsync(
             compiledModel.ModelId.Name, cancellationToken ?? CancellationToken.None);
+        var lockAcquiredAt = _importLockCache.UtcNow;
 
         // Link the caller's token with the lock's LockLostToken: if the heartbeat detects we no
         // longer own the lock (e.g. our TTL expired under load and another service claimed it),
@@ -659,6 +679,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         cancellationToken = linkedImportCts.Token;
 
         var guardedIdentifier = sourceIdentifier as TenantDatabaseSourceIdentifier;
+        bool replacesInstalledVersion;
         if (guardedIdentifier is { GuardAgainstDowngrade: true })
         {
             // CK v2 F1.0-S1 (AB#5900, G-H1): an embedded/startup import repeats the by-name decision under the
@@ -677,6 +698,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                 guardedIdentifier.ImportOutcome.InstalledModelId = installed!.ModelId;
                 return;
             }
+
+            replacesInstalledVersion = installed != null;
         }
         else
         {
@@ -693,6 +716,19 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                     compiledModel.ModelId);
                 return;
             }
+
+            replacesInstalledVersion = await EmbeddedCkModelImportGuard.FindInstalledAsync(mongoDbRepositoryDataSource,
+                compiledModel.ModelId.Name) != null;
+        }
+
+        // AB#8947: readers in other processes see the held lock through CkModelImportLockCache at most one TTL late.
+        // Before the installed version of the model is removed, wait until every snapshot they took before the lock was
+        // acquired has expired, so their next resolve of the model waits for this import (AB#8677). A first install
+        // removes nothing a reader could have seen and does not wait.
+        if (replacesInstalledVersion)
+        {
+            await _importLockCache.WaitUntilForeignSnapshotsExpiredAsync(lockAcquiredAt,
+                cancellationToken ?? CancellationToken.None);
         }
 
         // Insert model with Importing state (now safe because we have the lock)

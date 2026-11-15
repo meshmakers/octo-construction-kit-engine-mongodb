@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- AB#8947 Fix: resolving a CK model outside a transaction no longer queries the lock collection (`SysLock`) on every
+  call. Since AB#8677 `DatabaseCkModelRepository.IsExistingAsync` asked for the running model imports first, and it
+  runs on every tenant lookup of every request (`SystemContext.TryFindTenantContextAsync` ->
+  `IsSystemTenantExistingAsync` -> `IsCkModelSatisfiedAsync`): one extra MongoDB `find` per request in every service
+  (test-2: ~2 M generated spans per day). The held import locks now come from `CkModelImportLockCache`: one answer per
+  tenant database and process, reused for at most 2 s, and dropped at once when this process acquires or releases a
+  model import lock. Bound: at most one `SysLock` read per tenant database, process and 2 s while requests arrive
+  (at most 43,200 per day and pod per busy tenant database, far less with normal traffic), plus one per local lock
+  change. Another process sees an import at most 2 s late; the importer therefore waits 2 s after acquiring the lock
+  before it replaces an installed version (in-place upgrade, re-import, downgrade), so a reader never trusts a
+  snapshot from before the import when the old version disappears (AB#8677 kept). A first install does not wait. The
+  wait for a running import, the CK cache load retry and the import's failure classification still read the lock
+  collection directly. No interface change.
 - AB#8992 Fix: the window-phase probe of a time-range downsampling query (AB#8962) no longer exhausts the tenant's
   CrateDB connection pool. On prod-2 (tenant sbeg) a MeshBoard line chart sent ~10 parallel downsampling queries on a
   time-range archive without rollup; every query ran the probe first under the resilience pipeline (retried, 30 s) and
