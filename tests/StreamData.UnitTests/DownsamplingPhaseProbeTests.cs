@@ -204,6 +204,36 @@ public class DownsamplingPhaseProbeTests
     }
 
     [Fact]
+    public async Task APhaseTakenFromTheProbeOfAnotherRange_IsCheckedLikeARememberedOne()
+    {
+        // review of PR #247 (round 2): a single phase describes only the probed range. The second query joins the
+        // running probe of another range (phase :00); its own range stores windows at :05. At one window per bin the
+        // joined phase drops every window, so it is checked, its own range is probed, and the query runs again.
+        var otherFrom = new DateTime(2026, 11, 10, 18, 37, 42, DateTimeKind.Utc);
+        var release = new TaskCompletionSource<IReadOnlyList<IReadOnlyDictionary<string, object?>>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        A.CallTo(() => _db.QueryRowsOnceAsync(A<string>._, A<string>._, A<TimeSpan>._, A<CancellationToken>._))
+            .Invokes(() => Interlocked.Increment(ref _probes))
+            .ReturnsLazily((string _, string sql, TimeSpan _, CancellationToken _) =>
+                sql.Contains("'2026-11-10 18:", StringComparison.Ordinal)
+                    ? Task.FromResult<IReadOnlyList<IReadOnlyDictionary<string, object?>>>(
+                        [new Dictionary<string, object?> { ["pmin"] = 300_000L, ["pmax"] = 300_000L }])
+                    : release.Task);
+
+        var first = NewSut().ExecuteDownsamplingQueryAsync(TimeRange, Query(From));
+        await WaitUntilAsync(() => Volatile.Read(ref _probes) == 1);
+        var second = NewSut().ExecuteDownsamplingQueryAsync(TimeRange, Query(otherFrom));
+        release.SetResult([new Dictionary<string, object?> { ["pmin"] = 0L, ["pmax"] = 0L }]);
+        await Task.WhenAll(first, second);
+
+        var secondQueries = _queries.Where(q => q.Contains("'2026-11-10 18:", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, secondQueries.Count);
+        Assert.Contains("'2026-11-10 18:30:00.000Z'::TIMESTAMP", secondQueries[0]);
+        Assert.Contains("'2026-11-10 18:35:00.000Z'::TIMESTAMP", secondQueries[1]);
+        Assert.Equal(2, _probes);
+    }
+
+    [Fact]
     public async Task OneBinPerWindow_AnEmptyResultWithAPhaseThatStillHolds_DoesNotRunTheQueryAgain()
     {
         await NewSut().ExecuteDownsamplingQueryAsync(TimeRange, Query(From));

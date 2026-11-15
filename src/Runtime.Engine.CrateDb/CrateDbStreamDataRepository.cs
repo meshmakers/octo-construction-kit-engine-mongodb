@@ -1257,7 +1257,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             _logger.LogDebug("Time-range windows in range sit at different phases; the bin axis starts at From");
         }
 
-        return new WindowPhaseAnchor(anchor, FromCache: false, key, probe.MinPhase is null);
+        // A phase another range's probe found is not proven for this range either: checked like a remembered one.
+        return new WindowPhaseAnchor(anchor, FromCache: probe.OfOtherRange, key, probe.MinPhase is null);
     }
 
     /// <summary>
@@ -1306,7 +1307,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     /// <summary>The anchor a downsampling query snaps its axis to, and where it came from.</summary>
     /// <param name="Anchor">An instant on the phase of the stored windows; null = the axis starts at From.</param>
-    /// <param name="FromCache">True when the phase was remembered, not probed for this query.</param>
+    /// <param name="FromCache">
+    /// True when the phase was not probed for this query's range: remembered, or taken from a running probe of another
+    /// range. Such a phase is checked after an empty result (one window per bin).
+    /// </param>
     /// <param name="Key">The cache key; null when no probe was possible.</param>
     /// <param name="NoWindow">True when the probe found no window in range.</param>
     private readonly record struct WindowPhaseAnchor(

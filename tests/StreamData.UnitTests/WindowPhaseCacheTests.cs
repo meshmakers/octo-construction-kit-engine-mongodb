@@ -178,8 +178,11 @@ public class WindowPhaseCacheTests
         var second = cache.GetOrStartProbe(KeyA, OtherRange, Answer(300_000, 300_000, () => otherRuns++), Ttl, () => Now);
         release.SetResult(new WindowPhaseCache.Probe(0, 0));
 
-        Assert.Equal(0, (await second).MinPhase);
-        await first;
+        var joined = await second;
+        Assert.Equal(0, joined.MinPhase);
+        // not proven for the second range: the caller checks it like a remembered phase
+        Assert.True(joined.OfOtherRange);
+        Assert.False((await first).OfOtherRange);
         Assert.Equal(0, otherRuns);
     }
 

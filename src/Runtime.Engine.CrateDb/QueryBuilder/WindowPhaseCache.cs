@@ -21,7 +21,8 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 /// wait of its query keeps running (bounded by its own budget) and fills the cache for the next query, so it holds at
 /// most one pooled connection per key. Only a single phase holds for any range; "no window" and "different phases" are
 /// answers about the probe's own range. A query with another range that joins a probe therefore takes only a single
-/// phase from it, and otherwise starts its own probe after it (still one at a time per key).
+/// phase from it, and otherwise starts its own probe after it (still one at a time per key). A phase taken from another
+/// range is marked (<see cref="Probe.OfOtherRange"/>) and treated like a remembered one: not proven for the caller's range.
 /// </para>
 /// <para>
 /// <b>Staleness.</b> An entry ends after its time to live, when the archive's tables are dropped by this process
@@ -43,7 +44,11 @@ internal sealed class WindowPhaseCache
     /// The answer of one probe: the smallest and the largest phase (<c>window_start</c> in epoch milliseconds modulo
     /// the window length), both null when the range holds no window; <see cref="Error"/> when the probe failed.
     /// </summary>
-    internal readonly record struct Probe(long? MinPhase, long? MaxPhase, Exception? Error = null)
+    /// <param name="OfOtherRange">
+    /// True when the phase was found by a probe of another range (a joined probe): like a remembered phase it is not
+    /// proven for the caller's range, so the caller treats it like one (the check after an empty result).
+    /// </param>
+    internal readonly record struct Probe(long? MinPhase, long? MaxPhase, Exception? Error = null, bool OfOtherRange = false)
     {
         /// <summary>True when every window in range sits at one phase.</summary>
         public bool IsSinglePhase => Error is null && MinPhase is { } min && MaxPhase is { } max && min == max;
@@ -145,7 +150,7 @@ internal sealed class WindowPhaseCache
     {
         var probe = await other.ConfigureAwait(false);
         return probe.IsSinglePhase
-            ? probe
+            ? probe with { OfOtherRange = true }
             : await GetOrStartProbe(key, range, run, timeToLive, now).ConfigureAwait(false);
     }
 
