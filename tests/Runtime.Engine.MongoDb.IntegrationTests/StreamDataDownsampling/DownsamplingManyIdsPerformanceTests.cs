@@ -55,7 +55,20 @@ public class DownsamplingManyIdsPerformanceTests(CrateStagingCopyFixture fixture
         Assert.True(entities >= ParallelCalls * IdsPerParallelCall,
             $"{EntityCountVariable}={entities}: at least {ParallelCalls * IdsPerParallelCall} entities are needed " +
             $"({ParallelCalls} disjoint groups of {IdsPerParallelCall} ids, {IdsPerCall} distinct ids per call)");
-        var (rtId, repository) = await CreateSeededArchiveAsync(entities);
+        var archive = await CreateSeededArchiveAsync(entities);
+        try
+        {
+            await MeasureAsync(archive, entities);
+        }
+        finally
+        {
+            // ~2.7 M rows in the CrateDB container the collection shares: leftover tables fill its 1 GB heap (AB#8679).
+            await fixture.SqlAsync($"DROP TABLE IF EXISTS {archive.Table}");
+        }
+    }
+
+    private async Task MeasureAsync(SeededArchive archive, int entities)
+    {
 
         // A relative "last 7 days" window as the board sends it: To is not on a window start, so the axis snaps (AB#8962).
         var to = SeedEnd.AddMinutes(-7);
@@ -67,7 +80,7 @@ public class DownsamplingManyIdsPerformanceTests(CrateStagingCopyFixture fixture
             for (var run = 0; run <= MeasuredRuns; run++)
             {
                 var watch = Stopwatch.StartNew();
-                var rows = await DownsampleAsync(repository, rtId, from, to, limit, ids);
+                var rows = await DownsampleAsync(archive.NewRepository(), archive.RtId, from, to, limit, ids);
                 watch.Stop();
                 RunProgress.Report($"AB#8993 downsampling limit {limit}, {IdsPerCall} ids, run {run}: {watch.ElapsedMilliseconds} ms, {rows.Count} bins");
 
@@ -78,14 +91,15 @@ public class DownsamplingManyIdsPerformanceTests(CrateStagingCopyFixture fixture
             }
         }
 
-        // Board shape: one call per OBIS group, in parallel, disjoint id sets (entities >= 3500, checked above).
+        // Board shape: one call per OBIS group, in parallel, disjoint id sets (entities >= 3500, checked above). Each call
+        // gets its own repository, as each GraphQL request gets its own tenant context in the asset repository.
         var parallel = Stopwatch.StartNew();
         var calls = await Task.WhenAll(Enumerable.Range(0, ParallelCalls).Select(async g =>
         {
             var set = Enumerable.Range(0, IdsPerParallelCall)
                 .Select(i => OctoObjectId.Parse(Id(g * IdsPerParallelCall + i))).ToList();
             var watch = Stopwatch.StartNew();
-            var rows = await DownsampleAsync(repository, rtId, from, to, 800, set);
+            var rows = await DownsampleAsync(archive.NewRepository(), archive.RtId, from, to, 800, set);
             return (rows, watch.ElapsedMilliseconds);
         }));
         RunProgress.Report($"AB#8993 {ParallelCalls} parallel calls x {IdsPerParallelCall} ids: total {parallel.ElapsedMilliseconds} ms, " +
@@ -128,7 +142,9 @@ public class DownsamplingManyIdsPerformanceTests(CrateStagingCopyFixture fixture
             .ToList();
     }
 
-    private async Task<(OctoObjectId RtId, CrateDbStreamDataRepository Repository)> CreateSeededArchiveAsync(int entities)
+    private sealed record SeededArchive(OctoObjectId RtId, string Table, Func<CrateDbStreamDataRepository> NewRepository);
+
+    private async Task<SeededArchive> CreateSeededArchiveAsync(int entities)
     {
         var tenant = CrateStagingCopyFixture.NewTenantId();
         var rtId = OctoObjectId.GenerateNewId();
@@ -171,9 +187,8 @@ public class DownsamplingManyIdsPerformanceTests(CrateStagingCopyFixture fixture
             IsTimeRange = true,
             Period = Window
         });
-        var repository = new CrateDbStreamDataRepository(NullLogger<CrateDbStreamDataRepository>.Instance,
-            A.Fake<ICkCacheService>(), fixture.Client, fixture.Client, fixture.Configuration, tenant, store,
-            A.Fake<IFormulaEngine>());
-        return (rtId, repository);
+        return new SeededArchive(rtId, table, () => new CrateDbStreamDataRepository(
+            NullLogger<CrateDbStreamDataRepository>.Instance, A.Fake<ICkCacheService>(), fixture.Client, fixture.Client,
+            fixture.Configuration, tenant, store, A.Fake<IFormulaEngine>()));
     }
 }
