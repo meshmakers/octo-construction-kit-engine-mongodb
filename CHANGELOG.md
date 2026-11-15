@@ -22,9 +22,12 @@
     or import) a time-range window of another phase into it; a probe that answers after such a write is not
     remembered. With one window per bin, an empty result on a remembered phase (or one taken from another range's
     probe) evicts it, probes this range once more and runs the query again when the windows sit at another phase.
-  Residual risk: when a series' stored phase changes without a table drop in another process, a query can drop at most
-  1/k of that series' windows (k = windows per bin) for at most the cache duration - the same loss a mixed-phase or
-  failed probe causes. Not changed: the downsampling query and the bucket-count probe of raw archives still have no
+  Residual risk: the cache key has no time part, so a phase probed in one range is used for other ranges of the same
+  filters. When a series' windows sit at different phases in different periods (for example after its delivery changed
+  without a table drop), a query with several windows per bin (k > 1) can drop at most 1/k of that series' windows in
+  the range whose phase differs. This can last longer than one cache duration, because a later probe of the other range
+  can remember its phase again. At one window per bin (k = 1) such a query returns no row, and the empty-result check
+  recovers it (evict, probe this range, run again). Not changed: the downsampling query and the bucket-count probe of raw archives still have no
   cancellation token (`IStreamDataRepository` is in the engine), so an abandoned request still finishes its main query.
 - AB#8962 Fix: downsampling a time-range archive over a window that does not start on a stored window start (a
   relative "last N days" ending at now) returns the stored values again. The bin axis started at the raw `From`
