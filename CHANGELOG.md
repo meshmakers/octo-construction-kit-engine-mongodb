@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- AB#8992 Fix: the window-phase probe of a time-range downsampling query (AB#8962) no longer exhausts the tenant's
+  CrateDB connection pool. On prod-2 (tenant sbeg) a MeshBoard line chart sent ~10 parallel downsampling queries on a
+  time-range archive without rollup; every query ran the probe first under the resilience pipeline (retried, 30 s) and
+  the pool of 32 ran dry. Now:
+  - the probe runs once, outside the resilience pipeline (no retry, no circuit-breaker sample), through the new
+    `IStreamDataDatabaseClient.QueryRowsOnceAsync` (default interface implementation for other implementers; none exists
+    outside this repository); its wait for a pooled connection and its statement share one budget;
+  - the query waits for the probe at most `StreamData:DownsamplingPhaseProbeTimeout` (**new setting**, default `5 s`),
+    then logs one warning and goes on with the unsnapped axis starting at `From` (the AB#7659 behaviour);
+  - a single phase is remembered per archive table, window length and filter set (ckTypeId, rtIds, field filters; the
+    time bounds are not part of the key) for `StreamData:DownsamplingPhaseProbeCacheDuration` (**new setting**, default
+    `00:05:00`, `0` switches the cache off). At most one probe runs per key; one its query stopped waiting for keeps
+    running for at most 30 s (one pooled connection) and fills the cache for the next query. With the cache off every
+    query probes and the probe ends with the wait;
+  - the remembered phase ends when this process drops or (re)activates the archive's table and when it writes a
+    time-range window of another phase into it. With one window per bin, an empty result on a remembered phase
+    evicts it, probes once more and runs the query again when the windows sit at another phase.
+  Residual risk: when a series' stored phase changes without a table drop in another process, a query can drop at most
+  1/k of that series' windows (k = windows per bin) for at most the cache duration - the same loss a mixed-phase or
+  failed probe causes. Not changed: the downsampling query and the bucket-count probe of raw archives still have no
+  cancellation token (`IStreamDataRepository` is in the engine), so an abandoned request still finishes its main query.
 - AB#8962 Fix: downsampling a time-range archive over a window that does not start on a stored window start (a
   relative "last N days" ending at now) returns the stored values again. The bin axis started at the raw `From`
   (AB#7659), so every 15-minute bin straddled two stored windows and the fully-contained predicate dropped all of them:

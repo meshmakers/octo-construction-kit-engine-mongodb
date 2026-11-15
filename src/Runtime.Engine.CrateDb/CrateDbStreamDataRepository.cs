@@ -115,6 +115,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     public async Task EnsureArchiveCreatedAsync(ArchiveSnapshot snapshot)
     {
+        // AB#8992: activation or re-provisioning may follow a drop by another process; a remembered window phase of
+        // the table is not trusted across it.
+        _recomputeProcessState.WindowPhases.Forget(TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString()));
+
         // The tenant schema is implicit in the qualified table identifier — CrateDB creates the
         // schema on first table inside it, so no separate `CREATE SCHEMA` step is needed.
         //
@@ -638,6 +642,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // guard kept the stored values for changed nothing a rollup has to know about.
         await DetectAndRecordRetroactiveWriteAsync(
             snapshot, stored.Select(p => (p.From, p.Origin)), RecomputeChangeSource.Pipeline);
+        // AB#8992: a window written at another phase than the one remembered for this table ends that memo.
+        _recomputeProcessState.WindowPhases.ObserveWrittenWindows(qualifiedTable, stored.Select(p => p.From));
         return ThrowIfManualRowsNotStored(archiveRtId, result);
     }
 
@@ -1171,44 +1177,141 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// Probes the phase of the stored windows the downsampling query of <paramref name="q"/> will read (AB#8962),
-    /// so <see cref="DownsamplingBinQuantizer.QuantizeToGrain"/> can snap the axis origin of a time-range archive
-    /// into it. One aggregate over the same source filters (<c>MIN</c>/<c>MAX</c> of the phase). Null when the range
-    /// holds no window, the windows sit at different phases, or the probe fails - the axis then starts at From (the
-    /// AB#7659 behaviour).
+    /// The phase anchor of the stored windows the downsampling query of <paramref name="q"/> will read (AB#8962), so
+    /// <see cref="DownsamplingBinQuantizer.QuantizeToGrain"/> can snap the axis origin of a time-range archive into it.
+    /// One aggregate over the same source filters (<c>MIN</c>/<c>MAX</c> of the phase). Null when the range holds no
+    /// window, the windows sit at different phases, or the probe fails or does not answer in time - the axis then starts
+    /// at From (the AB#7659 behaviour).
     /// </summary>
-    private async Task<DateTime?> ProbeWindowPhaseAnchorAsync(CrateQueryBuilder q, TimeSpan window)
+    /// <remarks>
+    /// AB#8992: the probe ran under the resilience pipeline (retried, 30 s) before every downsampling query, and with ten
+    /// parallel chart queries on a large tenant it exhausted the tenant's CrateDB pool. Now:
+    /// <list type="bullet">
+    /// <item>a single phase is remembered per archive table, window length and filter set
+    /// (<see cref="WindowPhaseCache"/>, <see cref="StreamDataConfiguration.DownsamplingPhaseProbeCacheDuration"/>);</item>
+    /// <item>the probe runs once (<see cref="IStreamDataDatabaseClient.QueryRowsOnceAsync"/>: no retry, no breaker sample)
+    /// and the query waits for it at most <see cref="StreamDataConfiguration.DownsamplingPhaseProbeTimeout"/>, then logs
+    /// one warning and goes on unsnapped;</item>
+    /// <item>with the cache on, at most one probe runs per key; one the query stopped waiting for keeps running up to
+    /// <see cref="DetachedPhaseProbeBudget"/> and fills the cache for the next query. With the cache off, the probe
+    /// ends with the wait.</item>
+    /// </list>
+    /// </remarks>
+    /// <param name="bypassCache">Ask the database even when a phase is remembered (the remembered one proved wrong).</param>
+    private async Task<WindowPhaseAnchor> ResolveWindowPhaseAnchorAsync(CrateQueryBuilder q, TimeSpan window,
+        bool bypassCache, CancellationToken cancellationToken)
     {
         var windowMilliseconds = window.Ticks / TimeSpan.TicksPerMillisecond;
         if (windowMilliseconds <= 0 || window.Ticks % TimeSpan.TicksPerMillisecond != 0)
         {
-            return null;
+            return WindowPhaseAnchor.None;
         }
 
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileWindowPhaseProbeQuery(q, windowMilliseconds);
+        var key = new WindowPhaseCache.Key(q.TenantId, windowMilliseconds, CompileWithoutTimeBounds(q, windowMilliseconds));
+        var cache = _recomputeProcessState.WindowPhases;
+        var timeToLive = _configuration.DownsamplingPhaseProbeCacheDuration;
+        var wait = _configuration.DownsamplingPhaseProbeTimeout > TimeSpan.Zero
+            ? _configuration.DownsamplingPhaseProbeTimeout
+            : TimeSpan.FromSeconds(5);
+
+        if (timeToLive > TimeSpan.Zero && !bypassCache && cache.TryGet(key, _clock.GetUtcNow(), out var cachedPhase))
+        {
+            return new WindowPhaseAnchor(DateTime.UnixEpoch.AddMilliseconds(cachedPhase), FromCache: true, key);
+        }
+
+        _logger.LogDebug("Executing downsampling window-phase probe SQL: {Sql}", sql);
+        WindowPhaseCache.Probe probe;
         try
         {
-            var sql = new CrateQueryCompiler().CompileWindowPhaseProbeQuery(q, windowMilliseconds);
-            _logger.LogDebug("Executing downsampling window-phase probe SQL: {Sql}", sql);
-            var data = await _databaseClient.GetDataAsync(_tenantId, sql);
-            var row = data.FirstOrDefault()?.Attributes;
-            var anchor = DownsamplingBinQuantizer.PhaseAnchor(PhaseValue(row, "pmin"), PhaseValue(row, "pmax"));
-            if (anchor is null && PhaseValue(row, "pmin") is not null)
+            probe = timeToLive > TimeSpan.Zero
+                ? await cache.GetOrStartProbe(key, () => RunWindowPhaseProbeAsync(sql, DetachedPhaseProbeBudget, CancellationToken.None),
+                    timeToLive, _clock.GetUtcNow).WaitAsync(wait, cancellationToken)
+                : await RunWindowPhaseProbeAsync(sql, wait, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning(
+                "Downsampling window-phase probe of {Table} did not answer within {Wait}; the bin axis starts at From "
+                + "(the probe goes on in the background and fills the phase cache)", q.TenantId, wait);
+            return WindowPhaseAnchor.None;
+        }
+
+        if (probe.Error is { } error)
+        {
+            if (error is OperationCanceledException && cancellationToken.IsCancellationRequested)
             {
-                _logger.LogDebug("Time-range windows in range sit at different phases; the bin axis starts at From");
+                throw new OperationCanceledException("The downsampling query was cancelled.", error, cancellationToken);
             }
 
-            return anchor;
+            _logger.LogWarning(error, "Downsampling window-phase probe of {Table} failed or did not answer within {Wait}; "
+                + "the bin axis starts at From", q.TenantId, wait);
+            return WindowPhaseAnchor.None;
+        }
+
+        var anchor = DownsamplingBinQuantizer.PhaseAnchor(probe.MinPhase, probe.MaxPhase);
+        if (anchor is null && probe.MinPhase is not null)
+        {
+            _logger.LogDebug("Time-range windows in range sit at different phases; the bin axis starts at From");
+        }
+
+        return new WindowPhaseAnchor(anchor, FromCache: false, key, probe.MinPhase is null);
+    }
+
+    /// <summary>
+    /// How long a phase probe may run when the cache is on and its query no longer waits for it (AB#8992): the
+    /// interactive statement budget, so it never holds a pooled connection longer than a downsampling query may.
+    /// </summary>
+    internal static readonly TimeSpan DetachedPhaseProbeBudget = CrateResiliencePipeline.DefaultPerAttemptTimeout;
+
+    private async Task<WindowPhaseCache.Probe> RunWindowPhaseProbeAsync(string sql, TimeSpan budget,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var rows = await _databaseClient.QueryRowsOnceAsync(_tenantId, sql, budget, cancellationToken);
+            var row = rows.Count > 0 ? rows[0] : null;
+            return new WindowPhaseCache.Probe(PhaseValue(row, "pmin"), PhaseValue(row, "pmax"));
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Downsampling window-phase probe failed; the bin axis starts at From");
-            return null;
+            return new WindowPhaseCache.Probe(null, null, ex);
         }
 
         static long? PhaseValue(IReadOnlyDictionary<string, object?>? row, string column)
             => row != null && row.TryGetValue(column, out var value) && value is not null
                 ? Convert.ToInt64(value, CultureInfo.InvariantCulture)
                 : null;
+    }
+
+    /// <summary>
+    /// The probe SQL of <paramref name="q"/> without its time bounds: the cache key of the source filters (ckTypeId,
+    /// rtIds, field filters). A relative window moves From and To with every call; the phase does not.
+    /// </summary>
+    private static string CompileWithoutTimeBounds(CrateQueryBuilder q, long windowMilliseconds)
+    {
+        var (from, to) = (q.From, q.To);
+        q.WithTimeFilter(null, null);
+        try
+        {
+            return new CrateQueryCompiler().CompileWindowPhaseProbeQuery(q, windowMilliseconds);
+        }
+        finally
+        {
+            q.WithTimeFilter(from, to);
+        }
+    }
+
+    /// <summary>The anchor a downsampling query snaps its axis to, and where it came from.</summary>
+    /// <param name="Anchor">An instant on the phase of the stored windows; null = the axis starts at From.</param>
+    /// <param name="FromCache">True when the phase was remembered, not probed for this query.</param>
+    /// <param name="Key">The cache key; null when no probe was possible.</param>
+    /// <param name="NoWindow">True when the probe found no window in range.</param>
+    private readonly record struct WindowPhaseAnchor(
+        DateTime? Anchor, bool FromCache, WindowPhaseCache.Key? Key, bool NoWindow = false)
+    {
+        public static WindowPhaseAnchor None => new(null, FromCache: false, Key: null);
     }
 
     public async Task<StreamDataQueryResult> ExecuteDownsamplingQueryAsync(
@@ -1287,6 +1390,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // a window length (windows may sit at any phase), so the axis snaps in the phase of a stored window
         // (AB#8962) instead of on the grain.
         int effectiveLimit;
+        // AB#8992: the phase anchor of a time-range archive and the grain it was taken for, for the check after the query.
+        var phase = WindowPhaseAnchor.None;
+        TimeSpan? phaseGrain = null;
         // A calendar-aligned rollup rung (CalendarDay / Iso8601Week / CalendarMonth /
         // CalendarQuarter / CalendarYear) bins on its own stored calendar windows: each variable-
         // length window is one bin, keyed by window_start. A fixed-width DATE_BIN axis derived from
@@ -1330,9 +1436,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 options.From.Value, options.To.Value, grain,
                 alignOriginToGrain: snapshot.RollupAggregations is not null,
                 windowPhaseAnchor: snapshot.RollupAggregations is null
-                    ? await ProbeWindowPhaseAnchorAsync(q, grain)
+                    ? (phase = await ResolveWindowPhaseAnchorAsync(q, grain, bypassCache: false, CancellationToken.None)).Anchor
                     : null) is { } quantized)
         {
+            phaseGrain = grain;
             // AB#8962: a time-range archive's origin is From snapped down in the phase of its stored windows
             // (probed above), not the raw From. With the raw From a relative window ("last 2 days" starting at
             // 18:37:42) put every bin edge inside a stored 15-minute window and the §7 predicate dropped all of
@@ -1458,6 +1565,31 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         _logger.LogDebug("Executing downsampling SQL: {Sql}", sql);
 
         var data = await _databaseClient.GetDataAsync(_tenantId, sql);
+
+        if (data.Count == 0 && phaseGrain is { } checkedGrain
+            && phase is { FromCache: true, Key: { } phaseKey }
+            && q.DownsamplingIntervalSeconds == (long)checkedGrain.TotalSeconds)
+        {
+            // AB#8992: one bin per window (k = 1) and a remembered phase. A phase that is no longer the windows' puts
+            // every window across a bin edge, and the §7 predicate drops them all - an empty result is the only
+            // sign. Forget it, ask once more, and run the query again when the windows sit elsewhere.
+            _recomputeProcessState.WindowPhases.Evict(phaseKey);
+            var (binFrom, binTo) = (q.From, q.To);
+            q.WithTimeFilter(options.From.Value, options.To.Value);
+            var fresh = await ResolveWindowPhaseAnchorAsync(q, checkedGrain, bypassCache: true, CancellationToken.None);
+            q.WithTimeFilter(binFrom, binTo);
+            if (!fresh.NoWindow && fresh.Anchor != phase.Anchor
+                && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit!.Value, options.From.Value, options.To.Value,
+                    checkedGrain, alignOriginToGrain: false, windowPhaseAnchor: fresh.Anchor) is { } requantized)
+            {
+                _logger.LogInformation(
+                    "Remembered window phase of {Table} was stale (empty result); the downsampling query ran again", q.TenantId);
+                effectiveLimit = requantized.EffectiveLimit;
+                q.WithDownsampling(effectiveLimit, requantized.Origin, options.To.Value, requantized.IntervalSeconds);
+                sql = compiler.CompileQuery(q);
+                data = await _databaseClient.GetDataAsync(_tenantId, sql);
+            }
+        }
 
         // The SQL emits only bins that have source rows (AB#4713: joining a generate_series bin
         // axis inside CrateDB is a nested loop and scales quadratically in the bucket count).

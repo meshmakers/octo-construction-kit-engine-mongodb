@@ -96,6 +96,23 @@ public class StreamDataConfiguration
     public TimeSpan ComputedColumnBackfillSlice { get; set; } = TimeSpan.FromDays(1);
 
     /// <summary>
+    /// How long a downsampling query on a time-range archive waits for the window-phase probe (AB#8962, AB#8992)
+    /// before it goes on with the unsnapped axis starting at <c>From</c>. The probe runs once, outside the
+    /// resilience pipeline (no retry), and this bound covers the wait for a pooled connection as well. Default 5 s.
+    /// Bound to <c>StreamData:DownsamplingPhaseProbeTimeout</c>. Not positive = 5 s.
+    /// </summary>
+    public TimeSpan DownsamplingPhaseProbeTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long the process remembers the window phase a probe found for one archive, window length and filter set
+    /// (AB#8992), so repeated downsampling queries need no probe. Only a single phase is remembered. Default 5 min;
+    /// <see cref="TimeSpan.Zero"/> switches the cache off (every query probes, bounded by
+    /// <see cref="DownsamplingPhaseProbeTimeout"/>, and a probe never outlives its query). Bound to
+    /// <c>StreamData:DownsamplingPhaseProbeCacheDuration</c>.
+    /// </summary>
+    public TimeSpan DownsamplingPhaseProbeCacheDuration { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Helper method to build a connection string from individual settings. Omits the
     /// <c>Password</c> token entirely when no password is supplied so callers don't end up with a
     /// stray <c>Password=;</c> on the wire.

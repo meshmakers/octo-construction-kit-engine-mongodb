@@ -156,6 +156,35 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return dataPointDtos;
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>> QueryRowsOnceAsync(string tenantId,
+        string query, TimeSpan budget, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(budget, TimeSpan.Zero);
+
+        // No resilience pipeline: no retry (a failed probe is not repeated) and no circuit-breaker sample (an
+        // optional probe that runs out of its short budget says nothing about the cluster). One token bounds the
+        // wait for a pool slot and the statement; the driver's command timeout ends the statement on the server.
+        using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budgetSource.CancelAfter(budget);
+        var commandTimeoutSeconds = Math.Max(1, (int)Math.Ceiling(budget.TotalSeconds));
+
+        await using var lease = await LeaseConnectionAsync(tenantId, budgetSource.Token);
+        var rows = await lease.Connection.QueryAsync(new CommandDefinition(
+            query, commandTimeout: commandTimeoutSeconds, cancellationToken: budgetSource.Token));
+
+        var result = new List<IReadOnlyDictionary<string, object?>>();
+        foreach (var row in rows)
+        {
+            if (row is IDictionary<string, object?> dict)
+            {
+                result.Add(new Dictionary<string, object?>(dict, StringComparer.Ordinal));
+            }
+        }
+
+        return result;
+    }
+
     public IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
         string tenantId, string query, CancellationToken cancellationToken = default)
         => StreamRawRowsCoreAsync(tenantId, query, commandTimeoutSeconds: null, cancellationToken);
