@@ -167,6 +167,24 @@ public class CkModelImportLockCacheTests
         Assert.Empty(await otherReader);
     }
 
+    /// <summary>
+    ///     A reader found the entry expired, then another reader refreshed it before the first one reached the gate: the
+    ///     first one uses the fresh answer instead of starting a second query.
+    /// </summary>
+    [Fact]
+    public async Task ReaderReachesTheGateAfterAnotherRefreshed_UsesTheFreshAnswer()
+    {
+        var cache = new CkModelImportLockCache(Ttl, _clock);
+        var dataSource = DataSource();
+
+        // The other reader's refresh completes first ...
+        await cache.GetModelsBeingImportedAsync(dataSource, TestContext.Current.CancellationToken);
+        // ... then this reader, which found the entry expired before, enters the slow path.
+        Assert.Empty(await cache.RefreshAsync(dataSource, TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, _lockQueries);
+    }
+
     [Fact]
     public async Task StalledSharedQuery_EndsAfterTheQueryTimeout_AndTheNextReaderStartsANewOne()
     {

@@ -83,7 +83,17 @@ internal sealed class CkModelImportLockCache
             return Task.FromResult(snapshot.ModelNames);
         }
 
-        return entry.RefreshAsync(dataSource, _timeProvider, QueryTimeout, cancellationToken);
+        return entry.RefreshAsync(dataSource, _timeProvider, TimeToLive, QueryTimeout, cancellationToken);
+    }
+
+    /// <summary>
+    ///     The slow path of <see cref="GetModelsBeingImportedAsync" /> on its own, as a reader enters it after it found the
+    ///     entry expired. Test seam for the interleaving in which another reader refreshed the entry in between.
+    /// </summary>
+    internal Task<IReadOnlyList<string>> RefreshAsync(ICkMongoDbRepositoryDataSource dataSource,
+        CancellationToken cancellationToken = default)
+    {
+        return EntryOf(dataSource).RefreshAsync(dataSource, _timeProvider, TimeToLive, QueryTimeout, cancellationToken);
     }
 
     /// <summary>An import lock of the database was acquired or released in this process: drop the cached answer.</summary>
@@ -120,7 +130,7 @@ internal sealed class CkModelImportLockCache
         ///     readers and the next reader starts a new query.
         /// </summary>
         public Task<IReadOnlyList<string>> RefreshAsync(ICkMongoDbRepositoryDataSource dataSource,
-            TimeProvider timeProvider, TimeSpan queryTimeout, CancellationToken cancellationToken)
+            TimeProvider timeProvider, TimeSpan timeToLive, TimeSpan queryTimeout, CancellationToken cancellationToken)
         {
             TaskCompletionSource<IReadOnlyList<string>>? owner = null;
             Task<IReadOnlyList<string>> query;
@@ -128,6 +138,14 @@ internal sealed class CkModelImportLockCache
             lock (_gate)
             {
                 generation = Generation;
+                // Another reader may have refreshed the entry since this one found it expired.
+                var snapshot = Snapshot;
+                if (snapshot != null && snapshot.Generation == generation &&
+                    timeProvider.GetUtcNow() - snapshot.TakenAt < timeToLive)
+                {
+                    return Task.FromResult(snapshot.ModelNames);
+                }
+
                 if (_inFlight == null || _inFlight.IsCompleted || _inFlightGeneration != generation)
                 {
                     owner = new TaskCompletionSource<IReadOnlyList<string>>(

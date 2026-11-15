@@ -2469,16 +2469,18 @@ retry applies). Tests: `CkRangeRetentionImportTests.InPlaceUpgrade_WhileDependen
 MongoDB `find` on `SysLock` per request in every service. It asks `CkModelImportLockCache` first: one answer per tenant database
 (`ICkModelImportLockScope.ImportLockScopeKey` = servers + database, shared by the admin and user data source instances) and process, reused
 for at most `DefaultTimeToLive` (2 s), one query in flight per entry (concurrent readers share it; cancelled after `DefaultQueryTimeout`,
-30 s, so a stalled read cannot hold later resolves), and dropped at once when this process
+30 s, so a stalled read cannot hold later resolves; a reader re-checks the entry under its gate before it starts one), and dropped at once when this process
 acquires or releases a model import lock (`MongoDbRepositoryDataSource.AcquireModelImportLockAsync` and the release of its handle). That
 answer can predate an import in another process, or by a service on an older package (rolling deployment). Therefore a **miss** (no matching
 version) is never believed from the cache: `IsExistingAsync` asks the lock collection directly, waits for a running import of the model, and
-reads again - also when no import runs any more (it may have finished between the two reads). Hits are not re-checked. The importer does not wait for the cache. Rules: the wait loop (`CkModelImportInProgress`),
+reads again - also when no import runs any more (it may have finished between the two reads) and also after a wait on the cached answer
+(another import may have started). Hits are not re-checked. The importer does not wait for the cache. Rules: the wait loop (`CkModelImportInProgress`),
 `TenantRepository.TryGetModelsBeingImportedAsync` and `MarkIfOtherImportsRunAsync` keep reading the lock collection directly - never route
 them through the cache (a stale "running" would misclassify a failure, a stale "not running" would end a wait early); a new reader on a hot
 path uses the cache and re-checks its misses. Cost: one `SysLock` read per tenant database, process and TTL for hits; one `SysLock` and one
 more `CkModel` read per miss. The race
-of AB#8677 stays as it was (a reader that found the Available row just before the lock was taken can read elements being replaced). Tests:
+of AB#8677 stays as it was: lock check and model read are separate statements, so an import that starts between them can still make a
+reader miss or read elements being replaced. Tests:
 `CkModelImportLockCacheTests` (unit: once per TTL, local invalidation, a change during the query, single flight, a cancelled reader, a
 stalled query timing out, shared scope, `IsExistingAsync` with a counting fake, direct check on a miss, stale answer during an upgrade, import
 finished between the read and the direct check), `CkModelImportLockCacheIntegrationTests`

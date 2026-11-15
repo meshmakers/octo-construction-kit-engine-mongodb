@@ -154,21 +154,20 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         // an import took the lock can still read elements while they are replaced (the cache load retry or the
         // caller's retry applies). The wait itself and the failure paths read the lock collection directly.
         var outsideTransaction = session is not IOctoSessionInternal { IsTransactionActive: true };
-        var waitedForImport = false;
         if (outsideTransaction)
         {
             var running = await _importLockCache.GetModelsBeingImportedAsync(dataSource,
                 sourceIdentifierObject.CancellationToken);
-            waitedForImport = await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject);
+            await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject);
         }
 
         var satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
             sourceIdentifierObject.IncludeResolveFailedModels);
 
-        if (!satisfiedModels.Any() && outsideTransaction && !waitedForImport)
+        if (!satisfiedModels.Any() && outsideTransaction)
         {
-            // Read the model again even when no import runs any more: it may have finished between the first read and
-            // the direct check.
+            // Also after a wait above: another import of the model may have started before the read. Read the model
+            // again even when no import runs any more: it may have finished between the first read and the direct check.
             var running = await dataSource.GetModelsBeingImportedAsync(sourceIdentifierObject.CancellationToken);
             await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject);
             satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
