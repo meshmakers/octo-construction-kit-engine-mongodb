@@ -111,6 +111,51 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         Assert.Equal(2L, Convert.ToInt64(Assert.Single(rows)["x"], CultureInfo.InvariantCulture));
     }
 
+    /// <summary>A statement that keeps CrateDB busy for far longer than any budget below.</summary>
+    private const string LongStatement = "SELECT COUNT(*) AS \"x\" FROM generate_series(1, 2000000000)";
+
+    [Fact]
+    public async Task AProbeCancelledWhileItsStatementRuns_EndsTheStatement_AndGivesItsConnectionBack()
+    {
+        // review of PR #247: the cancellation must reach a statement that holds the only pool slot, not only the wait
+        await using var access = NewAccess(maxPoolSize: 1);
+        var client = NewClient(access);
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+        using var cancel = new CancellationTokenSource();
+
+        var started = Stopwatch.StartNew();
+        var running = client.QueryRowsOnceAsync(tenant, LongStatement, TimeSpan.FromSeconds(30), cancel.Token);
+        // the statement holds the only slot: a second probe cannot get a connection within its budget
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => client.QueryRowsOnceAsync(tenant, "SELECT 1 AS \"x\"", TimeSpan.FromMilliseconds(500), Ct));
+        Assert.False(running.IsCompleted);
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => running);
+        started.Stop();
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(10), $"took {started.Elapsed}");
+
+        var rows = await client.QueryRowsOnceAsync(tenant, "SELECT 3 AS \"x\"", TimeSpan.FromSeconds(5), Ct);
+        Assert.Equal(3L, Convert.ToInt64(Assert.Single(rows)["x"], CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public async Task AProbeWhoseBudgetRunsOutWhileItsStatementRuns_EndsTheStatement_AndGivesItsConnectionBack()
+    {
+        await using var access = NewAccess(maxPoolSize: 1);
+        var client = NewClient(access);
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+
+        var started = Stopwatch.StartNew();
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => client.QueryRowsOnceAsync(tenant, LongStatement, TimeSpan.FromSeconds(1), Ct));
+        started.Stop();
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(5), $"took {started.Elapsed}");
+
+        var rows = await client.QueryRowsOnceAsync(tenant, "SELECT 4 AS \"x\"", TimeSpan.FromSeconds(5), Ct);
+        Assert.Equal(4L, Convert.ToInt64(Assert.Single(rows)["x"], CultureInfo.InvariantCulture));
+    }
+
     private async Task<List<OctoObjectId>> CreateArchiveAsync(string tenant, OctoObjectId rtId)
     {
         var table = TenantSchema.QualifiedArchiveTable(tenant, rtId.ToString());

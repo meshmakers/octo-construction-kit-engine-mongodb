@@ -14,11 +14,13 @@
   - a single phase is remembered per archive table, window length and filter set (ckTypeId, rtIds, field filters; the
     time bounds are not part of the key) for `StreamData:DownsamplingPhaseProbeCacheDuration` (**new setting**, default
     `00:05:00`, `0` switches the cache off). At most one probe runs per key; one its query stopped waiting for keeps
-    running for at most 30 s (one pooled connection) and fills the cache for the next query. With the cache off every
-    query probes and the probe ends with the wait;
-  - the remembered phase ends when this process drops or (re)activates the archive's table and when it writes a
-    time-range window of another phase into it. With one window per bin, an empty result on a remembered phase
-    evicts it, probes once more and runs the query again when the windows sit at another phase.
+    running for at most 30 s (one pooled connection) and fills the cache for the next query. A query of another range
+    takes only a single phase from a running probe and otherwise probes its own range after it. With the cache off
+    every query probes and the probe ends with the wait;
+  - the remembered phase ends when this process drops or (re)activates the archive's table and when it writes (ingest
+    or import) a time-range window of another phase into it; a probe that answers after such a write is not
+    remembered. With one window per bin, an empty result on a remembered phase evicts it, probes once more and runs
+    the query again when the windows sit at another phase.
   Residual risk: when a series' stored phase changes without a table drop in another process, a query can drop at most
   1/k of that series' windows (k = windows per bin) for at most the cache duration - the same loss a mixed-phase or
   failed probe causes. Not changed: the downsampling query and the bucket-count probe of raw archives still have no

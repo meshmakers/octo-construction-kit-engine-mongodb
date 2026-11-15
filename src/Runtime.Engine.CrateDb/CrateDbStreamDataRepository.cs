@@ -1226,7 +1226,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         try
         {
             probe = timeToLive > TimeSpan.Zero
-                ? await cache.GetOrStartProbe(key, () => RunWindowPhaseProbeAsync(sql, DetachedPhaseProbeBudget, CancellationToken.None),
+                ? await cache.GetOrStartProbe(key, sql,
+                    () => RunWindowPhaseProbeAsync(sql, DetachedPhaseProbeBudget, CancellationToken.None),
                     timeToLive, _clock.GetUtcNow).WaitAsync(wait, cancellationToken)
                 : await RunWindowPhaseProbeAsync(sql, wait, cancellationToken);
         }
@@ -2291,6 +2292,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 if (windowedBatch.Count >= ImportBatchSize)
                 {
                     await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch, generationTracked);
+                    // AB#8992: per batch, because a later batch may fail while this one stays stored.
+                    _recomputeProcessState.WindowPhases.ObserveWrittenWindows(qualifiedTable, windowedBatch.Select(p => p.From));
                     windowedBatch.Clear();
                 }
             }
@@ -2310,6 +2313,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (windowed && windowedBatch.Count > 0)
         {
             await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch, generationTracked);
+            _recomputeProcessState.WindowPhases.ObserveWrittenWindows(qualifiedTable, windowedBatch.Select(p => p.From));
         }
         else if (!windowed && rawBatch.Count > 0)
         {

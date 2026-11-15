@@ -19,13 +19,16 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 /// <para>
 /// <b>Single flight.</b> At most one probe runs per key; concurrent queries share it. A probe that outlives the short
 /// wait of its query keeps running (bounded by its own budget) and fills the cache for the next query, so it holds at
-/// most one pooled connection per key.
+/// most one pooled connection per key. Only a single phase holds for any range; "no window" and "different phases" are
+/// answers about the probe's own range. A query with another range that joins a probe therefore takes only a single
+/// phase from it, and otherwise starts its own probe after it (still one at a time per key).
 /// </para>
 /// <para>
 /// <b>Staleness.</b> An entry ends after its time to live, when the archive's tables are dropped by this process
 /// (<see cref="Forget"/>, from <see cref="RecomputeProcessState.Forget"/>) and when this process writes a window of
 /// another phase into the table (<see cref="ObserveWrittenWindows"/>). A phase that changes in another process without a
-/// table drop is seen only after the time to live.
+/// table drop is seen only after the time to live. A probe that answers after this process wrote a window of another
+/// phase into the table does not get its answer remembered (it may have read the table before the write).
 /// </para>
 /// </remarks>
 internal sealed class WindowPhaseCache
@@ -48,9 +51,15 @@ internal sealed class WindowPhaseCache
 
     private readonly record struct Entry(long Phase, DateTimeOffset ExpiresAt);
 
-    private sealed class Flight
+    private sealed class Flight(string range)
     {
+        /// <summary>The probe statement, time bounds included: the range the answer is about.</summary>
+        public string Range { get; } = range;
+
         public Task<Probe> Task { get; set; } = System.Threading.Tasks.Task.FromResult(default(Probe));
+
+        /// <summary>Phases of the windows this process wrote into the table while the probe ran.</summary>
+        public HashSet<long> WrittenPhases { get; } = [];
     }
 
     private readonly Lock _gate = new();
@@ -105,23 +114,39 @@ internal sealed class WindowPhaseCache
     /// <summary>
     /// The running probe of <paramref name="key"/>, or a new one started with <paramref name="run"/>. A single phase the
     /// probe finds is remembered for <paramref name="timeToLive"/> (not at all when it is not positive), unless the key
-    /// was forgotten while the probe ran. The task never faults: a failure is returned in <see cref="Probe.Error"/>.
+    /// was forgotten or a window of another phase was written while the probe ran. A running probe of another
+    /// <paramref name="range"/> is joined for its single phase only; otherwise this range is probed after it. The task
+    /// never faults: a failure is returned in <see cref="Probe.Error"/>.
     /// </summary>
-    public Task<Probe> GetOrStartProbe(Key key, Func<Task<Probe>> run, TimeSpan timeToLive, Func<DateTimeOffset> now)
+    /// <param name="range">The probe statement with its time bounds; equal ranges share one answer.</param>
+    public Task<Probe> GetOrStartProbe(Key key, string range, Func<Task<Probe>> run, TimeSpan timeToLive,
+        Func<DateTimeOffset> now)
     {
         lock (_gate)
         {
             if (_inFlight.TryGetValue(key, out var running))
             {
-                return running.Task;
+                return running.Range == range
+                    ? running.Task
+                    : FollowAsync(running.Task, key, range, run, timeToLive, now);
             }
 
             // Registered before it starts, so a probe that completes at once still finds itself and removes its entry.
-            var flight = new Flight();
+            var flight = new Flight(range);
             _inFlight[key] = flight;
             flight.Task = RunAsync(key, flight, run, timeToLive, now);
             return flight.Task;
         }
+    }
+
+    /// <summary>Waits for the probe of another range; takes its answer only when it is a single phase.</summary>
+    private async Task<Probe> FollowAsync(Task<Probe> other, Key key, string range, Func<Task<Probe>> run,
+        TimeSpan timeToLive, Func<DateTimeOffset> now)
+    {
+        var probe = await other.ConfigureAwait(false);
+        return probe.IsSinglePhase
+            ? probe
+            : await GetOrStartProbe(key, range, run, timeToLive, now).ConfigureAwait(false);
     }
 
     private async Task<Probe> RunAsync(Key key, Flight flight, Func<Task<Probe>> run, TimeSpan timeToLive,
@@ -144,7 +169,8 @@ internal sealed class WindowPhaseCache
             if (_inFlight.TryGetValue(key, out var current) && ReferenceEquals(current, flight))
             {
                 _inFlight.Remove(key);
-                if (probe.IsSinglePhase && timeToLive > TimeSpan.Zero)
+                if (probe.IsSinglePhase && timeToLive > TimeSpan.Zero
+                    && flight.WrittenPhases.All(phase => phase == probe.MinPhase))
                 {
                     if (_entries.Count >= MaxEntries)
                     {
@@ -186,13 +212,15 @@ internal sealed class WindowPhaseCache
     {
         lock (_gate)
         {
-            if (_entries.Count == 0)
+            // Called on every time-range write: nothing to scan in a process that never ran a downsampling probe.
+            if (_entries.Count == 0 && _inFlight.Count == 0)
             {
                 return;
             }
 
             var keys = _entries.Where(e => e.Key.Table == qualifiedTable).ToList();
-            if (keys.Count == 0)
+            var flights = _inFlight.Where(f => f.Key.Table == qualifiedTable).ToList();
+            if (keys.Count == 0 && flights.Count == 0)
             {
                 return;
             }
@@ -206,6 +234,13 @@ internal sealed class WindowPhaseCache
                 {
                     _entries.Remove(key);
                 }
+            }
+
+            // A running probe may have read the table before these windows: its answer is remembered only when it
+            // matches every phase written meanwhile.
+            foreach (var (key, flight) in flights)
+            {
+                flight.WrittenPhases.UnionWith(startsMs.Select(ms => PhaseOf(ms, key.WindowMilliseconds)));
             }
         }
     }

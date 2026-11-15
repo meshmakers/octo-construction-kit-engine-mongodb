@@ -1945,8 +1945,9 @@ Semantics preserved:
   the query waits for it at most `StreamData:DownsamplingPhaseProbeTimeout` (5 s), and a single phase is remembered per
   table, window length and filter set (`WindowPhaseCache` in `RecomputeProcessState`,
   `StreamData:DownsamplingPhaseProbeCacheDuration`, 5 min, 0 = off; single flight per key, a probe the query stopped
-  waiting for runs on for at most 30 s and fills the cache; forgotten on table drop/activation and on an in-process write
-  of another phase; at one window per bin an empty result evicts the phase and re-probes once). Never put the probe back
+  waiting for runs on for at most 30 s and fills the cache; a query of another range takes only a single phase from it;
+  forgotten on table drop/activation and on an in-process write (ingest or import) of another phase, also while a probe
+  runs; at one window per bin an empty result evicts the phase and re-probes once). Never put the probe back
   under `GetDataAsync`: ten parallel chart queries with retried probes exhausted sbeg's pool of 32. Before AB#8962 the raw
   `From` was the origin: a relative "last 2 days" request (From 18:37:42) put every bin edge inside a stored 15-minute
   window and the §7 predicate dropped all of them (FH lab: 0/192 bins with a value, resolution-aware charts empty until
