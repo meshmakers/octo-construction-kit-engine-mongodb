@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- AB#8947 Fix: resolving a CK model outside a transaction no longer queries the lock collection (`SysLock`) on every
+  call. Since AB#8677 `DatabaseCkModelRepository.IsExistingAsync` asked for the running model imports first, and it
+  runs on every tenant lookup of every request (`SystemContext.TryFindTenantContextAsync` ->
+  `IsSystemTenantExistingAsync` -> `IsCkModelSatisfiedAsync`): one extra MongoDB `find` per request in every service
+  (test-2: ~2 M generated spans per day). The held import locks now come from `CkModelImportLockCache`: one answer per
+  tenant database and process, reused for at most 2 s, shared by concurrent readers (one query in flight, cancelled
+  after 30 s), and dropped at once when this process acquires or releases a model import lock. When the resolve finds
+  no matching version, it asks the lock collection directly, waits for a running import of the model as before
+  (AB#8677), and reads the model once more (the import may also have finished in between). A cached answer that
+  predates an import in another process, or by a service on an older package during a rolling deployment, therefore
+  does not decide a miss; the importer itself does not wait. What remains is the race of AB#8677: the lock check and
+  the model read are separate statements, so an import that starts between them can still make a reader see no
+  Available version, or read elements while they are replaced (the cache load retry or the caller's retry applies).
+  Bound: at most one `SysLock` read per tenant database, process and 2 s for resolves that find their model (at most
+  43,200 per day and pod per busy tenant database, far less with normal traffic), plus one `SysLock` read and one more
+  `CkModel` read per resolve that finds none. The wait loop, the CK cache load retry and the import's failure
+  classification still read the lock collection directly. No interface change.
 - AB#8992 Fix: the window-phase probe of a time-range downsampling query (AB#8962) no longer exhausts the tenant's
   CrateDB connection pool. On prod-2 (tenant sbeg) a MeshBoard line chart sent ~10 parallel downsampling queries on a
   time-range archive without rollup; every query ran the probe first under the resilience pipeline (retried, 30 s) and

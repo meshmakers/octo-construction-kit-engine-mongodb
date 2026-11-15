@@ -101,6 +101,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     private readonly IRepositoryModelResolver _repositoryModelResolver;
     private readonly ICkModelImportAuditTrail _importAuditTrail;
     private readonly ILogger<DatabaseCkModelRepository> _logger;
+    private readonly CkModelImportLockCache _importLockCache;
 
     /// <summary>
     ///     Creates a new instance of the <see cref="DatabaseCkModelRepository" /> class.
@@ -108,10 +109,20 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     public DatabaseCkModelRepository(ILogger<DatabaseCkModelRepository> logger,
         IRepositoryModelResolver repositoryModelResolver,
         ICkModelImportAuditTrail importAuditTrail)
+        : this(logger, repositoryModelResolver, importAuditTrail, CkModelImportLockCache.Shared)
+    {
+    }
+
+    /// <summary>Test seam (AB#8947): a cache of the running imports with its own clock and lifetime.</summary>
+    internal DatabaseCkModelRepository(ILogger<DatabaseCkModelRepository> logger,
+        IRepositoryModelResolver repositoryModelResolver,
+        ICkModelImportAuditTrail importAuditTrail,
+        CkModelImportLockCache importLockCache)
     {
         _logger = logger;
         _repositoryModelResolver = repositoryModelResolver;
         _importAuditTrail = importAuditTrail;
+        _importLockCache = importLockCache;
     }
 
     /// <inheritdoc />
@@ -133,23 +144,35 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         // Not inside a transaction: its snapshot never sees the end of the import (the cache load retries its
         // transaction instead, see TenantRepository.RefreshCkCacheServiceAsync), and the importer's own re-validation
         // of the dependents runs in one.
-        if (session is not IOctoSessionInternal { IsTransactionActive: true })
+        // AB#8947: this runs on every tenant lookup of every request (SystemContext.IsSystemTenantExistingAsync), so the
+        // held import locks come from CkModelImportLockCache (one query per tenant database, process and 2 s, dropped
+        // at once when this process acquires or releases an import lock), not from a query on the lock collection per
+        // call. That answer may be up to 2 s old when the import runs in another process, or in a service on an older
+        // package that does not signal the cache. So when no matching version is found, the lock collection is asked
+        // directly before the miss is believed: a running import of the model is then waited for as above, and the
+        // model is read once more. A hit is never re-checked. Remaining race, unchanged since AB#8677: a reader that found the Available row just before
+        // an import took the lock can still read elements while they are replaced (the cache load retry or the
+        // caller's retry applies). The wait itself and the failure paths read the lock collection directly.
+        var outsideTransaction = session is not IOctoSessionInternal { IsTransactionActive: true };
+        if (outsideTransaction)
         {
-            var running = await dataSource.GetModelsBeingImportedAsync();
-            if (running.Contains(modelIdVersionRange.Name, StringComparer.Ordinal))
-            {
-                _logger.LogInformation(
-                    "Dependency '{Dependency}' is resolved while CK model '{CkModelName}' is being imported; waiting for the import",
-                    modelIdVersionRange, modelIdVersionRange.Name);
-                // One deadline for the whole resolve, cancelled with its caller (AB#8677).
-                await CkModelImportInProgress.WaitUntilFinishedAsync(dataSource,
-                    name => name == modelIdVersionRange.Name, sourceIdentifierObject.ImportWaitDeadline,
-                    sourceIdentifierObject.CancellationToken);
-            }
+            var running = await _importLockCache.GetModelsBeingImportedAsync(dataSource,
+                sourceIdentifierObject.CancellationToken);
+            await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject);
         }
 
         var satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
             sourceIdentifierObject.IncludeResolveFailedModels);
+
+        if (!satisfiedModels.Any() && outsideTransaction)
+        {
+            // Also after a wait above: another import of the model may have started before the read. Read the model
+            // again even when no import runs any more: it may have finished between the first read and the direct check.
+            var running = await dataSource.GetModelsBeingImportedAsync(sourceIdentifierObject.CancellationToken);
+            await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject);
+            satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
+                sourceIdentifierObject.IncludeResolveFailedModels);
+        }
 
         if (!satisfiedModels.Any())
         {
@@ -162,6 +185,28 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             .First();
 
         return new ModelExistingResult { Exists = true, ModelId = latestSatisfiedModel.Id };
+    }
+
+    /// <summary>
+    ///     AB#8677: waits for the import of the model of <paramref name="modelIdVersionRange" /> when
+    ///     <paramref name="running" /> names it. Returns whether it waited.
+    /// </summary>
+    private async Task<bool> WaitIfBeingImportedAsync(IReadOnlyList<string> running,
+        CkModelIdVersionRange modelIdVersionRange, TenantDatabaseSourceIdentifier sourceIdentifier)
+    {
+        if (!running.Contains(modelIdVersionRange.Name, StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        _logger.LogInformation(
+            "Dependency '{Dependency}' is resolved while CK model '{CkModelName}' is being imported; waiting for the import",
+            modelIdVersionRange, modelIdVersionRange.Name);
+        // One deadline for the whole resolve, cancelled with its caller (AB#8677).
+        await CkModelImportInProgress.WaitUntilFinishedAsync(sourceIdentifier.MongoDbRepositoryDataSource,
+            name => name == modelIdVersionRange.Name, sourceIdentifier.ImportWaitDeadline,
+            sourceIdentifier.CancellationToken);
+        return true;
     }
 
     private static async Task<List<CkModel>> FindSatisfyingModelsAsync(ICkMongoDbRepositoryDataSource dataSource,
