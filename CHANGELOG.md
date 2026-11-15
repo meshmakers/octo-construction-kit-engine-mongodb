@@ -7,14 +7,14 @@
   runs on every tenant lookup of every request (`SystemContext.TryFindTenantContextAsync` ->
   `IsSystemTenantExistingAsync` -> `IsCkModelSatisfiedAsync`): one extra MongoDB `find` per request in every service
   (test-2: ~2 M generated spans per day). The held import locks now come from `CkModelImportLockCache`: one answer per
-  tenant database and process, reused for at most 2 s, shared by concurrent readers (one query in flight), and dropped
-  at once when this process acquires or releases a model import lock. When the resolve finds no matching version, it
-  asks the lock collection directly before it believes the miss, and waits for a running import of the model as before
-  (AB#8677). So a cached answer that predates an import in another process, or by a service on an older package
+  tenant database and process, reused for at most 2 s, shared by concurrent readers (one query in flight, cancelled
+  after 30 s), and dropped at once when this process acquires or releases a model import lock. When the resolve finds
+  no matching version, it asks the lock collection directly before it believes the miss, waits for a running import of
+  the model as before (AB#8677), and reads the model once more (it may also have finished in between). So a cached answer that predates an import in another process, or by a service on an older package
   during a rolling deployment, never turns an in-place upgrade into "no Available version"; the importer itself does
   not wait. Bound: at most one `SysLock` read per tenant database, process and 2 s for resolves that find their model
-  (at most 43,200 per day and pod per busy tenant database, far less with normal traffic), plus one per resolve that
-  finds none. Unchanged since AB#8677: a reader that found the Available row just before an import took the lock can
+  (at most 43,200 per day and pod per busy tenant database, far less with normal traffic), plus one `SysLock` read and
+  one more `CkModel` read per resolve that finds none. Unchanged since AB#8677: a reader that found the Available row just before an import took the lock can
   still read elements while they are replaced (the cache load retry or the caller's retry applies). The wait loop, the
   CK cache load retry and the import's failure classification still read the lock collection directly. No interface
   change.

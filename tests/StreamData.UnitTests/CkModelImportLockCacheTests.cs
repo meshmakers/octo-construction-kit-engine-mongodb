@@ -167,6 +167,27 @@ public class CkModelImportLockCacheTests
         Assert.Empty(await otherReader);
     }
 
+    [Fact]
+    public async Task StalledSharedQuery_EndsAfterTheQueryTimeout_AndTheNextReaderStartsANewOne()
+    {
+        var cache = new CkModelImportLockCache(Ttl, _clock, queryTimeout: TimeSpan.FromMilliseconds(200));
+        var dataSource = A.Fake<ICkMongoDbRepositoryDataSource>();
+        A.CallTo(() => dataSource.GetModelsBeingImportedAsync(A<CancellationToken>._))
+            .ReturnsLazily(() =>
+            {
+                Interlocked.Increment(ref _lockQueries);
+                // A read that never answers and ignores its token.
+                return new TaskCompletionSource<IReadOnlyList<string>>().Task;
+            });
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            cache.GetModelsBeingImportedAsync(dataSource, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            cache.GetModelsBeingImportedAsync(dataSource, TestContext.Current.CancellationToken));
+
+        Assert.Equal(2, _lockQueries);
+    }
+
     /// <summary>AC 2: <c>IsExistingAsync</c> outside a transaction asks the lock collection at most once per TTL.</summary>
     [Fact]
     public async Task IsExisting_CalledRepeatedlyOutsideATransaction_QueriesTheLockCollectionOncePerTtl()
@@ -248,6 +269,32 @@ public class CkModelImportLockCacheTests
 
         Assert.True(result.Exists);
         Assert.Equal(upgraded.Id, result.ModelId);
+    }
+
+    /// <summary>
+    ///     The import finishes between the first read (no Available version) and the direct check (no lock any more): the
+    ///     model is read once more and found.
+    /// </summary>
+    [Fact]
+    public async Task IsExisting_ImportFinishesBetweenTheReadAndTheDirectCheck_FindsTheNewVersion()
+    {
+        var cache = new CkModelImportLockCache(Ttl, _clock);
+        var dataSource = DataSource();
+        var upgraded = new CkModel
+        {
+            Id = new CkModelId("Basic-1.3.0"), ModelId = "Basic", ModelState = ModelState.Available
+        };
+        A.CallTo(() => dataSource.CkModels.FindManyAsync(A<IOctoSession>._,
+                A<Expression<Func<CkModel, bool>>>._, A<int?>._, A<int?>._))
+            .Returns(Task.FromResult<ICollection<CkModel>>([])).Once()
+            .Then.Returns(Task.FromResult<ICollection<CkModel>>([upgraded]));
+        var source = new TenantDatabaseSourceIdentifier(A.Fake<IOctoSession>(), dataSource, "tenant-x");
+
+        var result = await NewRepository(cache).IsExistingAsync(new CkModelIdVersionRange("Basic", "[1.0,2.0)"), source);
+
+        Assert.True(result.Exists);
+        Assert.Equal(upgraded.Id, result.ModelId);
+        Assert.Equal(2, _lockQueries);
     }
 
     private static DatabaseCkModelRepository NewRepository(CkModelImportLockCache cache) =>

@@ -149,8 +149,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         // at once when this process acquires or releases an import lock), not from a query on the lock collection per
         // call. That answer may be up to 2 s old when the import runs in another process, or in a service on an older
         // package that does not signal the cache. So when no matching version is found, the lock collection is asked
-        // directly before the miss is believed: a running import of the model is then waited for as above. A hit is
-        // never re-checked. Remaining race, unchanged since AB#8677: a reader that found the Available row just before
+        // directly before the miss is believed: a running import of the model is then waited for as above, and the
+        // model is read once more. A hit is never re-checked. Remaining race, unchanged since AB#8677: a reader that found the Available row just before
         // an import took the lock can still read elements while they are replaced (the cache load retry or the
         // caller's retry applies). The wait itself and the failure paths read the lock collection directly.
         var outsideTransaction = session is not IOctoSessionInternal { IsTransactionActive: true };
@@ -167,12 +167,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
 
         if (!satisfiedModels.Any() && outsideTransaction && !waitedForImport)
         {
+            // Read the model again even when no import runs any more: it may have finished between the first read and
+            // the direct check.
             var running = await dataSource.GetModelsBeingImportedAsync(sourceIdentifierObject.CancellationToken);
-            if (await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject))
-            {
-                satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
-                    sourceIdentifierObject.IncludeResolveFailedModels);
-            }
+            await WaitIfBeingImportedAsync(running, modelIdVersionRange, sourceIdentifierObject);
+            satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
+                sourceIdentifierObject.IncludeResolveFailedModels);
         }
 
         if (!satisfiedModels.Any())

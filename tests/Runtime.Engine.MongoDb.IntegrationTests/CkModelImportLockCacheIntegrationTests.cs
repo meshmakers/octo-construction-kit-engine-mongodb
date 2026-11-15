@@ -176,24 +176,47 @@ public class CkModelImportLockCacheIntegrationTests(CkModelImportMigrationFixtur
 
             // The "old" importer: its lock is invisible to the reader's cache. Then it removes the Available version.
             var importer = NewDataSource(tenantId);
-            var importLock = await importer.AcquireModelImportLockAsync("LockRoll", ct);
-            await models.UpdateOneAsync(row, new BsonDocument("$set", new BsonDocument("modelState", 0)),
-                cancellationToken: ct);
-            Assert.Equal(1, await models.CountDocumentsAsync(
-                new BsonDocument { { "_id", "LockRoll-1.0.0" }, { "modelState", 0 } }, cancellationToken: ct));
+            var tenantDatabase = AdminDatabase(tenantId.ToLowerInvariant());
+            IDistributedLockHandle? importLock = await importer.AcquireModelImportLockAsync("LockRoll", ct);
+            try
+            {
+                await models.UpdateOneAsync(row, new BsonDocument("$set", new BsonDocument("modelState", 0)),
+                    cancellationToken: ct);
+                await tenantDatabase.RunCommandAsync<BsonDocument>(new BsonDocument("profile", 2), cancellationToken: ct);
+                var lockReadsBefore = await CountLockReadsAsync([tenantDatabase], ct);
 
-            var resolve = reader.IsExistingAsync(range, source with { ImportWaitDeadline = new() });
-            await Task.Delay(TimeSpan.FromMilliseconds(800), ct);
-            Assert.False(resolve.IsCompleted, "the reader answered while the import still held the lock");
+                var resolve = reader.IsExistingAsync(range, source with { ImportWaitDeadline = new() });
+                // Checkpoint: the reader has read the lock collection (direct check on its miss, then the wait loop).
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+                while (await CountLockReadsAsync([tenantDatabase], ct) == lockReadsBefore && DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(50, ct);
+                }
 
-            // The import finishes: the version is Available again and the lock is released.
-            await models.UpdateOneAsync(row, new BsonDocument("$set", new BsonDocument("modelState", 1)),
-                cancellationToken: ct);
-            await importLock.DisposeAsync();
+                Assert.True(await CountLockReadsAsync([tenantDatabase], ct) > lockReadsBefore,
+                    "the reader never checked the lock collection");
+                Assert.False(resolve.IsCompleted, "the reader answered while the import still held the lock");
 
-            var result = await resolve;
-            Assert.True(result.Exists);
-            Assert.Equal(new CkModelId("LockRoll-1.0.0"), result.ModelId);
+                // The import finishes: the version is Available again and the lock is released.
+                await models.UpdateOneAsync(row, new BsonDocument("$set", new BsonDocument("modelState", 1)),
+                    cancellationToken: ct);
+                await importLock.DisposeAsync();
+                importLock = null;
+
+                var result = await resolve;
+                Assert.True(result.Exists);
+                Assert.Equal(new CkModelId("LockRoll-1.0.0"), result.ModelId);
+            }
+            finally
+            {
+                if (importLock != null)
+                {
+                    await importLock.DisposeAsync();
+                }
+
+                await tenantDatabase.RunCommandAsync<BsonDocument>(new BsonDocument("profile", 0),
+                    cancellationToken: CancellationToken.None);
+            }
         }
         finally
         {

@@ -38,6 +38,12 @@ internal sealed class CkModelImportLockCache
     /// <summary>Default lifetime of a cached answer.</summary>
     internal static readonly TimeSpan DefaultTimeToLive = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    ///     Default bound of the shared query: readers join it, so a stalled read must end on its own, or every later
+    ///     resolve of the database would wait for it.
+    /// </summary>
+    internal static readonly TimeSpan DefaultQueryTimeout = TimeSpan.FromSeconds(30);
+
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, Entry> _byScope = new(StringComparer.Ordinal);
     private readonly ConditionalWeakTable<ICkMongoDbRepositoryDataSource, Entry> _byInstance = new();
@@ -45,15 +51,20 @@ internal sealed class CkModelImportLockCache
     /// <summary>The cache of this process.</summary>
     internal static CkModelImportLockCache Shared { get; } = new(DefaultTimeToLive, TimeProvider.System);
 
-    internal CkModelImportLockCache(TimeSpan timeToLive, TimeProvider timeProvider)
+    internal CkModelImportLockCache(TimeSpan timeToLive, TimeProvider timeProvider, TimeSpan? queryTimeout = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(timeToLive, TimeSpan.Zero);
         TimeToLive = timeToLive;
         _timeProvider = timeProvider;
+        QueryTimeout = queryTimeout ?? DefaultQueryTimeout;
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(QueryTimeout, TimeSpan.Zero);
     }
 
     /// <summary>How long an answer is reused.</summary>
     internal TimeSpan TimeToLive { get; }
+
+    /// <summary>How long the shared query may run before it is cancelled and the next reader starts a new one.</summary>
+    internal TimeSpan QueryTimeout { get; }
 
     /// <summary>
     ///     The names of the models being imported in the database of <paramref name="dataSource" />: the cached answer
@@ -72,7 +83,7 @@ internal sealed class CkModelImportLockCache
             return Task.FromResult(snapshot.ModelNames);
         }
 
-        return entry.RefreshAsync(dataSource, _timeProvider, cancellationToken);
+        return entry.RefreshAsync(dataSource, _timeProvider, QueryTimeout, cancellationToken);
     }
 
     /// <summary>An import lock of the database was acquired or released in this process: drop the cached answer.</summary>
@@ -105,10 +116,11 @@ internal sealed class CkModelImportLockCache
         /// <summary>
         ///     Joins the running query of this entry, or starts one. A query started before the last lock change is never
         ///     joined: it may have read the old state. The query is not cancelled by one reader; each reader stops waiting
-        ///     on its own token.
+        ///     on its own token. It is cancelled after <paramref name="queryTimeout" />, so a stalled read fails its
+        ///     readers and the next reader starts a new query.
         /// </summary>
         public Task<IReadOnlyList<string>> RefreshAsync(ICkMongoDbRepositoryDataSource dataSource,
-            TimeProvider timeProvider, CancellationToken cancellationToken)
+            TimeProvider timeProvider, TimeSpan queryTimeout, CancellationToken cancellationToken)
         {
             TaskCompletionSource<IReadOnlyList<string>>? owner = null;
             Task<IReadOnlyList<string>> query;
@@ -129,7 +141,7 @@ internal sealed class CkModelImportLockCache
 
             if (owner != null)
             {
-                _ = QueryAsync(dataSource, timeProvider, generation, owner);
+                _ = QueryAsync(dataSource, timeProvider, queryTimeout, generation, owner);
             }
 
             return query.WaitAsync(cancellationToken);
@@ -142,13 +154,14 @@ internal sealed class CkModelImportLockCache
         }
 
         private async Task QueryAsync(ICkMongoDbRepositoryDataSource dataSource, TimeProvider timeProvider,
-            long generation, TaskCompletionSource<IReadOnlyList<string>> owner)
+            TimeSpan queryTimeout, long generation, TaskCompletionSource<IReadOnlyList<string>> owner)
         {
             try
             {
+                using var timeout = new CancellationTokenSource(queryTimeout);
                 var takenAt = timeProvider.GetUtcNow();
-                var modelNames = await dataSource.GetModelsBeingImportedAsync(CancellationToken.None)
-                    .ConfigureAwait(false);
+                var modelNames = await dataSource.GetModelsBeingImportedAsync(timeout.Token)
+                    .WaitAsync(timeout.Token).ConfigureAwait(false);
                 // Stored with the generation read before the query: if a lock changed meanwhile, the answer is stale
                 // at once and the next reader asks again.
                 Volatile.Write(ref _snapshot, new Snapshot(modelNames, takenAt, generation));
