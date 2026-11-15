@@ -176,7 +176,7 @@ to hide a stall. Details: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.
 
 **Performance budget tests are not in the CI (AB#8004).** The Test step runs with
 `--filter "Category!=Performance"`. Tests that assert a wall-clock budget carry
-`[Trait("Category", "Performance")]` (today `GetRtEntitiesByInterfacePerformanceTests`, budget AB#6930) and run only in the
+`[Trait("Category", "Performance")]` (today `GetRtEntitiesByInterfacePerformanceTests`, budget AB#6930, and `DownsamplingManyIdsPerformanceTests`, budget AB#8993: < 5 s per downsampling call over 400 ids and 7 days) and run only in the
 separate pipeline `octo-construction-kit-engine-mongodb-Performance` (`azure-pipelines-performance.yml`: daily 03:30 UTC on
 `main` + manual, pool `meshmakers-ci-agents`, a breach turns the run red and files/updates a Bug tagged `perf-budget-breach`
 under the Core Sustain Feature via `pipelines/report-perf-breach.ps1`). It is not a gate: no trigger, no branch policy, no

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- AB#8993 Test: performance budget for downsampling over many ids. `DownsamplingManyIdsPerformanceTests` (trait
+  `Category=Performance`, runs only in the performance pipeline) seeds a time-range archive of 3500 entities with 15-minute
+  windows into a CrateDB testcontainer and requires every downsampling call over 400 ids and 7 days to finish in under 5 s
+  (limit 800 and 200, a relative window off the window grid, 10 parallel calls of 350 ids), with every bin complete.
+  Measured locally: 734 ms cold, 22-58 ms warm, 10 parallel calls 409-455 ms each. The analysis behind it (prod-2 tenant
+  `sbeg`, 20-65 s reported) found that the SQL shape is not the cost driver: the IN list, the `DATE_BIN` GROUP BY, the §7
+  containment and the phase snap take ~50 ms and do not grow with the history outside the window. The SQL is unchanged. The
+  resolver in the engine now prefers the hourly rollup for such windows (meshmakers/octo-construction-kit-engine#370,
+  `MinRollupPoints`).
 - AB#8947 Fix: resolving a CK model outside a transaction no longer queries the lock collection (`SysLock`) on every
   call. Since AB#8677 `DatabaseCkModelRepository.IsExistingAsync` asked for the running model imports first, and it
   runs on every tenant lookup of every request (`SystemContext.TryFindTenantContextAsync` ->

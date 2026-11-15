@@ -28,11 +28,12 @@ the fixtures drop their databases.
 ## Performance budget tests (`Category=Performance`, AB#8004)
 
 Tests that assert a **wall-clock budget** (a p95 / median / elapsed ceiling that a slower machine can miss without any
-code change) carry the xUnit trait `[Trait("Category", "Performance")]`. Today that is one class:
+code change) carry the xUnit trait `[Trait("Category", "Performance")]`. Today these are two classes:
 
 | Test | Budget | Decision |
 |---|---|---|
 | `InterfaceQuery/GetRtEntitiesByInterfacePerformanceTests` (`IndexedSort_FirstPage_StaysWithinTheDecidedBudget`) | indexed first page over 30 collections p95 <= 100 ms; one collection median <= 1.25x the type query (+5 ms timer slack) | AB#6930 |
+| `StreamDataDownsampling/DownsamplingManyIdsPerformanceTests` (`SevenDaysOverManyIds_StaysWithinFiveSecondsPerCall`) | downsampling of a time-range archive (3500 entities x 8 days of 15-minute windows, CrateDB testcontainer) over 400 ids and 7 days: every call < 5 s (limit 800 and 200, cold and warm, and 10 parallel calls of 350 ids), every bin complete. Seed ~2-4 min; `OCTO_TEST_DOWNSAMPLING_ENTITIES` raises the entity count (at least 3500, smaller values are refused) | AB#8993 |
 
 ### Why they are not in the PR / main CI
 
