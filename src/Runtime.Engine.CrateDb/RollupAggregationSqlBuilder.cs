@@ -150,6 +150,10 @@ internal static class RollupAggregationSqlBuilder
     /// <c>manual_count</c> / <c>last_manual_at</c> instead of being derived from the origin of its rows. Must
     /// be false for a raw or time-range source, whose table has no such columns.
     /// </param>
+    /// <param name="rtIdSet">
+    /// Optional set of source entities (AB#9016, late-delivery refresh): restricts the aggregation to them with
+    /// <c>rtid IN (...)</c>. Wins over <paramref name="rtIdScope"/>.
+    /// </param>
     public static string Build(
         string sourceTable,
         string targetTable,
@@ -161,7 +165,8 @@ internal static class RollupAggregationSqlBuilder
         string? rtIdScope = null,
         TimeSpan? carryLookback = null,
         IReadOnlyList<GenerationRange>? sourceGenerationRanges = null,
-        bool sourceIsRollup = false)
+        bool sourceIsRollup = false,
+        IReadOnlyCollection<string>? rtIdSet = null)
     {
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
         if (string.IsNullOrWhiteSpace(targetTable)) throw new ArgumentException("targetTable must not be empty.", nameof(targetTable));
@@ -213,16 +218,16 @@ internal static class RollupAggregationSqlBuilder
         {
             return BuildWithLocfCarry(
                 sourceTable, targetTable, rollupCkTypeId, resolved, platform, bucketStart, bucketEnd,
-                rtIdScope, carryLookback ?? DefaultCarryLookback);
+                ScopeCondition(rtIdScope, rtIdSet), carryLookback ?? DefaultCarryLookback);
         }
 
         return BuildStandard(
             sourceTable, targetTable, rollupCkTypeId, resolved, platform, bucketStart, bucketEnd,
-            sourceUsesWindowedStorage, rtIdScope, generationFilter);
+            sourceUsesWindowedStorage, ScopeCondition(rtIdScope, rtIdSet), generationFilter);
     }
 
     /// <summary>
-    /// Builds the count of the rows the statement of <see cref="Build(string, string, string, IReadOnlyList{RollupSourceAggregation}, DateTime, DateTime, bool, string?, TimeSpan?, IReadOnlyList{GenerationRange}?, bool)"/>
+    /// Builds the count of the rows the statement of <see cref="Build(string, string, string, IReadOnlyList{RollupSourceAggregation}, DateTime, DateTime, bool, string?, TimeSpan?, IReadOnlyList{GenerationRange}?, bool, IReadOnlyCollection{string}?)"/>
     /// writes for the same bucket, source scope and source generations: one row per <c>rtId</c> group of its
     /// <c>SELECT</c> (AB#8680).
     /// </summary>
@@ -247,8 +252,10 @@ internal static class RollupAggregationSqlBuilder
         bool sourceUsesWindowedStorage,
         string? rtIdScope = null,
         TimeSpan? carryLookback = null,
-        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null)
+        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null,
+        IReadOnlyCollection<string>? rtIdSet = null)
     {
+        var scopeCondition = ScopeCondition(rtIdScope, rtIdSet);
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
         if (resolved is null || resolved.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(resolved));
         if (bucketEnd <= bucketStart) throw new ArgumentException("bucketEnd must be greater than bucketStart.", nameof(bucketEnd));
@@ -267,9 +274,9 @@ internal static class RollupAggregationSqlBuilder
                 .ToString("O", CultureInfo.InvariantCulture);
             sb.Append("WHERE \"").Append(Constants.Timestamp).Append("\" >= '").Append(carryFromLiteral).Append("'::timestamp ")
               .Append("AND \"").Append(Constants.Timestamp).Append("\" < '").Append(bucketEndLiteral).AppendLine("'::timestamp");
-            if (!string.IsNullOrEmpty(rtIdScope))
+            if (scopeCondition is not null)
             {
-                sb.Append("AND \"").Append(Constants.RtId).Append("\" = '").Append(EscapeLiteral(rtIdScope)).AppendLine("'");
+                sb.Append("AND ").AppendLine(scopeCondition);
             }
         }
         else
@@ -277,7 +284,7 @@ internal static class RollupAggregationSqlBuilder
             var generationFilter = sourceGenerationRanges is null
                 ? null
                 : GenerationFilterSql.Render(GenerationFilterSql.Overlapping(sourceGenerationRanges, bucketStart, bucketEnd));
-            AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope, generationFilter);
+            AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, scopeCondition, generationFilter);
         }
 
         sb.Append("GROUP BY \"").Append(Constants.RtId).Append("\") \"expected\";");
@@ -353,7 +360,7 @@ internal static class RollupAggregationSqlBuilder
         DateTime bucketStart,
         DateTime bucketEnd,
         bool sourceUsesWindowedStorage,
-        string? rtIdScope,
+        string? scopeCondition,
         string? generationFilter)
     {
         var sb = new StringBuilder();
@@ -446,12 +453,12 @@ internal static class RollupAggregationSqlBuilder
         {
             AppendArgSourceSubquery(
                 sb, sourceTable, resolved, platform, bucketStartLiteral, bucketEndLiteral,
-                sourceUsesWindowedStorage, rtIdScope, generationFilter);
+                sourceUsesWindowedStorage, scopeCondition, generationFilter);
         }
         else
         {
             sb.Append("FROM ").AppendLine(sourceTable);
-            AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope, generationFilter);
+            AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, scopeCondition, generationFilter);
         }
         sb.Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
 
@@ -519,7 +526,7 @@ internal static class RollupAggregationSqlBuilder
         string bucketStartLiteral,
         string bucketEndLiteral,
         bool sourceUsesWindowedStorage,
-        string? rtIdScope,
+        string? scopeCondition,
         string? generationFilter)
     {
         var orderColumn = sourceUsesWindowedStorage ? Constants.WindowEnd : Constants.Timestamp;
@@ -543,7 +550,7 @@ internal static class RollupAggregationSqlBuilder
         sb.Append(",\n           ROW_NUMBER() OVER (PARTITION BY \"").Append(Constants.RtId)
           .Append("\" ORDER BY \"").Append(orderColumn).Append("\" DESC) AS \"").Append(RnLastColumn).Append('"');
         sb.AppendLine().Append("    FROM ").AppendLine(sourceTable);
-        AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope, generationFilter, indent: "    ");
+        AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, scopeCondition, generationFilter, indent: "    ");
         sb.AppendLine(") \"src\"");
     }
 
@@ -557,7 +564,7 @@ internal static class RollupAggregationSqlBuilder
         string bucketStartLiteral,
         string bucketEndLiteral,
         bool sourceUsesWindowedStorage,
-        string? rtIdScope,
+        string? scopeCondition,
         string? generationFilter,
         string indent = "")
     {
@@ -574,11 +581,11 @@ internal static class RollupAggregationSqlBuilder
             sb.Append(indent).Append("WHERE \"").Append(Constants.Timestamp).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
               .Append("AND \"").Append(Constants.Timestamp).Append("\" < '").Append(bucketEndLiteral).AppendLine("'::timestamp");
         }
-        // Per-rtId scoped recompute (AB#4184): restrict the aggregation to a single source entity so
-        // only that entity's rollup rows are recomputed (and later swept) for the range.
-        if (!string.IsNullOrEmpty(rtIdScope))
+        // Per-rtId scoped recompute (AB#4184) or set-scoped refresh (AB#9016): restrict the aggregation to those
+        // source entities so only their rollup rows are recomputed for the range.
+        if (scopeCondition is not null)
         {
-            sb.Append(indent).Append("AND \"").Append(Constants.RtId).Append("\" = '").Append(EscapeLiteral(rtIdScope)).AppendLine("'");
+            sb.Append(indent).Append("AND ").AppendLine(scopeCondition);
         }
         // Rollup source: one generation per window, the one its pointer names. Without it a source
         // window that exists in two generations (mid-recompute) would be aggregated twice.
@@ -586,6 +593,23 @@ internal static class RollupAggregationSqlBuilder
         {
             sb.Append(indent).Append("AND ").AppendLine(generationFilter);
         }
+    }
+
+    /// <summary>
+    /// The SQL condition of a recompute scope on the source's <c>rtid</c> column, or <c>null</c> for every entity: one
+    /// entity (AB#4184, <c>"rtid" = 'x'</c>) or a set (AB#9016, <c>"rtid" IN ('a', 'b')</c>, sorted so the statement is
+    /// deterministic). A set wins over a single scope; the orchestrator never passes both.
+    /// </summary>
+    internal static string? ScopeCondition(string? rtIdScope, IReadOnlyCollection<string>? rtIdSet)
+    {
+        if (rtIdSet is { Count: > 0 })
+        {
+            var members = rtIdSet.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+                .Select(id => $"'{EscapeLiteral(id)}'");
+            return $"\"{Constants.RtId}\" IN ({string.Join(", ", members)})";
+        }
+
+        return string.IsNullOrEmpty(rtIdScope) ? null : $"\"{Constants.RtId}\" = '{EscapeLiteral(rtIdScope)}'";
     }
 
     /// <summary>
@@ -606,7 +630,7 @@ internal static class RollupAggregationSqlBuilder
         IReadOnlyList<PlatformColumn> platform,
         DateTime bucketStart,
         DateTime bucketEnd,
-        string? rtIdScope,
+        string? scopeCondition,
         TimeSpan carryLookback)
     {
         var sb = new StringBuilder();
@@ -623,9 +647,7 @@ internal static class RollupAggregationSqlBuilder
         // in-bucket value. Carry rows sort last (they are not real in-bucket observations).
         var hasArg = HasArgBinding(resolved);
 
-        var scopePredicate = string.IsNullOrEmpty(rtIdScope)
-            ? string.Empty
-            : $" AND \"{Constants.RtId}\" = '{EscapeLiteral(rtIdScope)}'";
+        var scopePredicate = scopeCondition is null ? string.Empty : $" AND {scopeCondition}";
 
         AppendInsertColumnList(sb, targetTable, resolved, platform);
 

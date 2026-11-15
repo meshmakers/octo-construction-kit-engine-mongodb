@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -39,6 +40,26 @@ internal static class RetroactiveWriteDetector
         DateTime detectedAt,
         TimeSpan? maxRetroactiveReach,
         out ArchiveDirtyWindow window,
+        out bool reachCapped) =>
+        TryBuildDirtyWindow(
+            consumedWatermark, timestamps.Select(ts => (ts, OctoObjectId.Empty)), source, detectedAt,
+            maxRetroactiveReach, maxScopedRtIds: 0, out window, out reachCapped);
+
+    /// <summary>
+    /// <see cref="TryBuildDirtyWindow(DateTime?, IEnumerable{DateTime}, RecomputeChangeSource, DateTime, TimeSpan?, out ArchiveDirtyWindow, out bool)"/>
+    /// that also records which series made the window dirty (AB#9016): <see cref="ArchiveDirtyWindow.RtIds"/> holds the
+    /// distinct rtIds of exactly the rows that went into the window (retroactive and within the reach cap). It stays
+    /// <c>null</c> - every series, as before - when those rows carry more than <paramref name="maxScopedRtIds"/> distinct
+    /// rtIds, or <paramref name="maxScopedRtIds"/> is zero.
+    /// </summary>
+    public static bool TryBuildDirtyWindow(
+        DateTime? consumedWatermark,
+        IEnumerable<(DateTime Timestamp, OctoObjectId RtId)> rows,
+        RecomputeChangeSource source,
+        DateTime detectedAt,
+        TimeSpan? maxRetroactiveReach,
+        int maxScopedRtIds,
+        out ArchiveDirtyWindow window,
         out bool reachCapped)
     {
         window = null!;
@@ -60,7 +81,9 @@ internal static class RetroactiveWriteDetector
 
         DateTime? earliest = null;
         DateTime? latest = null;
-        foreach (var ts in timestamps)
+        // Collected only while it can still become the scope; above the cap the window covers every series.
+        var rtIds = maxScopedRtIds > 0 ? new HashSet<OctoObjectId>() : null;
+        foreach (var (ts, rtId) in rows)
         {
             if (ts >= watermark)
             {
@@ -83,6 +106,15 @@ internal static class RetroactiveWriteDetector
             {
                 latest = ts;
             }
+
+            if (rtIds is not null)
+            {
+                rtIds.Add(rtId);
+                if (rtIds.Count > maxScopedRtIds || rtId == OctoObjectId.Empty)
+                {
+                    rtIds = null;
+                }
+            }
         }
 
         if (earliest is null)
@@ -95,7 +127,10 @@ internal static class RetroactiveWriteDetector
             ExclusiveEndAfter(latest!.Value),
             RecomputeChangeKind.RetroactiveModify,
             source,
-            detectedAt);
+            detectedAt)
+        {
+            RtIds = RtIdSet.Of(rtIds),
+        };
         return true;
     }
 

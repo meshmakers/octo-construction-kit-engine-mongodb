@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
@@ -51,6 +52,12 @@ public static class StreamDataEngineBuilderExtensions
             .Validate(o => o.IsValid(), CrateRecomputeOptions.ValidationMessage)
             // An unusable value (a negative SweepGracePeriod) stops the service at start with the message,
             // not at the first recompute hours later.
+            .ValidateOnStart();
+
+        // AB#9016: late-delivery recompute (debounce and the rtId cap), same section, other property names.
+        builder.Services.AddOptions<RecomputeLateDataOptions>()
+            .BindConfiguration(RecomputeLateDataOptions.SectionName)
+            .Validate(o => o.IsValid(), RecomputeLateDataOptions.ValidationMessage)
             .ValidateOnStart();
 
         // Register CrateDatabaseClient as singleton, exposed via multiple interfaces

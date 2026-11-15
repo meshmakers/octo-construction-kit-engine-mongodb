@@ -82,6 +82,83 @@ internal static class RollupRecomputeSqlBuilder
             (skipExisting ? " ON CONFLICT DO NOTHING;" : ";");
     }
 
+    /// <summary>
+    /// Builds the in-place upsert of a set-scoped refresh (AB#9016) for the staged windows that start inside
+    /// <c>[from, to)</c>: every staged row is written into the live table at <paramref name="activeGeneration"/> - the
+    /// generation the readers select for its window and rtId today (<see cref="QueryBuilder.GenerationFilterSql.RenderActiveGeneration"/>)
+    /// - and replaces the row stored there. No new generation, so neither a pointer flip nor a sweep follows.
+    /// </summary>
+    /// <param name="liveTable">The rollup's live table.</param>
+    /// <param name="stagingTable">The staging table holding the refreshed rows (generation 0).</param>
+    /// <param name="columnNames">Every column of the staged rows except <c>generation</c>; the key columns among them stay.</param>
+    /// <param name="activeGeneration">SQL expression over <c>window_start</c> and <c>rtid</c> yielding the active generation.</param>
+    /// <param name="from">Inclusive slice start (window start).</param>
+    /// <param name="to">Exclusive slice end (window start).</param>
+    public static string BuildUpsertFromStagingAtActiveGenerationSlice(
+        string liveTable, string stagingTable, IReadOnlyList<string> columnNames, string activeGeneration,
+        DateTime from, DateTime to)
+    {
+        if (columnNames.Count == 0)
+        {
+            throw new ArgumentException("columnNames must not be empty", nameof(columnNames));
+        }
+
+        var keyColumns = new[] { Constants.WindowStart, Constants.WindowEnd, Constants.RtId, Constants.CkTypeId, Constants.Generation };
+        var cols = string.Join(", ", columnNames.Select(c => $"\"{c}\""));
+        var updates = string.Join(", ", columnNames
+            .Where(c => !keyColumns.Contains(c, StringComparer.Ordinal))
+            .Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""));
+        return
+            $"INSERT INTO {liveTable} ({cols}, \"{Constants.Generation}\") " +
+            $"SELECT {cols}, {activeGeneration} FROM {stagingTable} WHERE {WindowStartIn(from, to)} " +
+            $"ON CONFLICT ({string.Join(", ", keyColumns.Select(c => $"\"{c}\""))}) DO UPDATE SET {updates};";
+    }
+
+    /// <summary>
+    /// Builds the read of the refresh marker of a set-scoped refresh (AB#9016): the <c>rtchangeddatetime</c> of the oldest
+    /// staged row, in epoch milliseconds (<c>NULL</c> when nothing was staged).
+    /// </summary>
+    /// <remarks>
+    /// A staged row gets <c>rtchangeddatetime</c> = the time it was staged (column default) and the in-place upsert copies it.
+    /// A live row of the scoped series that the upsert did not reach still carries the time it was written before - by an
+    /// earlier run, which finished before this run staged anything - so it is older than the marker. The staging table holds
+    /// only this run's rows (it is emptied before every run).
+    /// </remarks>
+    public static string BuildReadRefreshMarker(string stagingTable) =>
+        $"SELECT CAST(MIN(\"{Constants.RtChangedDateTime}\") AS BIGINT) AS \"marker\" FROM {stagingTable};";
+
+    /// <summary>
+    /// Builds the count of the live rows a set-scoped refresh (AB#9016) has written in <c>[from, to)</c>: rows of the scoped
+    /// entities at the generation the readers select (<paramref name="activeGenerationPredicate"/>) that are at least as
+    /// new as the refresh marker (<see cref="BuildReadRefreshMarker"/>). The in-place upsert mostly replaces rows that
+    /// existed before, so a plain count would not show a slice CrateDB stored only in part (AB#8680).
+    /// </summary>
+    public static string BuildCountRefreshedInScope(
+        string liveTable, DateTime from, DateTime to, string scopeCondition, string activeGenerationPredicate, long markerMs) =>
+        $"SELECT COUNT(*) FROM {liveTable} WHERE {WindowStartIn(from, to)} AND {scopeCondition} AND {activeGenerationPredicate} " +
+        $"AND {MarkerCondition(markerMs, refreshed: true)};";
+
+    /// <summary>
+    /// Builds the count (<paramref name="delete"/> false) or the delete (true) of the live rows of the scoped entities in
+    /// <c>[from, to)</c> at the generation the readers select that the refresh did not write (AB#9016): older than the refresh
+    /// marker, or every such row when nothing was staged (<paramref name="markerMs"/> null). These are buckets whose source
+    /// rows are gone; a full recompute leaves them out of the new generation, so the refresh removes them to stay
+    /// equivalent. Bounded by series × buckets of the refresh, like the upsert.
+    /// </summary>
+    public static string BuildStaleInScope(
+        string liveTable, DateTime from, DateTime to, string scopeCondition, string activeGenerationPredicate, long? markerMs,
+        bool delete)
+    {
+        var where = $"WHERE {WindowStartIn(from, to)} AND {scopeCondition} AND {activeGenerationPredicate}" +
+                    (markerMs is { } marker ? $" AND {MarkerCondition(marker, refreshed: false)}" : string.Empty);
+        return delete ? $"DELETE FROM {liveTable} {where};" : $"SELECT COUNT(*) FROM {liveTable} {where};";
+    }
+
+    // A row without rtchangeddatetime (written before the column had its default) was not written by this refresh.
+    private static string MarkerCondition(long markerMs, bool refreshed) => refreshed
+        ? $"\"{Constants.RtChangedDateTime}\" >= {markerMs.ToString(CultureInfo.InvariantCulture)}"
+        : $"(\"{Constants.RtChangedDateTime}\" < {markerMs.ToString(CultureInfo.InvariantCulture)} OR \"{Constants.RtChangedDateTime}\" IS NULL)";
+
     /// <summary>Builds the count of every row in the staging table.</summary>
     public static string BuildCountAllStaged(string stagingTable) =>
         $"SELECT COUNT(*) FROM {stagingTable};";

@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
@@ -31,6 +32,13 @@ public static class ServiceCollectionExtensions
             .Configure<IServiceProvider>((options, provider) =>
                 provider.GetService<IConfiguration>()?.GetSection(CrateRecomputeOptions.SectionName).Bind(options))
             .Validate(o => o.IsValid(), CrateRecomputeOptions.ValidationMessage)
+            .ValidateOnStart();
+
+        // AB#9016: late-delivery recompute (debounce and the rtId cap), same section, other property names.
+        services.AddOptions<RecomputeLateDataOptions>()
+            .Configure<IServiceProvider>((options, provider) =>
+                provider.GetService<IConfiguration>()?.GetSection(RecomputeLateDataOptions.SectionName).Bind(options))
+            .Validate(o => o.IsValid(), RecomputeLateDataOptions.ValidationMessage)
             .ValidateOnStart();
 
         // Register CrateDatabaseClient as singleton, exposed via multiple interfaces

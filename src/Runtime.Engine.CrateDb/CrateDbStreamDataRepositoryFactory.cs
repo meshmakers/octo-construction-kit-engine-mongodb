@@ -27,6 +27,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
     private readonly IOptions<CrateRecomputeOptions>? _recomputeOptions;
     private readonly TimeProvider? _timeProvider;
+    private readonly IOptions<RecomputeLateDataOptions>? _lateDataOptions;
 
     // The factory is a singleton, the repositories it creates are not (one per tenant context, i.e.
     // per request / orchestrator tick). What a recompute remembers "per process" therefore lives here.
@@ -41,9 +42,11 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
         IFormulaEngine formulaEngine,
         IArchiveAuditTrail? archiveAuditTrail = null,
         IOptions<CrateRecomputeOptions>? recomputeOptions = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IOptions<RecomputeLateDataOptions>? lateDataOptions = null)
     {
         _timeProvider = timeProvider;
+        _lateDataOptions = lateDataOptions;
         _loggerFactory = loggerFactory;
         _ckCacheService = ckCacheService;
         _databaseClient = databaseClient;
@@ -74,7 +77,8 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             _archiveAuditTrail,
             _recomputeOptions,
             _recomputeProcessState,
-            _timeProvider);
+            _timeProvider,
+            _lateDataOptions);
     }
 
     /// <inheritdoc />

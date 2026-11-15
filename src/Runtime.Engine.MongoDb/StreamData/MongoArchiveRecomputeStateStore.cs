@@ -145,21 +145,28 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
         return read(entity);
     }
 
-    private static RtCkArchiveDirtyWindowRecord ToRecord(ArchiveDirtyWindow window) => new()
+    /// <summary>Contract → stored record. Internal for the mapping tests.</summary>
+    internal static RtCkArchiveDirtyWindowRecord ToRecord(ArchiveDirtyWindow window) => new()
     {
         WindowStart = window.WindowStart,
         WindowEnd = window.WindowEnd,
         ChangeKind = (RtCkRecomputeChangeKindEnum)(int)window.ChangeKind,
         Source = (RtCkRecomputeChangeSourceEnum)(int)window.Source,
         DetectedAt = window.DetectedAt,
+        // AB#9016: the series of a late delivery; null = every series (as every window before 1.26.0).
+        RtIds = window.RtIds is { } rtIds ? new AttributeStringValueList(rtIds.ToStrings().ToList()) : null,
     };
 
-    private static ArchiveDirtyWindow FromRecord(RtCkArchiveDirtyWindowRecord record) => new(
+    /// <summary>Stored record → contract. Internal for the mapping tests.</summary>
+    internal static ArchiveDirtyWindow FromRecord(RtCkArchiveDirtyWindowRecord record) => new(
         record.WindowStart,
         record.WindowEnd,
         (RecomputeChangeKind)(int)record.ChangeKind,
         (RecomputeChangeSource)(int)record.Source,
-        record.DetectedAt);
+        record.DetectedAt)
+    {
+        RtIds = RtIdSet.Parse(record.RtIds),
+    };
 
     /// <summary>Contract → stored record. Internal for the mapping tests.</summary>
     internal static RtCkArchiveRecomputeRangeRecord ToRecord(ArchiveRecomputeRange range) => new()
@@ -175,6 +182,8 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
         Attempts = range.Attempts,
         NextAttemptAt = range.NextAttemptAt,
         LastError = range.LastError,
+        // AB#9016: the set a late-delivery obligation is refreshed for, inherited by the chained dependents.
+        RtIdSet = range.RtIdSet is { } rtIds ? new AttributeStringValueList(rtIds.ToStrings().ToList()) : null,
     };
 
     /// <summary>Stored record → contract. Internal for the mapping tests.</summary>
@@ -188,5 +197,9 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
         // (0, null, null) and are therefore treated as due on the next tick, at attempt zero.
         record.Attempts,
         record.NextAttemptAt,
-        string.IsNullOrEmpty(record.LastError) ? null : record.LastError);
+        string.IsNullOrEmpty(record.LastError) ? null : record.LastError)
+    {
+        // Ranges written before System.StreamData 1.26.0 carry no set and stay unscoped (AB#9016).
+        RtIdSet = RtIdSet.Parse(record.RtIdSet),
+    };
 }

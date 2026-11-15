@@ -56,6 +56,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly ArchivePlatformColumnGuard _platformColumns;
     private readonly ICrateCopyClient? _copyClient;
     private StagingCopyRunner? _stagingCopy;
+    private readonly RecomputeLateDataOptions _lateDataOptions;
 
     public CrateDbStreamDataRepository(
         ILogger<CrateDbStreamDataRepository> logger,
@@ -71,7 +72,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         IArchiveAuditTrail? archiveAuditTrail = null,
         IOptions<CrateRecomputeOptions>? recomputeOptions = null,
         RecomputeProcessState? recomputeProcessState = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IOptions<RecomputeLateDataOptions>? lateDataOptions = null)
     {
         // The clock of the sweep grace period, the restore marker, the repair queue and the dump times; a host can register its
         // own TimeProvider (tests fake it to make a deferred sweep due).
@@ -98,6 +100,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // A repository built without options (outside the host's DI) sweeps at once, as it always did; the
         // host's options default to the two hours of CrateRecomputeOptions.DefaultSweepGracePeriod.
         _sweepGracePeriod = recomputeOptions?.Value.SweepGracePeriod ?? TimeSpan.Zero;
+        // AB#9016: how many distinct rtIds a late delivery may carry and still scope the rollup recompute.
+        _lateDataOptions = lateDataOptions?.Value ?? new RecomputeLateDataOptions();
     }
 
     public Task EnsureDatabaseCreatedAsync()
@@ -440,7 +444,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         // A row the guard kept the stored values for changed nothing a rollup has to know about.
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, stored.Select(p => (p.Timestamp, p.Origin)), RecomputeChangeSource.Pipeline);
+            snapshot, stored.Select(p => (p.Timestamp, p.Origin, p.RtId)), RecomputeChangeSource.Pipeline);
         return ThrowIfManualRowsNotStored(archiveRtId, result);
     }
 
@@ -641,7 +645,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Time-range rows are keyed by their window start; a late window correction is retroactive. A row the
         // guard kept the stored values for changed nothing a rollup has to know about.
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, stored.Select(p => (p.From, p.Origin)), RecomputeChangeSource.Pipeline);
+            snapshot, stored.Select(p => (p.From, p.Origin, p.RtId)), RecomputeChangeSource.Pipeline);
         // AB#8992: a window written at another phase than the one remembered for this table ends that memo.
         _recomputeProcessState.WindowPhases.ObserveWrittenWindows(qualifiedTable, stored.Select(p => p.From));
         return ThrowIfManualRowsNotStored(archiveRtId, result);
@@ -2610,6 +2614,21 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return RecomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// AB#9016: the in-place refresh of a late delivery, see
+    /// <see cref="CrateDbArchiveRecomputeExecutor.ExecuteScopedRefreshAsync"/>. Overridden here because this repository
+    /// is the executor the tenant context hands the orchestrator; without it the interface's per-rtId fallback would run.
+    /// </remarks>
+    public Task<RecomputeExecutionResult> ExecuteScopedRefreshAsync(
+        ArchiveSnapshot source,
+        RollupArchiveSnapshot rollup,
+        DateTime rangeStart,
+        DateTime rangeEnd,
+        RtIdSet rtIds,
+        CancellationToken cancellationToken)
+        => RecomputeExecutor.ExecuteScopedRefreshAsync(source, rollup, rangeStart, rangeEnd, rtIds, cancellationToken);
+
     // --- Rollup consistency after a restore (AB#6968) --------------------------------------------------
 
     private RestoreReconcileMarker ReconcileMarker => new(
@@ -2769,7 +2788,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// enumeration so the common forward-ingest path stays untouched.
     /// </summary>
     private async Task DetectAndRecordRetroactiveWriteAsync(
-        ArchiveSnapshot snapshot, IEnumerable<(DateTime Timestamp, ArchiveRowOrigin Origin)> rows,
+        ArchiveSnapshot snapshot, IEnumerable<(DateTime Timestamp, ArchiveRowOrigin Origin, OctoObjectId RtId)> rows,
         RecomputeChangeSource source)
     {
         if (_recomputeStateStore is null || _rollupArchiveStore is null)
@@ -2779,7 +2798,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var archiveRtId = snapshot.RtId;
         var consumedWatermark = await GetConsumedWatermarkAsync(archiveRtId);
-        var materialised = rows as IReadOnlyCollection<(DateTime Timestamp, ArchiveRowOrigin Origin)> ?? rows.ToList();
+        var materialised = rows as IReadOnlyCollection<(DateTime Timestamp, ArchiveRowOrigin Origin, OctoObjectId RtId)> ?? rows.ToList();
 
         // AB#7594: a manual write is a person correcting a known window. Its dependent rollup buckets are
         // recomputed whatever the automatic reach cap says — a correction a year back must reach the yearly
@@ -2796,16 +2815,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 archiveRtId, manualWindow.WindowStart, manualWindow.WindowEnd);
         }
 
-        var timestamps = materialised.Where(r => r.Origin != ArchiveRowOrigin.Manual).Select(r => r.Timestamp);
+        // AB#9016: the window records which series the late rows belong to, so the dependent rollups refresh only those
+        // (up to StreamData:Recompute:MaxScopedRtIds distinct rtIds; above that every series, as before).
+        var automatic = materialised.Where(r => r.Origin != ArchiveRowOrigin.Manual).Select(r => (r.Timestamp, r.RtId));
         var effectiveReach = ResolveEffectiveRetroReach(snapshot);
         if (RetroactiveWriteDetector.TryBuildDirtyWindow(
-                consumedWatermark, timestamps, source, DateTime.UtcNow, effectiveReach,
+                consumedWatermark, automatic, source, DateTime.UtcNow, effectiveReach, _lateDataOptions.MaxScopedRtIds,
                 out var window, out var reachCapped))
         {
             await _recomputeStateStore.AppendDirtyWindowAsync(archiveRtId, window);
             _logger.LogInformation(
-                "Archive {ArchiveRtId}: retroactive write detected over [{Start:O}, {End:O}); dirty window recorded for recompute.",
-                archiveRtId, window.WindowStart, window.WindowEnd);
+                "Archive {ArchiveRtId}: retroactive write detected over [{Start:O}, {End:O}) for {Series}; dirty window recorded for recompute.",
+                archiveRtId, window.WindowStart, window.WindowEnd,
+                window.RtIds is { } rtIds ? $"{rtIds.Count} series" : "all series");
         }
 
         if (reachCapped && effectiveReach is { } reach && consumedWatermark is { } watermark)

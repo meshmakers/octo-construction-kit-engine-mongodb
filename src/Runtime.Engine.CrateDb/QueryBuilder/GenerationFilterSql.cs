@@ -22,14 +22,28 @@ internal static class GenerationFilterSql
     /// <summary>Renders the predicate for the given pointer entries (without a leading AND).</summary>
     public static string Render(IEnumerable<GenerationRange> ranges)
     {
+        var expression = RenderActiveGeneration(ranges);
+        return expression == "0"
+            ? $"\"{Constants.Generation}\" = 0"
+            : $"\"{Constants.Generation}\" = {expression}";
+    }
+
+    /// <summary>
+    /// The active generation of a row as an SQL expression over its <c>window_start</c> and <c>rtid</c>: the generation
+    /// of the newest pointer entry whose range (and scope) holds the row, <c>0</c> when none does. The same rule as the
+    /// read predicate of <see cref="Render"/>; the set-scoped refresh (AB#9016) writes its rows at exactly this
+    /// generation, so the readers select them.
+    /// </summary>
+    public static string RenderActiveGeneration(IEnumerable<GenerationRange> ranges)
+    {
         var ordered = ranges.OrderByDescending(r => r.Generation).ToList();
         if (ordered.Count == 0)
         {
-            return $"\"{Constants.Generation}\" = 0";
+            return "0";
         }
 
         var sb = new StringBuilder();
-        sb.Append('"').Append(Constants.Generation).Append("\" = CASE");
+        sb.Append("CASE");
         foreach (var range in ordered)
         {
             sb.Append(" WHEN (\"").Append(Constants.WindowStart).Append("\" >= ").Append(range.StartMs)
