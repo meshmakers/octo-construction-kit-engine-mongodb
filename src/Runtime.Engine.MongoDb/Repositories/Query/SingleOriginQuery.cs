@@ -135,11 +135,13 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     internal async Task<long> ExecuteCount(IOctoSession octoSession)
     {
         using var meter = _metricsContext.CreateRuntimeMeter();
-        var pipeline = PipelineDefinition<TEntity, AggregateCountResult>.Create(CreateCountPipelineStageDefinitions());
+        var stages = CreateCountPipelineStageDefinitions();
+        var pipeline = PipelineDefinition<TEntity, AggregateCountResult>.Create(stages);
 
         meter.SetCheckpoint("count pipeline created");
 
         var countResult = await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).FirstOrDefaultAsync();
+        Observe<AggregateCountResult>("count", stages, countResult == null ? 0 : 1);
 
         meter.SetCheckpoint("count executed");
 
@@ -187,162 +189,173 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         return new ResultSet<TEntity>(result, totalCount, aggregations.Item1, aggregations.Item2);
     }
 
-    public async Task<ResultSet<TEntity>> ExecuteQuery(IOctoSession octoSession, int? skip = null, int? take = null)
+    /// <summary>
+    ///     The stages that open the page pipeline (<see cref="CreatePagePipelineStageDefinitions" />). By default the
+    ///     stages of <see cref="AddPreStagesToPipelines" />; a query whose pre-stages repeat the sort that
+    ///     <see cref="AddPostStagesToPipeline" /> adds anyway overrides this without that sort, so that the page
+    ///     pipeline sorts once, right before <c>$skip</c>/<c>$limit</c> (AB#8896).
+    /// </summary>
+    protected virtual void AddPagePreStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
+        => AddPreStagesToPipelines(pipelineStageDefinitions);
+
+    /// <summary>
+    ///     The pipeline of one page (AB#8896): the stages that narrow the result set exactly as the count does
+    ///     (pre-stages, the <c>$match</c> of security, type and field filters, the association stages navigation
+    ///     filters need), then <c>$sort</c>, <c>$skip</c> and <c>$limit</c>. It returns at most
+    ///     <paramref name="take" /> documents; the enrichment lookups of <see cref="GetEnrichmentStageDefinitions" />
+    ///     are not part of it - they run afterwards on the page only. It has no <c>$facet</c> and no count.
+    /// </summary>
+    internal IReadOnlyList<IPipelineStageDefinition> CreatePagePipelineStageDefinitions(int? skip, int? take)
     {
-        using var meter = _metricsContext.CreateRuntimeMeter();
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>();
 
-        // In documentation, text search must be the first place
-        AddPreStagesToPipelines(pipelineStageDefinitions);
-        // Filter for fields
+        AddPagePreStagesToPipeline(pipelineStageDefinitions);
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions != null)
         {
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
         }
 
+        // Association existence and count filters, then the sort.
+        AddPostStagesToPipeline(pipelineStageDefinitions);
+
+        if (skip is > 0)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Skip<TEntity>(skip.Value));
+        }
+
+        if (take.HasValue)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Limit<TEntity>(take.Value));
+        }
+
+        return pipelineStageDefinitions;
+    }
+
+    /// <summary>
+    ///     Observes every pipeline <see cref="ExecuteQuery" /> runs: its purpose (<c>page</c>, <c>enrichment</c>,
+    ///     <c>count</c>, <c>items</c>), its rendered stages and the number of documents it returned. Null in
+    ///     production; set by tests (AB#8896) to prove which reads a query makes.
+    /// </summary>
+    internal Action<ExecutedPipeline>? PipelineObserver { get; set; }
+
+    /// <summary>One pipeline run of <see cref="ExecuteQuery" />, reported to <see cref="PipelineObserver" />.</summary>
+    internal sealed record ExecutedPipeline(string Purpose, IReadOnlyList<BsonDocument> Stages, int DocumentCount);
+
+    private void Observe<TOutput>(string purpose, IReadOnlyList<IPipelineStageDefinition> stages, int documentCount)
+    {
+        if (PipelineObserver == null)
+        {
+            return;
+        }
+
+        var rendered = stages.Count == 0
+            ? []
+            : PipelineDefinition<TEntity, TOutput>.Create(stages)
+                .Render(new RenderArgs<TEntity>(_mongoDbDataSourceCollection.GetMongoCollection().DocumentSerializer,
+                    _mongoDbDataSourceCollection.GetMongoCollection().Settings.SerializerRegistry))
+                .Documents
+                .ToList();
+        PipelineObserver(new ExecutedPipeline(purpose, rendered, documentCount));
+    }
+
+    /// <summary>
+    ///     Runs the query. Without <paramref name="skip" /> and <paramref name="take" /> one pipeline returns all
+    ///     matching entities and the total count is their number.
+    ///     <para>
+    ///         Paged (AB#8896), the query makes separate reads instead of one <c>$facet</c> that pushed every matching
+    ///         document through the server: the page pipeline (<see cref="CreatePagePipelineStageDefinitions" />)
+    ///         returns at most <paramref name="take" /> documents, the enrichment lookups run on those documents
+    ///         only, and - when <paramref name="includeTotalCount" /> is true - the count pipeline of
+    ///         <see cref="ExecuteCount" /> counts on the server without returning a document. The reads run one after
+    ///         the other on the caller's session (a client session must not run operations concurrently); outside a
+    ///         transaction they are separate reads, not one snapshot, so a write in between can make the total count
+    ///         and the page disagree.
+    ///     </para>
+    /// </summary>
+    /// <param name="octoSession">The session the reads run in.</param>
+    /// <param name="skip">Number of entities to skip, or null.</param>
+    /// <param name="take">Maximum number of entities to return, or null. Zero returns no entity without a read.</param>
+    /// <param name="includeTotalCount">
+    ///     Paged queries only: when false no count runs, and <see cref="ResultSet{TEntity}.TotalCount" /> is a lower
+    ///     bound, not a count - <paramref name="skip" /> plus the number of returned entities, or 0 for an empty page.
+    /// </param>
+    public async Task<ResultSet<TEntity>> ExecuteQuery(IOctoSession octoSession, int? skip = null, int? take = null,
+        bool includeTotalCount = true)
+    {
+        using var meter = _metricsContext.CreateRuntimeMeter();
         var enrichmentStages = GetEnrichmentStageDefinitions();
 
-        if (enrichmentStages.Count > 0 && (skip.HasValue || take.HasValue))
+        if (!skip.HasValue && !take.HasValue)
         {
-            // Path 1: $facet optimization for queries with enrichment stages and pagination.
-            // Uses a single $facet pipeline for both count and page results:
-            // - Count branch: no sort needed, just $count
-            // - Page branch: sort + $skip + $limit
-            // Enrichment (navigation lookups) runs as a separate lightweight query
-            // on paginated entities only.
+            // Not paged: one pipeline, the total count is the number of returned entities.
+            var pipelineStageDefinitions = new List<IPipelineStageDefinition>();
 
-            // Add only association stages (no sort) to base pipeline
-            AddPrePaginationPostStagesToPipeline(pipelineStageDefinitions);
+            // In documentation, text search must be the first place
+            AddPreStagesToPipelines(pipelineStageDefinitions);
+            var filterDefinitions = CreateFilterDefinitions();
+            if (filterDefinitions != null)
+            {
+                pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+            }
+
+            AddPostStagesToPipeline(pipelineStageDefinitions);
+            pipelineStageDefinitions.AddRange(enrichmentStages);
 
             meter.SetCheckpoint("definitions created");
 
-            // Build $facet sub-pipelines
-            var sortStages = CreateSortStageDefinitions();
-
-            var pagingSubPipeline = new List<IPipelineStageDefinition>();
-            pagingSubPipeline.AddRange(sortStages); // Sort only in page branch
-            if (skip.HasValue)
-            {
-                pagingSubPipeline.Add(PipelineStageDefinitionBuilder.Skip<TEntity>(skip.Value));
-            }
-
-            if (take.HasValue)
-            {
-                pagingSubPipeline.Add(PipelineStageDefinitionBuilder.Limit<TEntity>(take.Value));
-            }
-
-            var countSubPipeline = new List<IPipelineStageDefinition>
-            {
-                PipelineStageDefinitionBuilder.Count<TEntity>() // No sort needed for count
-            };
-
-            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Facet<TEntity, QueryResult<TEntity>>(
-                new List<AggregateFacet<TEntity>>([
-                    new AggregateFacet<TEntity, TEntity>(
-                        nameof(QueryResult<TEntity>.Result).ToCamelCase(),
-                        PipelineDefinition<TEntity, TEntity>.Create(pagingSubPipeline)),
-                    new AggregateFacet<TEntity, AggregateCountResult>(
-                        nameof(QueryResult<TEntity>.TotalCount).ToCamelCase(),
-                        PipelineDefinition<TEntity, AggregateCountResult>.Create(countSubPipeline))
-                ])));
-
-            var facetPipeline =
-                PipelineDefinition<TEntity, QueryResult<TEntity>>.Create(pipelineStageDefinitions);
-            var facetResult = await _mongoDbDataSourceCollection.Aggregate(octoSession, facetPipeline)
-                .SingleOrDefaultAsync();
-
-            meter.SetCheckpoint("facet executed");
-
-            var count = facetResult?.TotalCount.FirstOrDefault()?.Count ?? 0;
-            var pageEntities = facetResult?.Result?.ToList() ?? [];
-
-            // Run enrichment on paginated entities only
-            if (pageEntities.Count > 0)
-            {
-                var enrichmentPipelineStages = new List<IPipelineStageDefinition>();
-
-                // Match only paginated entities by ID
-                enrichmentPipelineStages.Add(PipelineStageDefinitionBuilder.Match(
-                    CreateIdInFilter(pageEntities)));
-
-                // Re-apply sort to maintain page order
-                enrichmentPipelineStages.AddRange(sortStages);
-
-                // Add enrichment stages ($lookup for navigation data)
-                foreach (var stage in enrichmentStages)
-                {
-                    enrichmentPipelineStages.Add(stage);
-                }
-
-                var enrichmentPipeline =
-                    PipelineDefinition<TEntity, TEntity>.Create(enrichmentPipelineStages);
-                pageEntities = await _mongoDbDataSourceCollection.Aggregate(octoSession, enrichmentPipeline)
-                    .ToListAsync();
-
-                meter.SetCheckpoint("enrichment executed");
-            }
-
-            var aggregations = FinalizeResults(pageEntities);
-            return new ResultSet<TEntity>(pageEntities, count,
-                aggregations.Item1, aggregations.Item2);
-        }
-
-        // For Path 2 and 3, add full post-stages (associations + sort) as before
-        AddPostStagesToPipeline(pipelineStageDefinitions);
-
-        meter.SetCheckpoint("definitions created");
-
-        if (skip.HasValue || take.HasValue)
-        {
-            var pagingPipelineStageDefinitions = new List<IPipelineStageDefinition>();
-            var countPipelineStageDefinitions = new List<IPipelineStageDefinition>();
-
-            if (skip.HasValue)
-            {
-                pagingPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Skip<TEntity>(skip.Value));
-            }
-
-            if (take.HasValue)
-            {
-                pagingPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Limit<TEntity>(take.Value));
-            }
-
-            countPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Count<TEntity>());
-
-            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Facet<TEntity, QueryResult<TEntity>>(
-                new List<AggregateFacet<TEntity>>([
-                    new AggregateFacet<TEntity, TEntity>(nameof(QueryResult<TEntity>.Result).ToCamelCase(),
-                        PipelineDefinition<TEntity, TEntity>.Create(
-                            pagingPipelineStageDefinitions)),
-                    new AggregateFacet<TEntity, AggregateCountResult>(
-                        nameof(QueryResult<TEntity>.TotalCount).ToCamelCase(),
-                        PipelineDefinition<TEntity, AggregateCountResult>
-                            .Create(countPipelineStageDefinitions))
-                ])));
-
-            var pipelineDefinition = PipelineDefinition<TEntity, QueryResult<TEntity>>.Create(pipelineStageDefinitions);
-            var resultAggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);
-            var result = await resultAggregate.SingleOrDefaultAsync();
-            var aggregations = FinalizeResults(result.Result);
-            return new ResultSet<TEntity>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0,
-                aggregations.Item1, aggregations.Item2);
-        }
-        else // Return result directly if there is no paging enabled
-        {
-            // Add enrichment stages for the non-paginated case
-            foreach (var stage in enrichmentStages)
-            {
-                pipelineStageDefinitions.Add(stage);
-            }
-
             var pipelineDefinition = PipelineDefinition<TEntity, TEntity>.Create(pipelineStageDefinitions);
+            var resultNoTotalCount = await _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition)
+                .ToListAsync();
+            Observe<TEntity>("items", pipelineStageDefinitions, resultNoTotalCount.Count);
 
-            var aggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);
-            var resultNoTotalCount = await aggregate.ToListAsync();
+            meter.SetCheckpoint("query executed");
+
             var aggregations = FinalizeResults(resultNoTotalCount);
             return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count, aggregations.Item1,
                 aggregations.Item2);
         }
+
+        var pageEntities = new List<TEntity>();
+        if (take is not 0)
+        {
+            var pageStages = CreatePagePipelineStageDefinitions(skip, take);
+            pageEntities = await _mongoDbDataSourceCollection
+                .Aggregate(octoSession, PipelineDefinition<TEntity, TEntity>.Create(pageStages)).ToListAsync();
+            Observe<TEntity>("page", pageStages, pageEntities.Count);
+
+            meter.SetCheckpoint("page executed");
+        }
+
+        if (enrichmentStages.Count > 0 && pageEntities.Count > 0)
+        {
+            // Enrichment (navigation lookups) on the entities of the page only, in page order.
+            var enrichmentPipelineStages = new List<IPipelineStageDefinition>
+            {
+                PipelineStageDefinitionBuilder.Match(CreateIdInFilter(pageEntities))
+            };
+            enrichmentPipelineStages.AddRange(CreateSortStageDefinitions());
+            enrichmentPipelineStages.AddRange(enrichmentStages);
+
+            pageEntities = await _mongoDbDataSourceCollection
+                .Aggregate(octoSession, PipelineDefinition<TEntity, TEntity>.Create(enrichmentPipelineStages))
+                .ToListAsync();
+            Observe<TEntity>("enrichment", enrichmentPipelineStages, pageEntities.Count);
+
+            meter.SetCheckpoint("enrichment executed");
+        }
+
+        long totalCount;
+        if (includeTotalCount)
+        {
+            totalCount = await ExecuteCount(octoSession);
+        }
+        else
+        {
+            totalCount = pageEntities.Count == 0 ? 0 : (skip ?? 0) + pageEntities.Count;
+        }
+
+        var pageAggregations = FinalizeResults(pageEntities);
+        return new ResultSet<TEntity>(pageEntities, totalCount, pageAggregations.Item1, pageAggregations.Item2);
     }
 }

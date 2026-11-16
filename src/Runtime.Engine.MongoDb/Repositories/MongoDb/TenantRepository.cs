@@ -1022,6 +1022,17 @@ internal class TenantRepository(
     }
 
     /// <inheritdoc />
+    public async Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session,
+        RtCkId<CkTypeId> ckTypeId, RtEntityQueryOptions queryOptions, int? skip, int? take, bool includeTotalCount)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(queryOptions);
+
+        var query = await CreateRtEntitiesByTypeQueryAsync<RtEntity>(session, ckTypeId, queryOptions);
+        return await query.ExecuteQuery(session, skip, take, includeTotalCount);
+    }
+
+    /// <inheritdoc />
     public async Task<long> CountRtEntitiesByTypeAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
         RtEntityQueryOptions queryOptions)
     {
@@ -1167,9 +1178,17 @@ internal class TenantRepository(
         return (query, securityQueryFilter);
     }
 
-    public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
+    public override Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
         RtCkId<CkTypeId> ckTypeId, RtEntityQueryOptions queryOptions,
         ICollection<NavigationPair> navigationPairs, int? skip = null, int? take = null)
+    {
+        return GetRtEntitiesGraphByTypeAsync(session, ckTypeId, queryOptions, navigationPairs, skip, take, true);
+    }
+
+    /// <inheritdoc />
+    public async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
+        RtCkId<CkTypeId> ckTypeId, RtEntityQueryOptions queryOptions, ICollection<NavigationPair> navigationPairs,
+        int? skip, int? take, bool includeTotalCount)
     {
         var (query, securityQueryFilter) =
             await CreateRtEntitiesGraphByTypeQueryAsync(session, ckTypeId, queryOptions, navigationPairs);
@@ -1203,7 +1222,7 @@ internal class TenantRepository(
             return await query.ExecuteEnrichmentForIds(session, pageIds, cached.Value.TotalCount);
         }
 
-        return await query.ExecuteQuery(session, skip, take);
+        return await query.ExecuteQuery(session, skip, take, includeTotalCount);
     }
 
     public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByIdAsync(IOctoSession session,
