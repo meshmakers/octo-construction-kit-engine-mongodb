@@ -76,7 +76,8 @@ public class ArchiveReconcilerTests
 
         await NewSut().ReconcileTenantAsync(Tenant, TestContext.Current.CancellationToken);
 
-        A.CallTo(() => _store.SetStatusAsync(rt, CkArchiveStatus.Failed)).MustHaveHappenedOnceExactly();
+        A.CallTo(() => _store.SetStatusAsync(rt, CkArchiveStatus.Failed, "reconciliation: backing CrateDB table missing",
+            A<IReadOnlyList<string>>.That.IsEmpty())).MustHaveHappenedOnceExactly();
         A.CallTo(() => _audit.RecordTransitionAsync(
             Tenant, rt, CkArchiveStatus.Activated, CkArchiveStatus.Failed,
             A<string?>.That.Matches(s => s != null && s.Contains("missing", StringComparison.OrdinalIgnoreCase))))

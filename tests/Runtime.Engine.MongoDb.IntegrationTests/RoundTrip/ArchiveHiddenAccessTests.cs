@@ -73,8 +73,44 @@ public class ArchiveHiddenAccessTests(ArchiveHiddenAccessFixture fixture)
             await tenant.ImportCkModelAsync(MeterModel(new CkModelId("ArchAcc-1.1.0"), systemId, pinHidden: true));
 
             var store = tenant.GetArchiveRuntimeStore();
-            Assert.Equal(CkArchiveStatus.Failed, (await store.GetAsync(pinArchive))!.Status);
+            var failed = (await store.GetAsync(pinArchive))!;
+            Assert.Equal(CkArchiveStatus.Failed, failed.Status);
             Assert.Equal(CkArchiveStatus.Activated, (await store.GetAsync(nameArchive))!.Status);
+
+            // AB#6247: the reason and the Hidden columns round-trip through MongoDB (System.StreamData 1.27.0).
+            Assert.Equal(["Pin"], failed.HiddenColumns);
+            Assert.Contains("'Pin' (reaches the Hidden attribute 'Pin')", failed.StatusReason);
+            Assert.True(failed.IsFailedOnHiddenColumns);
+        });
+    }
+
+    /// <summary>
+    ///     AB#6247 (N2): the public entry point the stream-data services call on <c>PosUpdateTenant</c> when another
+    ///     service imported the model. Here the archive is put back to Activated after the import, as if the import ran in
+    ///     a service without stream data; the call fails it again. A later transition clears reason and columns.
+    /// </summary>
+    [Fact]
+    public async Task PublicRevalidation_FailsAnActivatedArchive_AndAnotherTransitionClearsTheReason()
+    {
+        await WithTenantAsync("archreval", async tenant =>
+        {
+            var systemId = await InstalledSystemAsync(tenant);
+            await tenant.EnableStreamDataAsync();
+            await tenant.ImportCkModelAsync(MeterModel(new CkModelId("ArchAcc-1.0.0"), systemId, pinHidden: true));
+            var pinArchive = await InsertActivatedArchiveAsync(tenant, "PinArchive", "Pin");
+            var store = tenant.GetArchiveRuntimeStore();
+            Assert.Equal(CkArchiveStatus.Activated, (await store.GetAsync(pinArchive))!.Status);
+
+            await ((ITenantContext)tenant).RevalidateArchiveAccessAsync();
+
+            var failed = (await store.GetAsync(pinArchive))!;
+            Assert.Equal(CkArchiveStatus.Failed, failed.Status);
+            Assert.Equal(["Pin"], failed.HiddenColumns);
+
+            await store.SetStatusAsync(pinArchive, CkArchiveStatus.Disabled);
+            var disabled = (await store.GetAsync(pinArchive))!;
+            Assert.Empty(disabled.HiddenColumns);
+            Assert.Null(disabled.StatusReason);
         });
     }
 

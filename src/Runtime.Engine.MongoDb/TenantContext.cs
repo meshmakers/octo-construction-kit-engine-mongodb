@@ -3413,8 +3413,10 @@ public class TenantContext : ITenantContext
     ///     already refuses such columns; this covers a model change after activation. Best-effort: a failure here is
     ///     logged as ERROR and does not fail the import that already succeeded. Skipped when the tenant has stream data
     ///     disabled, no stream-data repository is registered or the System.StreamData model is not installed.
+    ///     Public through <see cref="ITenantContext.RevalidateArchiveAccessAsync" /> (AB#6247): the stream-data services run
+    ///     it on <c>PosUpdateTenant</c> for model imports of other services.
     /// </summary>
-    internal async Task RevalidateArchiveAccessAsync()
+    public async Task RevalidateArchiveAccessAsync()
     {
         try
         {

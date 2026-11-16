@@ -787,7 +787,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)
     {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveQueryableAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
         StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
@@ -848,7 +848,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     public async Task<StreamDataQueryResult> ExecuteAggregationQueryAsync(
         OctoObjectId archiveRtId, StreamDataAggregationQueryOptions options)
     {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveQueryableAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
         // Validated ahead of the time-weighted branch below so that path is covered too. Sort orders
@@ -990,7 +990,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     public async Task<StreamDataQueryResult> ExecuteGroupedAggregationQueryAsync(
         OctoObjectId archiveRtId, StreamDataGroupedAggregationQueryOptions options)
     {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveQueryableAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
         // The group-by columns matter most here: dropping one used to merge groups that should have
@@ -1326,7 +1326,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     public async Task<StreamDataQueryResult> ExecuteDownsamplingQueryAsync(
         OctoObjectId archiveRtId, StreamDataDownsamplingQueryOptions options)
     {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveQueryableAsync(archiveRtId);
         // AB#7360: with local-day bins (TimeZone, BinOrigin or BinInterval) the bins are the local days of the range;
         // Limit does not decide their number and is not required. From and To stay required.
         if (options.HasLocalDayBins)
@@ -3714,6 +3714,52 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// AB#6247. Each path maps to one physical column (<see cref="ColumnNameMapper.PathToColumnName"/>);
+    /// <c>ALTER TABLE … DROP COLUMN IF EXISTS</c> makes a retry after a partial run converge. A table that does not
+    /// exist has nothing to drop. The standard columns (timestamp, rtid, cktypeid and the windowed ones) are never
+    /// dropped. Destructive: the stored values of the column are gone.
+    /// </remarks>
+    public async Task DropIngestedColumnStorageAsync(ArchiveSnapshot snapshot, IReadOnlyCollection<string> columnPaths,
+        CancellationToken cancellationToken = default)
+    {
+        if (snapshot.RollupAggregations is not null)
+        {
+            throw new ArchivePathInvalidException(snapshot.RtId, string.Join(", ", columnPaths),
+                "the columns of a rollup archive are derived from its aggregations.");
+        }
+
+        if (columnPaths.Count == 0 || !await ArchiveTableExistsAsync(snapshot.RtId.ToString()))
+        {
+            return;
+        }
+
+        var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        foreach (var path in columnPaths)
+        {
+            var columnName = ColumnNameMapper.PathToColumnName(path);
+            if (StandardColumnNames.Contains(columnName))
+            {
+                throw new ArchivePathInvalidException(snapshot.RtId, path,
+                    $"'{columnName}' is a standard column of the archive table and cannot be dropped.");
+            }
+
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                $"ALTER TABLE {table} DROP COLUMN IF EXISTS \"{columnName}\";", cancellationToken);
+            _logger.LogWarning("Archive {Table}: dropped column {Column} (path {Path}) and its stored values.",
+                table, columnName, path);
+        }
+    }
+
+    private static readonly HashSet<string> StandardColumnNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        Constants.Timestamp, Constants.RtId, Constants.CkTypeId, Constants.WindowStart, Constants.WindowEnd,
+        Constants.WasUpdated, Constants.Generation, Constants.RowOrigin, Constants.ManualWrittenBy, Constants.ManualWrittenAt,
+        Constants.ManualReason, Constants.ManualCount, Constants.LastManualAt, Constants.RtWellKnownName,
+        Constants.RtCreationDateTime, Constants.RtChangedDateTime
+    };
+
+    /// <inheritdoc />
     public async Task AddPendingComputedColumnStorageAsync(
         ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
     {
@@ -3836,6 +3882,32 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// Verifies that the archive identified by <paramref name="archiveRtId"/> exists and is in
     /// status <see cref="CkArchiveStatus.Activated"/>; throws otherwise.
     /// </summary>
+    /// <summary>
+    /// The read-side gate of the query paths (AB#6247): an <see cref="CkArchiveStatus.Activated"/> archive, or one the
+    /// access re-validation set to <see cref="CkArchiveStatus.Failed"/> because columns reached a Hidden attribute
+    /// (<see cref="ArchiveSnapshot.IsFailedOnHiddenColumns"/>). Its history stays readable, but the snapshot handed to the
+    /// query builders no longer names the Hidden columns, so they are neither projected nor accepted. Every other status
+    /// throws <see cref="ArchiveNotActivatedException"/> as before. Writes keep using
+    /// <see cref="EnsureArchiveActivatedAsync"/>.
+    /// </summary>
+    private async Task<ArchiveSnapshot> EnsureArchiveQueryableAsync(OctoObjectId archiveRtId)
+    {
+        var snapshot = await _archiveStore.GetAsync(archiveRtId)
+            ?? throw new ArchiveNotFoundException(archiveRtId);
+
+        if (snapshot.IsFailedOnHiddenColumns)
+        {
+            return snapshot.WithoutHiddenColumns();
+        }
+
+        if (snapshot.Status != CkArchiveStatus.Activated)
+        {
+            throw new ArchiveNotActivatedException(archiveRtId, snapshot.Status);
+        }
+
+        return snapshot;
+    }
+
     private async Task<ArchiveSnapshot> EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
     {
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
