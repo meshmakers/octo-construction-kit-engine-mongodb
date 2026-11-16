@@ -65,7 +65,10 @@ public class TiebreakIndexShapeTests
         { "{ name: 'RtEntity_SimpleModelSimpleType_9001', key: { ckTypeId: 1, rtCreatedBy: 1 } }", null },
         // the _id index and indexes not named by the engine
         { "{ name: '_id_', key: { _id: 1 } }", null },
-        { "{ name: 'manual', key: { 'attributes.simpleField': 1 } }", null }
+        { "{ name: 'manual', key: { 'attributes.simpleField': 1 } }", null },
+        // a hand-made index whose default name matches the CK name pattern, without the leading ckTypeId
+        { "{ name: 'attributes.simpleField_1', key: { 'attributes.simpleField': 1 } }", null },
+        { "{ name: 'attributes.simpleField_1_rtState_1', key: { 'attributes.simpleField': 1, rtState: 1 } }", null }
     };
 
     [Fact]

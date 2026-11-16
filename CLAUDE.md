@@ -969,7 +969,11 @@ as 300 items of which only 35 were distinct. Rules:
   with options the engine never sets on a CK index of its type (`CkTypeIndexWithName.HasForeignOptions`: collation,
   sparse, hidden, TTL, a partial filter on a non-unique index) is never adopted, whatever its keys. If such an index
   blocks our build (`IndexOptionsConflict`: same keys, other options only), it stays, a warning is logged and ours is
-  tracked as failed - an index is only dropped once its replacement is built. An index that
+  tracked as failed - an index is only dropped once its replacement is built. Both unique types carry a partial filter
+  (their types); `MongoDbDataSourceCollection.GetIndexListAsync` reads an index as UniqueNotDeleted only when its partial
+  filter names `rtState` (before AB#8960 every partial unique index was read as UniqueNotDeleted, so a CK Unique index was
+  dropped and rebuilt on every import). The gate counts an Ascending index as legacy only when its keys start with
+  `ckTypeId`, so a hand-made index whose default name (`attributes.code_1`) matches the name pattern gets the tiebreak. An index that
   holds the expected name with another definition (a CK update gave the slot other keys) stays until the cleanup at the
   end of the collection; the new index is built next to it under `AlternateIndexName`: `<expected name>_<6 hex>`, the
   SHA-256 of the definition (type, language, key paths and weights), so repeated updates find the same name. MongoDB

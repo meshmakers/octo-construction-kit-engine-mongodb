@@ -65,7 +65,11 @@
   name); a Unique or UniqueNotDeleted index under another name may filter other types, so the new one is built under
   the expected name next to it and the other one dropped after the build. An index with options the engine never sets
   (collation, sparse, hidden, TTL, a partial filter on a non-unique index) is never taken for a CK index; if it blocks
-  our build, it stays (warning, ours tracked as failed). **Naming rule:** a CK index is `<Type>_<n>` / `<Type>_<n>_id`, or the same with
+  our build, it stays (warning, ours tracked as failed). **Pre-existing bug fixed:** `GetIndexListAsync` read every
+  partial unique index as UniqueNotDeleted, so a CK Unique index never matched its definition and was dropped and rebuilt
+  on every CK import; UniqueNotDeleted is now only an index whose partial filter names `rtState`. The paging gate counts
+  an Ascending index as legacy only when it starts with `ckTypeId` (an engine-made index), so a hand-made index whose
+  default name matches the CK name pattern gets the tiebreak. **Naming rule:** a CK index is `<Type>_<n>` / `<Type>_<n>_id`, or the same with
   `_<6 hex>` after an update of its slot; the name is not a contract, the paging gate and the tiebreak shape are
   decided from the keys (the gate only recognises CK indexes by the name pattern `..._<n>` with the optional hash).
 - AB#8896 New: a paged runtime-entity query loads at most one page of documents. `SingleOriginQuery.ExecuteQuery`

@@ -94,7 +94,10 @@ internal static partial class TiebreakIndexShape
             return partialOnRtState ? null : key.Names.FirstOrDefault();
         }
 
-        return key.Names.FirstOrDefault(n => n != CkTypeIdKey);
+        // The engine builds every CK Ascending index with ckTypeId first. An index without it (e.g. a hand-made one
+        // whose default name `attributes.code_1` happens to match the name pattern) is not ours and gets the tiebreak.
+        var names = key.Names.ToList();
+        return names.Count > 1 && names[0] == CkTypeIdKey ? names[1] : null;
     }
 
     // <Type>_<n>, also with the definition hash of an index built while another one held the name (<Type>_<n>_<hash>).

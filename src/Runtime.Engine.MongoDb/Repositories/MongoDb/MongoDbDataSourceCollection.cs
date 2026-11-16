@@ -287,7 +287,14 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                             // Determine if it's a unique index
                             if (isUnique)
                             {
-                                indexType = hasPartialFilter ? IndexTypes.UniqueNotDeleted : IndexTypes.Unique;
+                                // Both unique types carry a partial filter (the types of the index); only
+                                // UniqueNotDeleted filters rtState too. Reading every partial unique index as
+                                // UniqueNotDeleted made a Unique index never match its definition (AB#8960).
+                                indexType = hasPartialFilter &&
+                                            partialFilterElement!.ToJson().Contains(
+                                                nameof(RtEntity.RtState).ToCamelCase(), StringComparison.Ordinal)
+                                    ? IndexTypes.UniqueNotDeleted
+                                    : IndexTypes.Unique;
                             }
 
                             foreach (var elem in keyDoc.Elements)

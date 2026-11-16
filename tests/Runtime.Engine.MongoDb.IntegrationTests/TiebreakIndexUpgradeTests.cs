@@ -3,6 +3,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -391,6 +392,32 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
             Assert.True(indexes.Any(i => i["name"].AsString == tiebreakName) ||
                         indexes.Any(i => i["name"].AsString == twinName));
             RunProgress.Report("AB#8960 sparse twin: " + string.Join(", ", Describe(indexes)));
+        });
+    }
+
+    /// <summary>
+    ///     Both unique index types carry a partial filter; only UniqueNotDeleted filters <c>rtState</c>. A Unique index is
+    ///     read back as Unique, so a further import finds it as it is: no rebuild under another name, no failed state.
+    /// </summary>
+    [Theory]
+    [InlineData(IndexTypeDto.Unique)]
+    [InlineData(IndexTypeDto.UniqueNotDeleted)]
+    public async Task UniqueIndex_IsFoundAsItIs_ByTheNextImport(IndexTypeDto indexType)
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("UniqModel", "1.0.0", indexType));
+            var collection = Collection(tenant, "UniqModel");
+            var before = Describe(await IndexesAsync(collection));
+
+            await tenant.ImportCkModelAsync(Model("UniqModel", "1.0.1", indexType));
+
+            Assert.Equal(before, Describe(await IndexesAsync(collection)));
+            var repository = tenant.GetTenantRepository();
+            var ckTypes = await repository.GetCkTypeAsync(repository.GetSession(),
+                [new CkId<CkTypeId>($"UniqModel-1.0.1/{TypeName}")], RtEntityQueryOptions.Create());
+            var states = Assert.Single(ckTypes.Items).IndexStates ?? [];
+            Assert.DoesNotContain(states, s => s.State == IndexState.Failed);
         });
     }
 
