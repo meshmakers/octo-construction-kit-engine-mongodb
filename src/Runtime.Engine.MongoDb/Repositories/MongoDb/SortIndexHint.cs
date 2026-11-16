@@ -105,7 +105,10 @@ internal static class SortIndexHint
     ///     The first index in <paramref name="indexes" /> (<c>listIndexes</c> documents) that provides the order of
     ///     <paramref name="sortKeys" /> after the <c>ckTypeId</c> equality - its name and its key pattern - or null. The
     ///     page is hinted by the key pattern: an index rebuilt under the same name with other keys then fails the hint
-    ///     (and the read is retried without it) instead of being forced on a sort it does not provide.
+    ///     (and the read is retried without it) instead of being forced on a sort it does not provide. An index whose
+    ///     key pattern another index shares (one with a collation or a partial filter, which MongoDB allows next to
+    ///     it) is never chosen: the server refuses a key-pattern hint that matches several indexes, so every deep page
+    ///     would fail once and be read again.
     /// </summary>
     internal static (string Name, BsonDocument Key)? Choose(IReadOnlyList<BsonDocument>? indexes,
         IReadOnlyList<(string Path, bool Descending)> sortKeys)
@@ -119,7 +122,11 @@ internal static class SortIndexHint
         {
             if (Provides(index, sortKeys) && index.TryGetValue("name", out var name) && name.IsString)
             {
-                return (name.AsString, index["key"].AsBsonDocument);
+                var key = index["key"].AsBsonDocument;
+                if (indexes.Count(other => other.TryGetValue("key", out var otherKey) && otherKey.Equals(key)) == 1)
+                {
+                    return (name.AsString, key);
+                }
             }
         }
 

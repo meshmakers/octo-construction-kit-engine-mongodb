@@ -78,6 +78,22 @@ public class SortIndexHintTests
     }
 
     [Fact]
+    public void Choose_SkipsAnIndexWhoseKeyPatternAnotherIndexShares()
+    {
+        // MongoDB refuses a key-pattern hint that matches two indexes; the collated twin itself never qualifies.
+        var indexes = new[]
+        {
+            Index("{ name: 'T_0', key: { ckTypeId: 1, 'attributes.name': 1, rtState: 1 } }"),
+            Index("{ name: 'T_0_de', key: { ckTypeId: 1, 'attributes.name': 1, rtState: 1 }, collation: { locale: 'de' } }"),
+            Index("{ name: 'T_0_id', key: { ckTypeId: 1, 'attributes.name': 1, _id: 1, rtState: 1 } }")
+        };
+
+        // A later index that provides the sort and has a key pattern of its own is taken instead.
+        Assert.Equal("T_0_id", SortIndexHint.Choose(indexes, ByName)?.Name);
+        Assert.Null(SortIndexHint.Choose(indexes.Take(2).ToArray(), ByName));
+    }
+
+    [Fact]
     public void FilterFields_CollectsTheFieldsThroughAndOrNor()
     {
         var filter = BsonDocument.Parse(

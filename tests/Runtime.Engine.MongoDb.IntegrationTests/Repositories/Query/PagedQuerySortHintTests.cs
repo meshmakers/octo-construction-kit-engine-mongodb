@@ -127,10 +127,13 @@ public class PagedQuerySortHintTests(ImportTestCkModelFixture fixture)
             await raw.Indexes.DropOneAsync(NameIndex, TestContext.Current.CancellationToken);
             var (page, executed) = await PageAsync(repository, SortByName(), DeepSkip, 10);
 
-            Assert.Null(executed.Hint); // the stale hint failed, the page was read again without it
+            // the stale hint was tried and refused, the page was read again without it
+            Assert.Equal(NameIndex, executed.RefusedHint);
+            Assert.Null(executed.Hint);
             Assert.Equal(names.Skip(DeepSkip).Take(10), page.Select(c => c.Name));
             var (_, afterwards) = await PageAsync(repository, SortByName(), DeepSkip, 10);
-            Assert.Null(afterwards.Hint); // the cache was refreshed
+            Assert.Null(afterwards.Hint); // the cache was refreshed: no hint is tried any more
+            Assert.Null(afterwards.RefusedHint);
         });
     }
 
@@ -162,6 +165,35 @@ public class PagedQuerySortHintTests(ImportTestCkModelFixture fixture)
             Assert.Equal(new[] { "count", "page" }, reads);
             Assert.Equal(EntityCount, total);
         });
+    }
+
+    [Fact]
+    public void ExplainSummary_SeesASortInTheWinningPlanAndInTheAggregationStages_ButNotInRejectedPlans()
+    {
+        // The sort pushed into the find layer: a SORT stage in the winning plan.
+        var pushedDown = BsonDocument.Parse("""
+            { queryPlanner: { winningPlan: { stage: 'SORT', inputStage: { stage: 'IXSCAN', indexName: 'other' } },
+                              rejectedPlans: [] } }
+            """);
+        Assert.Equal(("other", true), Summarize(pushedDown));
+
+        // The sort left in the pipeline: the winning plan of $cursor reads the index, the $sort runs after it.
+        var aggregationLevel = BsonDocument.Parse("""
+            { stages: [ { $cursor: { queryPlanner: { winningPlan: { stage: 'FETCH',
+                                       inputStage: { stage: 'IXSCAN', indexName: 'test_name_legacy' } },
+                                     rejectedPlans: [] } } },
+                        { $sort: { sortKey: { 'attributes.name.value': 1 } } },
+                        { $skip: 1500 } ] }
+            """);
+        Assert.Equal(("test_name_legacy", true), Summarize(aggregationLevel));
+
+        // A sorting plan that lost is no sort of the executed query.
+        var rejectedSort = BsonDocument.Parse("""
+            { queryPlanner: { winningPlan: { stage: 'LIMIT', inputStage: { stage: 'FETCH',
+                                inputStage: { stage: 'IXSCAN', indexName: 'test_name_legacy' } } },
+                              rejectedPlans: [ { stage: 'SORT', inputStage: { stage: 'IXSCAN', indexName: 'other' } } ] } }
+            """);
+        Assert.Equal(("test_name_legacy", false), Summarize(rejectedSort));
     }
 
     // ---- helpers ------------------------------------------------------------------------------------------------
@@ -284,6 +316,16 @@ public class PagedQuerySortHintTests(ImportTestCkModelFixture fixture)
         {
             { "explain", command }, { "verbosity", "queryPlanner" }
         });
+        return Summarize(explain);
+    }
+
+    /// <summary>
+    ///     The index the winning plan reads and whether the executed query sorts in memory: a SORT or
+    ///     SORT_KEY_GENERATOR stage in the winning plan, or a <c>$sort</c> the aggregation runs after its
+    ///     <c>$cursor</c> stage (top-level <c>stages</c>). Rejected plans are never looked at.
+    /// </summary>
+    private static (string? Index, bool HasSort) Summarize(BsonDocument explain)
+    {
         var plan = FindFirst(explain, "winningPlan") ?? throw new InvalidOperationException(explain.ToJson());
         var stages = new List<string>();
         string? index = null;
@@ -298,7 +340,9 @@ public class PagedQuerySortHintTests(ImportTestCkModelFixture fixture)
                 index = value.AsString;
             }
         });
-        return (index, stages.Any(s => s is "SORT" or "SORT_KEY_GENERATOR"));
+        var aggregationSort = explain.TryGetValue("stages", out var pipeline) && pipeline is BsonArray pipelineStages &&
+                              pipelineStages.OfType<BsonDocument>().Any(s => s.Contains("$sort"));
+        return (index, aggregationSort || stages.Any(s => s is "SORT" or "SORT_KEY_GENERATOR"));
     }
 
     private static BsonValue? FindFirst(BsonValue node, string name)

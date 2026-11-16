@@ -244,17 +244,23 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     {
         /// <summary>The index the read was hinted to (AB#9138), or null.</summary>
         public string? Hint { get; init; }
+
+        /// <summary>The index of a hint the server refused before the read was repeated without it, or null.</summary>
+        public string? RefusedHint { get; init; }
     }
 
     private void Observe<TOutput>(string purpose, IReadOnlyList<IPipelineStageDefinition> stages, int documentCount,
-        string? hint = null)
+        string? hint = null, string? refusedHint = null)
     {
         if (PipelineObserver == null)
         {
             return;
         }
 
-        PipelineObserver(new ExecutedPipeline(purpose, Render<TOutput>(stages), documentCount) { Hint = hint });
+        PipelineObserver(new ExecutedPipeline(purpose, Render<TOutput>(stages), documentCount)
+        {
+            Hint = hint, RefusedHint = refusedHint
+        });
     }
 
     /// <summary>The stages rendered as the server receives them.</summary>
@@ -285,7 +291,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     ///     The index a sorted page is hinted to (AB#9138, <see cref="SortIndexHint" />), and the exact total when the
     ///     decision had to count it. The hint names the index that provides the caller's sort after the
     ///     <c>ckTypeId</c> equality, taken from the cached indexes of the collection
-    ///     (<see cref="CollectionIndexCache" />). No hint - the planner decides as before - for a page above
+    ///     (<see cref="CollectionIndexCache" />). No hint - the planner decides as before - for a page with a skip below
     ///     <see cref="SortIndexHint.MinSkip" /> (the trial ends early there), without a sort, when the page pipeline has
     ///     stages around the match (<see cref="PageSortFollowsMatch" />), inside a transaction (a hint naming an index
     ///     dropped meanwhile would fail the command and abort the transaction, so there is no retry) and when no index
@@ -359,29 +365,32 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
     /// <summary>
     ///     Reads one page, hinted by the key pattern of <paramref name="hint" /> when given, and returns the name of the
-    ///     index the read was really hinted to. A hint whose index no longer exists - dropped by another process within
-    ///     the cache interval, or rebuilt under its name with other keys - fails with a command error: the cached
-    ///     indexes of the collection are forgotten and the page is read once more without a hint.
+    ///     index the read was really hinted to and of a hint the server refused. A hint whose index no longer exists -
+    ///     dropped by another process within the cache interval, or rebuilt under its name with other keys - fails with
+    ///     a command error: the cached indexes of the collection are forgotten and the page is read once more without a
+    ///     hint.
     /// </summary>
-    private async Task<(List<TEntity> Entities, string? UsedHint)> ReadPageAsync(IOctoSession octoSession,
+    private async Task<(List<TEntity> Entities, string? UsedHint, string? RefusedHint)> ReadPageAsync(
+        IOctoSession octoSession,
         IReadOnlyList<IPipelineStageDefinition> pageStages, (string Name, BsonDocument Key)? hint)
     {
         var pipeline = PipelineDefinition<TEntity, TEntity>.Create(pageStages);
         if (hint == null)
         {
-            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync(), null);
+            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync(), null, null);
         }
 
         try
         {
             var options = new AggregateOptions { Hint = hint.Value.Key };
             return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline, options).ToListAsync(),
-                hint.Value.Name);
+                hint.Value.Name, null);
         }
         catch (MongoCommandException exception) when (IsUnusableHint(exception))
         {
             CollectionIndexCache.Invalidate(_mongoDbDataSourceCollection.GetMongoCollection());
-            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync(), null);
+            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync(), null,
+                hint.Value.Name);
         }
     }
 
@@ -455,8 +464,8 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             // AB#9138: a deep sorted page spent its time in the planner's trial, not in the read - hint the index that
             // provides the sort.
             (var hint, exactTotal) = await ChoosePageHintAsync(octoSession, skip, pageStages, includeTotalCount);
-            (pageEntities, var usedHint) = await ReadPageAsync(octoSession, pageStages, hint);
-            Observe<TEntity>("page", pageStages, pageEntities.Count, usedHint);
+            (pageEntities, var usedHint, var refusedHint) = await ReadPageAsync(octoSession, pageStages, hint);
+            Observe<TEntity>("page", pageStages, pageEntities.Count, usedHint, refusedHint);
 
             meter.SetCheckpoint("page executed");
         }

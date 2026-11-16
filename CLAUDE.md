@@ -881,10 +881,12 @@ the plan cache never kept the winner (the cached works value comes from page 1).
   aborts the transaction - no retry possible; GraphQL queries run without a transaction), and for pipelines with stages
   around the match (`$geoNear`, text search, association filters: `PageSortFollowsMatch`).
 - **Index list** from `CollectionIndexCache` (`listIndexes` per database + collection, cached 5 minutes per process;
-  every index create/drop of `MongoDbDataSourceCollection` invalidates it, and a list read across an invalidation is not
-  stored; a failure means no hint and is remembered for 10 s only). The page is hinted by the index's **key pattern**, so
+  every index create/drop of `MongoDbDataSourceCollection` invalidates it: an entry carries the invalidation generation it
+  was read in and is used only while that generation is current, so a list read across an invalidation is never reused,
+  even when it was stored after it; a failure means no hint and is remembered for 10 s only). The page is hinted by the index's **key pattern**, so
   an index dropped or rebuilt under its name with other keys by another process fails the hint (codes 2/27): the entry is
-  invalidated and the page is read once more without a hint. AB#8960 (PR 253) is to reuse the cache for its tiebreak
+  invalidated and the page is read once more without a hint. An index whose key pattern another index shares (a collated
+  or partial twin) is never chosen: the server refuses a key-pattern hint that matches several indexes. AB#8960 (PR 253) is to reuse the cache for its tiebreak
   gate.
 - **Settings are process-wide**: `TenantContext` hands `PagingIndexHintMinSkip` / `PagingIndexHintMinMatches` to
   `SortIndexHint` (one system configuration per process, like the schema instance prefix); a value of 0 or less for the
@@ -904,8 +906,10 @@ median of 3, local Testcontainer; planner -> hint):
 | indexed range filter, 100,000 matches | 50,000 | 1,781 ms | 426 ms | 433 ms, hinted (capped count 21 ms) |
 
 Tests: `SortIndexHintTests` (unit: index shapes, exclusions, filter fields, competing indexes),
-`PagedQuerySortHintTests` (explain: deep page hinted without SORT, ascending/descending, rtId; shallow, unsorted and
-unprovided sorts without hint; transaction; stale hint retried; indexed selective filter keeps the planner and counts once).
+`CollectionIndexCacheTests` (unit: reuse until invalidated, a list read across an invalidation is not reused),
+`PagedQuerySortHintTests` (explain: deep page hinted without SORT - neither in the winning plan nor as an aggregation-level
+`$sort` -, ascending/descending, rtId; shallow, unsorted and unprovided sorts without hint; transaction; stale hint
+retried; indexed selective filter keeps the planner and counts once).
 
 ## GridFS read preference and read-your-writes (AB#7256)
 

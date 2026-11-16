@@ -162,8 +162,8 @@ public class OctoSystemConfiguration()
     /// AB#9138: when the filter of a deep sorted page has an index of its own, the page is hinted to the sort index only
     /// when at least this many entities match (exact count when the caller asked for the total, otherwise a count
     /// capped at this value). With fewer matches the planner answers faster through the filter's index and a small sort
-    /// (measured 20-32 ms against 405-406 ms with the hint over 900,000 entities). Env var
-    /// 0 or less hints such a page without counting. Env var <c>OCTO_System__PagingIndexHintMinMatches</c>.
+    /// (measured 20-32 ms against 405-406 ms with the hint over 900,000 entities). 0 or less hints such a page without
+    /// counting. Env var <c>OCTO_System__PagingIndexHintMinMatches</c>.
     /// </summary>
     public int PagingIndexHintMinMatches { get; set; } = 50_000;
 
