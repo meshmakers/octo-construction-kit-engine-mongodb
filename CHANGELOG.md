@@ -54,6 +54,18 @@
   get the tiebreak right after the deploy, also on existing tenants. Unpaged queries, the association navigations and
   the cached navigation path are unchanged; interface queries already broke ties by rtId (AB#7019). Rules and
   measurements: `CLAUDE.md`, "Page order of runtime queries".
+  **Index updates without a gap (AC 8, AC 13):** an index whose definition changed is no longer dropped before the new
+  one is built. When a CK update gives an index slot other keys, its expected name is still held by the old index
+  (MongoDB can neither rename an index nor build one with other keys under a taken name); the new index is built under
+  `<expected name>_<6 hex digits>` (the digits from the SHA-256 of the definition, so a repeated update finds the same
+  name), and the old one is dropped at the end of the collection, after the build. If the build fails, the old index
+  stays. A text index is still dropped before its replacement is built (a collection holds only one). An index with
+  the right definition under another name is kept as it is (it used to be dropped and rebuilt under the expected
+  name); a Unique or UniqueNotDeleted index under another name may filter other types, so the new one is built under
+  the expected name next to it and the other one dropped after the build. An index with options the engine never sets
+  (collation, sparse, hidden, TTL, a partial filter on a non-unique index) is never taken for a CK index. **Naming rule:** a CK index is `<Type>_<n>` / `<Type>_<n>_id`, or the same with
+  `_<6 hex>` after an update of its slot; the name is not a contract, the paging gate and the tiebreak shape are
+  decided from the keys (the gate only recognises CK indexes by the name pattern `..._<n>` with the optional hash).
 - AB#8896 New: a paged runtime-entity query loads at most one page of documents. `SingleOriginQuery.ExecuteQuery`
   no longer puts count and page into one `$facet`, which pushed every matching document through the server and sorted
   the whole set in memory. A paged query now runs a page pipeline (`$match`, the association stages that navigation

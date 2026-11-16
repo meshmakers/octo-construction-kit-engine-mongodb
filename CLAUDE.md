@@ -959,6 +959,24 @@ as 300 items of which only 35 were distinct. Rules:
   sorts its pages from the new index (prefix) and, on its next index update, rebuilds `<Type>_<n>` and then drops
   `<Type>_<n>_id` the same way. Both interface members are default interface methods (only NSubstitute fakes implement
   `ITenantContext` outside this repository); the caller that runs the upgrade per tenant is a story of its own.
+- **Index updates never leave a gap (AC 8, AC 13).** `CreateOrUpdateIndex` never drops an index before its replacement is
+  built. An index with the right definition under another name is kept (adopted: no drop, no rebuild); for Unique and
+  UniqueNotDeleted indexes the comparison does not see the type filter, so ours is built under the expected name next
+  to it and the other one dropped after the build (MongoDB refuses only an identical index, then it is kept). An index
+  with options the engine never sets on a CK index of its type (`CkTypeIndexWithName.HasForeignOptions`: collation,
+  sparse, hidden, TTL, a partial filter on a non-unique index) is never adopted, whatever its keys. An index that
+  holds the expected name with another definition (a CK update gave the slot other keys) stays until the cleanup at the
+  end of the collection; the new index is built next to it under `AlternateIndexName`: `<expected name>_<6 hex>`, the
+  SHA-256 of the definition (type, language, key paths and weights), so repeated updates find the same name. MongoDB
+  can neither rename an index nor hold the same keys under two names, so keeping the expected name would cost a second
+  build. A failed build keeps the old index. Exception: a text index (a collection holds only one) is still dropped
+  before the changed one is built. If the expected name is held by an index kept for another slot
+  (`IndexOptionsConflict` 85 / `IndexKeySpecsConflict` 86), the build falls back to the alternate name. Index state
+  tracking uses the real name (the replaced one is removed). Names are therefore not a contract: the tiebreak shape is
+  decided by `_id` in the keys, the gate recognises CK indexes by `..._<n>` with the optional `_<6 hex>`
+  (`TiebreakIndexShape.CkIndexName`). Tests: `TiebreakIndexUpgradeTests.CkUpdate_ChangingTheFieldsOfATiebreakIndex_*`
+  (60,000 entities, two changes of one slot, listIndexes observed during each import), `..._IsKept_NotRebuilt`,
+  `CkUpdate_FailedBuildOfTheChangedIndex_KeepsTheOldIndex`.
 - **Not changed:** unpaged queries keep the caller's sort; the association navigations (`MultipleOrigin*`), whose
   entity-driven path (AB#4369) relies on an index-backed `$sort` with a `$lookup` between `$sort` and `$limit`; the cached
   navigation path (page membership comes from the cached id list). Interface queries already break ties by rtId in their

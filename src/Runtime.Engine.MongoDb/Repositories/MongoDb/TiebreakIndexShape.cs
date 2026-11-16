@@ -19,6 +19,12 @@ internal static partial class TiebreakIndexShape
     /// <summary>The name suffix of a CK Ascending index in the tiebreak shape.</summary>
     internal const string NameSuffix = "_id";
 
+    /// <summary>
+    ///     The number of hex digits of the definition hash an index name gets when an index with another definition
+    ///     holds its expected name (<c>MongoDbRepositoryDataSource.AlternateIndexName</c>).
+    /// </summary>
+    internal const int AlternateNameHashLength = 6;
+
     private const string CkTypeIdKey = "ckTypeId";
     private const string RtStateKey = "rtState";
 
@@ -91,6 +97,7 @@ internal static partial class TiebreakIndexShape
         return key.Names.FirstOrDefault(n => n != CkTypeIdKey);
     }
 
-    [GeneratedRegex(@"^.+_(?<number>\d+)$", RegexOptions.CultureInvariant)]
+    // <Type>_<n>, also with the definition hash of an index built while another one held the name (<Type>_<n>_<hash>).
+    [GeneratedRegex(@"^.+_(?<number>\d+)(?:_[0-9a-f]{6})?$", RegexOptions.CultureInvariant)]
     private static partial Regex CkIndexName();
 }

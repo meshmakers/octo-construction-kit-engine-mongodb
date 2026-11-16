@@ -1043,9 +1043,24 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private sealed record LegacyIndexRule(CkTypeIndex LegacyIndex, bool Upgrade);
 
     /// <summary>
-    /// Creates or updates an index in MongoDB. Compares with existing indexes to determine if creation
-    /// is needed, handles name conflicts by dropping and recreating, and actually performs the index
-    /// creation in the database.
+    ///     The outcome of <see cref="CreateOrUpdateIndex{TKey,TDocument}" /> when it built an index: the name it was built
+    ///     under and, when that is the alternate name (AB#8960), the existing index with the expected name it replaces -
+    ///     dropped by the cleanup at the end of the collection, after the build.
+    /// </summary>
+    private sealed record IndexCreation(string Name, string? Replaces);
+
+    private const int IndexOptionsConflictCode = 85;
+    private const int IndexKeySpecsConflictCode = 86;
+
+    /// <summary>
+    /// Creates or updates an index in MongoDB without leaving the collection without it (AB#8960, AC 8):
+    /// <list type="bullet">
+    ///     <item>an existing index with the definition is kept, also under another name (adopted: no drop, no rebuild;
+    ///     MongoDB can neither rename an index nor hold the same keys under two names);</item>
+    ///     <item>an existing index with the expected name but another definition stays until the end of the collection:
+    ///     the new index is built next to it under <see cref="AlternateIndexName" />, the cleanup drops the old one
+    ///     after the build. If the build fails, the old index stays.</item>
+    /// </list>
     /// </summary>
     /// <param name="collectionName">Name of the MongoDB collection</param>
     /// <param name="ckTypeIndex">The index configuration to create</param>
@@ -1055,8 +1070,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <param name="collectionRootType">Optional collection root type info (required for Unique/UniqueNotDeleted)</param>
     /// <param name="indexDefiningType">Optional type that defines this index (required for Unique/UniqueNotDeleted)</param>
     /// <param name="nameSuffix">Appended to the index name (AB#8960: <see cref="TiebreakIndexShape.NameSuffix" />)</param>
-    private async Task<bool> CreateOrUpdateIndex<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
-        ICollection<CkTypeIndexWithName> repositoryIndices,
+    /// <returns>The index built, or null when an existing index has the definition.</returns>
+    private async Task<IndexCreation?> CreateOrUpdateIndex<TKey, TDocument>(string collectionName,
+        CkTypeIndex ckTypeIndex, ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber,
         CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null, string nameSuffix = "")
         where TDocument : class, new()
@@ -1072,45 +1088,104 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // The one carrying the expected name is ours; a differently named one is taken over only when it is
         // the single candidate, otherwise it belongs to another type or is obsolete and dropped at the end.
         var repositoryIndex = FindMatchingIndex(repositoryIndices, ckTypeIndex, indexName);
+        if (repositoryIndex != null && repositoryIndex.Name != indexName &&
+            ckTypeIndex.IndexType is IndexTypes.Unique or IndexTypes.UniqueNotDeleted)
+        {
+            // The comparison does not see the type filter of a unique index: one under another name may filter other
+            // types (e.g. of the model a type moved away from). Ours is built next to it under the expected name and the
+            // other one is dropped by the cleanup after the build; MongoDB refuses only an identical index under a
+            // second name (IndexOptionsConflict), and then the existing one is ours and kept (AB#8960).
+            try
+            {
+                await CreateIndexAsync(collection, indexName, ckTypeIndex, collectionRootType, indexDefiningType);
+                return new IndexCreation(indexName, repositoryIndex.Name);
+            }
+            catch (MongoCommandException ex) when (ex.Code == IndexOptionsConflictCode)
+            {
+                // Identical index under another name: kept below.
+            }
+            catch (MongoCommandException)
+            {
+                // Not built: the existing index stays.
+                repositoryIndices.Remove(repositoryIndex);
+                throw;
+            }
+        }
 
-        // If found, check if the name matches what we expect
         if (repositoryIndex != null)
         {
             // Remove the matching index from the list so it won't be dropped later
             repositoryIndices.Remove(repositoryIndex);
 
-            // If the name doesn't match, we need to drop the old one and create with the correct name
             if (repositoryIndex.Name != indexName)
             {
+                // AB#8960: kept under its name. Dropping it to rebuild it under the expected name would leave the
+                // collection without the index for the time of the build.
                 _logger.LogInformation(
-                    "Index with correct definition but wrong name: '{ActualName}' should be '{ExpectedName}'. Recreating with correct name",
-                    repositoryIndex.Name, indexName);
-
-                // Drop the incorrectly named index
-                await collection.DropIndexAsync(repositoryIndex.Name);
-
-                // Fall through to create the index with the correct name
+                    "Index '{ActualName}' of '{CollectionName}' has the definition of '{ExpectedName}' and is kept under its name",
+                    repositoryIndex.Name, collectionName, indexName);
             }
             else
             {
                 _logger.LogDebug("Index '{IndexName}' already exists for '{CollectionName}', skipping creation",
                     indexName, collectionName);
-                return false; // Index already exists with correct name, not created
             }
+
+            return null;
         }
 
-        // Check if there's an existing index with this name (regardless of configuration)
-        var existingIndexWithSameName = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
-        if (existingIndexWithSameName != null)
+        // An existing index with this name and another definition stays in repositoryIndices: the cleanup at the end of
+        // the collection drops it after the new index is built under the alternate name (AB#8960).
+        var occupant = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
+        var targetName = indexName;
+        if (occupant != null && (ckTypeIndex.IndexType == IndexTypes.Text || occupant.IndexType == IndexTypes.Text))
         {
-            repositoryIndices.Remove(existingIndexWithSameName);
-
-            _logger.LogInformation("Index '{IndexName}' exists with different configuration, recreating",
-                indexName);
-            // Index exists but has wrong configuration - drop it first
+            // A collection holds at most one text index: the old one has to go before the new one can be built.
+            repositoryIndices.Remove(occupant);
+            _logger.LogInformation("Text index '{IndexName}' of '{CollectionName}' exists with another definition, " +
+                                   "recreating (a collection holds only one text index)", indexName, collectionName);
             await collection.DropIndexAsync(indexName);
+            occupant = null;
+        }
+        else if (occupant != null)
+        {
+            targetName = AlternateIndexName(indexName, ckTypeIndex);
+            _logger.LogInformation(
+                "Index '{IndexName}' of '{CollectionName}' exists with another definition; building the new one as " +
+                "'{TargetName}' before the old one is dropped",
+                indexName, collectionName, targetName);
         }
 
+        try
+        {
+            await CreateIndexAsync(collection, targetName, ckTypeIndex, collectionRootType, indexDefiningType);
+        }
+        catch (MongoCommandException ex) when (occupant == null &&
+                                               ex.Code is IndexOptionsConflictCode or IndexKeySpecsConflictCode)
+        {
+            // The expected name belongs to an index that is no longer in repositoryIndices because it was kept for
+            // another definition of this collection: build under the alternate name.
+            targetName = AlternateIndexName(indexName, ckTypeIndex);
+            _logger.LogInformation(
+                "Index name '{IndexName}' of '{CollectionName}' is taken by a kept index; building as '{TargetName}'",
+                indexName, collectionName, targetName);
+            await CreateIndexAsync(collection, targetName, ckTypeIndex, collectionRootType, indexDefiningType);
+        }
+        catch (MongoCommandException) when (occupant != null)
+        {
+            // The new index was not built: the old one stays.
+            repositoryIndices.Remove(occupant);
+            throw;
+        }
+
+        return new IndexCreation(targetName, occupant?.Name);
+    }
+
+    private async Task CreateIndexAsync<TKey, TDocument>(IMongoDbDataSourceCollection<TKey, TDocument> collection,
+        string indexName, CkTypeIndex ckTypeIndex, CkTypeInfo? collectionRootType, CkType? indexDefiningType)
+        where TDocument : class, new()
+        where TKey : notnull
+    {
         switch (ckTypeIndex.IndexType)
         {
             case IndexTypes.Ascending:
@@ -1138,8 +1213,19 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             default:
                 throw OperationFailedException.IndexTypeNotSupported(ckTypeIndex.IndexType);
         }
+    }
 
-        return true; // Index was created
+    /// <summary>
+    ///     The name an index is built under while an index with another definition holds its expected name (AB#8960):
+    ///     <c>&lt;expected name&gt;_&lt;6 hex digits&gt;</c>, the digits from the SHA-256 of the definition (type, language,
+    ///     the key paths with their weights). Deterministic, so a repeated update finds the same name.
+    /// </summary>
+    internal static string AlternateIndexName(string indexName, CkTypeIndex ckTypeIndex)
+    {
+        var definition = ckTypeIndex.IndexType + "|" + ckTypeIndex.Language + "|" + string.Join(";",
+            ckTypeIndex.Fields.Select(f => f.Weight + ":" + string.Join(",", f.AttributeNames)));
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(definition));
+        return indexName + "_" + Convert.ToHexStringLower(hash)[..TiebreakIndexShape.AlternateNameHashLength];
     }
 
     /// <summary>
@@ -1150,7 +1236,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private static CkTypeIndexWithName? FindMatchingIndex(IEnumerable<CkTypeIndexWithName> repositoryIndices,
         CkTypeIndex definition, string expectedName)
     {
-        var matching = repositoryIndices.Where(i => i.CompareToInSequence(definition)).ToList();
+        // An index with options the engine never sets is not ours, whatever its keys (AB#8960: it is never adopted).
+        var matching = repositoryIndices.Where(i => !i.HasForeignOptions && i.CompareToInSequence(definition)).ToList();
         return matching.FirstOrDefault(i => i.Name == expectedName) ?? (matching.Count == 1 ? matching[0] : null);
     }
 
@@ -1185,7 +1272,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var indexName = baseName + nameSuffix;
 
         CkTypeIndexWithName? legacy = null;
-        if (legacyRule != null && !repositoryIndices.Any(i => i.CompareToInSequence(ckTypeIndex)))
+        if (legacyRule != null &&
+            !repositoryIndices.Any(i => !i.HasForeignOptions && i.CompareToInSequence(ckTypeIndex)))
         {
             legacy = FindMatchingIndex(repositoryIndices, legacyRule.LegacyIndex, baseName);
             if (legacy != null && !legacyRule.Upgrade)
@@ -1201,14 +1289,20 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         try
         {
             // Call the original method and check if index was actually created
-            var wasCreated = await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection,
+            var created = await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection,
                 uniqueIndexNumber, collectionRootType, indexDefiningType, nameSuffix);
 
-            // Only track if the index was actually created (not if it already existed)
-            if (wasCreated && indexDefiningType != null)
+            // Only track if the index was actually created (not if it already existed), under the name it was built
+            // under; an index it replaces is dropped by the cleanup after the build (AB#8960).
+            if (created != null && indexDefiningType != null)
             {
-                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, indexName, collection.CollectionName,
-                    IndexState.Applied);
+                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, created.Name,
+                    collection.CollectionName, IndexState.Applied);
+                if (created.Replaces != null)
+                {
+                    _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, created.Replaces,
+                        collection.CollectionName);
+                }
             }
 
             if (legacy != null)

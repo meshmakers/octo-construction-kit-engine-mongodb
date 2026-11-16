@@ -33,9 +33,12 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     private const string FieldName = "SimpleField";
     private const string FieldPath = "attributes.simpleField";
     private const string TypeName = "SimpleType";
+    private const string OtherFieldName = "OtherField";
+    private const string OtherFieldPath = "attributes.otherField";
 
     private static readonly string[] LegacyKeys = ["ckTypeId", FieldPath, "rtState"];
     private static readonly string[] TiebreakKeys = ["ckTypeId", FieldPath, "_id", "rtState"];
+    private static readonly string[] OtherTiebreakKeys = ["ckTypeId", OtherFieldPath, "_id", "rtState"];
 
     [Fact]
     public async Task NewIndexes_AscendingGetsTheTiebreakShape_UniqueTextAndSystemIndexesKeepTheirs()
@@ -184,6 +187,211 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
             // Informative: whether the build was slow enough to see both indexes at once.
             RunProgress.Report($"AB#8960 gapless upgrade: observations {observations}, both indexes seen: {sawBoth}");
         });
+    }
+
+    /// <summary>
+    ///     AC 13: a CK update that changes the fields of an Ascending index after the tiebreak upgrade. The new
+    ///     definition's expected name (<c>&lt;Type&gt;_&lt;n&gt;_id</c>) is held by the old index with other keys; the new
+    ///     index is built under <c>&lt;Type&gt;_&lt;n&gt;_id_&lt;hash&gt;</c> and the old one dropped after the build. At every
+    ///     observation during the update the type has the old or the new index (the same method as the 60,000-entity
+    ///     upgrade test). A second change of the same slot (from the hashed name to the next keys) is gapless too, and
+    ///     a re-run after the updates changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task CkUpdate_ChangingTheFieldsOfATiebreakIndex_NeverLeavesTheTypeWithoutTheIndex()
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.Ascending));
+            var collection = Collection(tenant, "AscModel");
+            await MakeLegacyAsync(collection);
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpgradeTiebreakIndexesAsync(adminSession);
+            }
+
+            var tiebreakName = Assert.Single(await IndexesAsync(collection),
+                i => KeysOf(i).SequenceEqual(TiebreakKeys))["name"].AsString;
+            await SeedAsync(tenant, "AscModel", 60_000);
+
+            // First change: SimpleField -> OtherField. The expected name is taken by the old index.
+            await ObserveGaplessAsync(collection, "first change",
+                tenant.ImportCkModelAsync(Model("AscModel", "1.0.1", IndexTypeDto.Ascending, [OtherFieldName])),
+                TiebreakKeys, OtherTiebreakKeys);
+            var afterFirst = await IndexesAsync(collection);
+            Assert.DoesNotContain(afterFirst, i => KeysOf(i).Contains(FieldPath));
+            var hashedName = Assert.Single(afterFirst, i => KeysOf(i).SequenceEqual(OtherTiebreakKeys))["name"].AsString;
+            Assert.Matches($"^{tiebreakName}_[0-9a-f]{{6}}$", hashedName);
+
+            // Second change of the same slot: OtherField -> OtherField + SimpleField. The expected name is free again.
+            string[] compoundKeys = ["ckTypeId", OtherFieldPath, FieldPath, "_id", "rtState"];
+            await ObserveGaplessAsync(collection, "second change",
+                tenant.ImportCkModelAsync(Model("AscModel", "1.0.2", IndexTypeDto.Ascending,
+                    [OtherFieldName, FieldName])),
+                OtherTiebreakKeys, compoundKeys);
+            var afterSecond = await IndexesAsync(collection);
+            Assert.DoesNotContain(afterSecond, i => i["name"].AsString == hashedName);
+            var compound = Assert.Single(afterSecond, i => KeysOf(i).SequenceEqual(compoundKeys));
+            Assert.Equal(tiebreakName, compound["name"].AsString);
+            Assert.True(await GateAsync(collection, OtherFieldPath));
+
+            // Idempotent: an index update, the upgrade and the same import again change nothing.
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpdateIndexesAsync(adminSession);
+                await tenant.UpgradeTiebreakIndexesAsync(adminSession);
+            }
+
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.2", IndexTypeDto.Ascending,
+                [OtherFieldName, FieldName]));
+            Assert.Equal(Describe(afterSecond), Describe(await IndexesAsync(collection)));
+        });
+    }
+
+    /// <summary>
+    ///     AC 8: an index with the right definition under another name (e.g. built under the hashed name, or by another
+    ///     slot) is kept as it is - no drop and rebuild under the expected name, which would leave the collection without
+    ///     the index for the time of the build.
+    /// </summary>
+    [Fact]
+    public async Task IndexWithTheDefinitionUnderAnotherName_IsKept_NotRebuilt()
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.Ascending));
+            var collection = Collection(tenant, "AscModel");
+            var tiebreakName = Assert.Single(await IndexesAsync(collection),
+                i => KeysOf(i).SequenceEqual(TiebreakKeys))["name"].AsString;
+            const string otherName = "kept_by_another_name";
+            await collection.Indexes.DropOneAsync(tiebreakName);
+            await collection.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(
+                new BsonDocument { { "ckTypeId", 1 }, { FieldPath, 1 }, { "_id", 1 }, { "rtState", 1 } },
+                new CreateIndexOptions { Name = otherName }));
+            var before = Describe(await IndexesAsync(collection));
+
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpdateIndexesAsync(adminSession);
+            }
+
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.1", IndexTypeDto.Ascending));
+            Assert.Equal(before, Describe(await IndexesAsync(collection)));
+        });
+    }
+
+    /// <summary>
+    ///     AC 8: an index with the keys of a CK Ascending index but options the engine never sets (here a partial filter)
+    ///     is not adopted: the engine builds its own under the expected name next to it and drops the other one after.
+    /// </summary>
+    [Fact]
+    public async Task IndexWithTheKeysButForeignOptions_IsNotAdopted()
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.Ascending));
+            var collection = Collection(tenant, "AscModel");
+            var tiebreakName = Assert.Single(await IndexesAsync(collection),
+                i => KeysOf(i).SequenceEqual(TiebreakKeys))["name"].AsString;
+            const string foreignName = "same_keys_partial";
+            await collection.Indexes.DropOneAsync(tiebreakName);
+            await collection.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(
+                new BsonDocument { { "ckTypeId", 1 }, { FieldPath, 1 }, { "_id", 1 }, { "rtState", 1 } },
+                new CreateIndexOptions<BsonDocument>
+                {
+                    Name = foreignName,
+                    PartialFilterExpression = new BsonDocument("rtState", new BsonDocument("$exists", true))
+                }));
+
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpdateIndexesAsync(adminSession);
+            }
+
+            var indexes = await IndexesAsync(collection);
+            Assert.DoesNotContain(indexes, i => i["name"].AsString == foreignName);
+            var ours = Assert.Single(indexes, i => KeysOf(i).SequenceEqual(TiebreakKeys));
+            Assert.Equal(tiebreakName, ours["name"].AsString);
+            Assert.False(ours.Contains("partialFilterExpression"));
+        });
+    }
+
+    /// <summary>
+    ///     AC 8: when the build of the changed index fails (here: a compound index over two array fields of one document,
+    ///     which MongoDB refuses), the old index with the expected name stays, and the update goes on.
+    /// </summary>
+    [Fact]
+    public async Task CkUpdate_FailedBuildOfTheChangedIndex_KeepsTheOldIndex()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.Ascending));
+            var collection = Collection(tenant, "AscModel");
+            await SeedAsync(tenant, "AscModel", 10);
+            var template = await collection.Find(new BsonDocument()).FirstAsync();
+            template["_id"] = ObjectId.GenerateNewId();
+            template["attributes"].AsBsonDocument["simpleField"] = new BsonArray { "a", "b" };
+            template["attributes"].AsBsonDocument["otherField"] = new BsonArray { "c", "d" };
+            await collection.InsertOneAsync(template);
+            var before = Describe(await IndexesAsync(collection));
+
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.1", IndexTypeDto.Ascending,
+                [FieldName, OtherFieldName]));
+
+            Assert.Equal(before, Describe(await IndexesAsync(collection)));
+        });
+    }
+
+    /// <summary>
+    ///     A collection holds at most one text index, so a changed text index cannot be built next to the old one: it is
+    ///     still recreated (dropped, then built) under its name.
+    /// </summary>
+    [Fact]
+    public async Task CkUpdate_ChangingTheFieldsOfATextIndex_RecreatesIt()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("TextModel", "1.0.0", IndexTypeDto.Text));
+            var collection = Collection(tenant, "TextModel");
+            var before = Assert.Single(await IndexesAsync(collection), i => KeysOf(i).Contains("_fts"));
+            Assert.Contains(FieldPath, before["weights"].AsBsonDocument.Names);
+
+            await tenant.ImportCkModelAsync(Model("TextModel", "1.0.1", IndexTypeDto.Text, [OtherFieldName]));
+
+            var after = Assert.Single(await IndexesAsync(collection), i => KeysOf(i).Contains("_fts"));
+            Assert.Equal(before["name"].AsString, after["name"].AsString);
+            Assert.Equal([OtherFieldPath], after["weights"].AsBsonDocument.Names);
+        });
+    }
+
+    /// <summary>
+    ///     Runs <paramref name="update" /> and lists the indexes until it is done: at every observation the old index
+    ///     (<paramref name="oldKeys" />) or the new one (<paramref name="newKeys" />) exists. A gap is recorded, not asserted
+    ///     in the loop: the update must finish before the tenant is dropped.
+    /// </summary>
+    private static async Task ObserveGaplessAsync(IMongoCollection<BsonDocument> collection, string step, Task update,
+        string[] oldKeys, string[] newKeys)
+    {
+        var observations = 0;
+        var sawBoth = false;
+        string? gap = null;
+        do
+        {
+            var indexes = await IndexesAsync(collection);
+            var onOld = indexes.Any(i => KeysOf(i).SequenceEqual(oldKeys));
+            var onNew = indexes.Any(i => KeysOf(i).SequenceEqual(newKeys));
+            gap ??= onOld || onNew
+                ? null
+                : $"{step}, observation {observations}: neither the old nor the new index: " +
+                  string.Join(", ", Describe(indexes));
+            sawBoth |= onOld && onNew;
+            observations++;
+        } while (!update.IsCompleted);
+
+        await update;
+        Assert.Null(gap);
+        Assert.True(observations >= 2, $"{step}: only {observations} observation(s) during the update");
+        Assert.Contains(await IndexesAsync(collection), i => KeysOf(i).SequenceEqual(newKeys));
+        RunProgress.Report($"AB#8960 AC 13 {step}: observations {observations}, both indexes seen: {sawBoth}");
     }
 
     [Fact]
@@ -335,7 +543,8 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
         }
     }
 
-    private static CkCompiledModelRoot Model(string modelName, string version, IndexTypeDto indexType)
+    private static CkCompiledModelRoot Model(string modelName, string version, IndexTypeDto indexType,
+        string[]? indexedFields = null)
     {
         var modelVersion = $"{modelName}-{version}";
         return new CkCompiledModelRoot
@@ -344,7 +553,11 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
             Dependencies = [SystemCkIds.CkModelId],
             Attributes =
             [
-                new CkAttributeDto { AttributeId = new CkAttributeId(FieldName), ValueType = AttributeValueTypesDto.String }
+                new CkAttributeDto { AttributeId = new CkAttributeId(FieldName), ValueType = AttributeValueTypesDto.String },
+                new CkAttributeDto
+                {
+                    AttributeId = new CkAttributeId(OtherFieldName), ValueType = AttributeValueTypesDto.String
+                }
             ],
             Types =
             [
@@ -359,6 +572,11 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
                         {
                             CkAttributeId = new CkId<CkAttributeId>($"{modelVersion}/{FieldName}"),
                             AttributeName = FieldName
+                        },
+                        new()
+                        {
+                            CkAttributeId = new CkId<CkAttributeId>($"{modelVersion}/{OtherFieldName}"),
+                            AttributeName = OtherFieldName
                         }
                     ],
                     Indexes = indexType == IndexTypeDto.None
@@ -372,7 +590,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
                             [
                                 new()
                                 {
-                                    AttributePaths = [FieldName],
+                                    AttributePaths = indexedFields?.ToList() ?? [FieldName],
                                     Weight = indexType == IndexTypeDto.Text ? 1 : null
                                 }
                             ]
@@ -441,6 +659,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
             new CkId<CkTypeId>(new CkModelId($"{modelName}-1.0.0"), new CkTypeId(TypeName)));
         entity.RtId = OctoObjectId.GenerateNewId();
         entity.SetAttributeValue(FieldName, AttributeValueTypesDto.String, "v-00");
+        entity.SetAttributeValue(OtherFieldName, AttributeValueTypesDto.String, "o-00");
         using (var session = await repository.GetSessionAsync())
         {
             session.StartTransaction();
@@ -458,6 +677,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
                 var document = template.DeepClone().AsBsonDocument;
                 document["_id"] = ObjectId.GenerateNewId();
                 document["attributes"].AsBsonDocument["simpleField"] = distinctValues ? $"v-{i:D6}" : $"v-{i % 50:D2}";
+                document["attributes"].AsBsonDocument["otherField"] = $"o-{i % 70:D2}";
                 batch.Add(document);
             }
 

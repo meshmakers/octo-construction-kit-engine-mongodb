@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 using MongoDB.Bson;
@@ -53,6 +54,10 @@ public class TiebreakIndexShapeTests
         // a plain Unique index serves the order of its first key (measured); UniqueNotDeleted (partial on rtState) does not
         { "{ name: 'SimpleModelSimpleType_0', key: { 'attributes.simpleField': 1 }, unique: true, partialFilterExpression: { ckTypeId: { $in: ['SimpleModel/SimpleType'] } } }", "attributes.simpleField" },
         { "{ name: 'SimpleModelSimpleType_0', key: { 'attributes.simpleField': 1 }, unique: true, partialFilterExpression: { rtState: { $in: [null, 0] } } }", null },
+        // the same indexes under the alternate name of an update of their slot (AB#8960, AC 8)
+        { "{ name: 'SimpleModelSimpleType_0_a1b2c3', key: { 'attributes.simpleField': 1 }, unique: true, partialFilterExpression: { ckTypeId: { $in: ['SimpleModel/SimpleType'] } } }", "attributes.simpleField" },
+        { "{ name: 'SimpleModelSimpleType_0_a1b2c3', key: { ckTypeId: 1, 'attributes.simpleField': 1, rtState: 1 } }", "attributes.simpleField" },
+        { "{ name: 'SimpleModelSimpleType_0_id_a1b2c3', key: { ckTypeId: 1, 'attributes.simpleField': 1, _id: 1, rtState: 1 } }", null },
         // text index
         { "{ name: 'SimpleModelSimpleType_1', key: { _fts: 'text', _ftsx: 1 } }", null },
         // system-level indexes outside the CK definition
@@ -62,6 +67,22 @@ public class TiebreakIndexShapeTests
         { "{ name: '_id_', key: { _id: 1 } }", null },
         { "{ name: 'manual', key: { 'attributes.simpleField': 1 } }", null }
     };
+
+    [Fact]
+    public void AlternateIndexName_IsDeterministicPerDefinition()
+    {
+        static CkTypeIndex Index(params string[] keys) => new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields = [new CkIndexFields { AttributeNames = keys.ToList() }]
+        };
+
+        var name = MongoDbRepositoryDataSource.AlternateIndexName("T_0_id", Index("ckTypeId", "attributes.a", "_id"));
+
+        Assert.Matches("^T_0_id_[0-9a-f]{6}$", name);
+        Assert.Equal(name, MongoDbRepositoryDataSource.AlternateIndexName("T_0_id", Index("ckTypeId", "attributes.a", "_id")));
+        Assert.NotEqual(name, MongoDbRepositoryDataSource.AlternateIndexName("T_0_id", Index("ckTypeId", "attributes.b", "_id")));
+    }
 
     [Theory]
     [MemberData(nameof(Indexes))]

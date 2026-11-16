@@ -321,7 +321,14 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
                     var index = new CkTypeIndexWithName
                     {
-                        Name = indexName, IndexType = indexType, Fields = fields, Language = language
+                        Name = indexName, IndexType = indexType, Fields = fields, Language = language,
+                        // AB#8960: options the engine never sets on a CK index of this type. The partial filter of a
+                        // UniqueNotDeleted / Unique index is the engine's own (type and state filter).
+                        HasForeignOptions = doc.Contains("collation") ||
+                                            (doc.TryGetValue("sparse", out var sparse) && sparse.ToBoolean()) ||
+                                            (doc.TryGetValue("hidden", out var hidden) && hidden.ToBoolean()) ||
+                                            doc.Contains("expireAfterSeconds") ||
+                                            (hasPartialFilter && !isUnique)
                     };
                     indexes.Add(index);
                 }
