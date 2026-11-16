@@ -1928,6 +1928,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
 
+        // AB#6247: an archive Failed on Hidden columns exports its rows without those columns, like the query paths read
+        // them (the Hidden values stay in the table until RedactHiddenColumns drops them).
+        var hiddenPhysical = snapshot.IsFailedOnHiddenColumns
+            ? HiddenPhysicalColumns(snapshot)
+            : null;
+
         // Honour the "no backing table ⇒ no rows" contract explicitly instead of letting the first
         // page query fail with CrateDB's RelationUnknown (42P01). The status is no proxy for the
         // table (see ArchiveTableExistsAsync); a blueprint-seeded Disabled archive is the common
@@ -1993,10 +1999,17 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 qualifiedTable, windowed, generationTracked, timeColumn, fromUtc, toUtc, isLast);
             await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, ct))
             {
-                yield return row;
+                yield return hiddenPhysical is null ? row : WithoutColumns(row, hiddenPhysical);
             }
         }
     }
+
+    /// <summary>The row without the given physical columns (AB#6247, export of an archive Failed on Hidden columns).</summary>
+    private static IReadOnlyDictionary<string, object?> WithoutColumns(IReadOnlyDictionary<string, object?> row,
+        HashSet<string> columns) =>
+        row.Keys.Any(columns.Contains)
+            ? row.Where(kv => !columns.Contains(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value)
+            : row;
 
     /// <summary>
     /// Reads the first and the last instant on the time axis and the number of rows, restricted to
@@ -3735,6 +3748,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        var dropped = new HashSet<string>(columnPaths, StringComparer.OrdinalIgnoreCase);
+        var keptPhysical = new HashSet<string>(snapshot.Columns
+            .Where(c => !c.IsComputed && !string.IsNullOrWhiteSpace(c.Path) && !dropped.Contains(c.Path))
+            .Select(c => ColumnNameMapper.PathToColumnName(c.Path)), StringComparer.OrdinalIgnoreCase);
         foreach (var path in columnPaths)
         {
             var columnName = ColumnNameMapper.PathToColumnName(path);
@@ -3742,6 +3759,21 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             {
                 throw new ArchivePathInvalidException(snapshot.RtId, path,
                     $"'{columnName}' is a standard column of the archive table and cannot be dropped.");
+            }
+
+            // Paths map to physical names without a separator (A.Bc and Ab.C both become "abc"): never drop a column a
+            // kept path still stores.
+            if (keptPhysical.Contains(columnName))
+            {
+                throw new ArchivePathInvalidException(snapshot.RtId, path,
+                    $"its physical column '{columnName}' also stores a column that is kept.");
+            }
+
+            // The name goes into DDL that destroys data: only plain identifiers.
+            if (!System.Text.RegularExpressions.Regex.IsMatch(columnName, "^[a-z0-9_]+$"))
+            {
+                throw new ArchivePathInvalidException(snapshot.RtId, path,
+                    $"'{columnName}' is not a plain column name.");
             }
 
             await _databaseClient.ExecuteNonQueryAsync(_tenantId,
@@ -3879,10 +3911,6 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     #region Private helpers
 
     /// <summary>
-    /// Verifies that the archive identified by <paramref name="archiveRtId"/> exists and is in
-    /// status <see cref="CkArchiveStatus.Activated"/>; throws otherwise.
-    /// </summary>
-    /// <summary>
     /// The read-side gate of the query paths (AB#6247): an <see cref="CkArchiveStatus.Activated"/> archive, or one the
     /// access re-validation set to <see cref="CkArchiveStatus.Failed"/> because columns reached a Hidden attribute
     /// (<see cref="ArchiveSnapshot.IsFailedOnHiddenColumns"/>). Its history stays readable, but the snapshot handed to the
@@ -3897,7 +3925,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         if (snapshot.IsFailedOnHiddenColumns)
         {
-            return snapshot.WithoutHiddenColumns();
+            // A computed column whose formula reads a Hidden column would expose values derived from it: hide it too.
+            // Stored formulas use physical column names (ColumnNameMapper).
+            var hidden = HiddenPhysicalColumns(snapshot);
+            var visible = snapshot.WithoutHiddenColumns();
+            return visible with
+            {
+                Columns = visible.Columns.Where(c => !c.IsComputed || !ReferencesAny(c.Formula, hidden)).ToList()
+            };
         }
 
         if (snapshot.Status != CkArchiveStatus.Activated)
@@ -3908,6 +3943,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return snapshot;
     }
 
+    /// <summary>The physical column names of <see cref="ArchiveSnapshot.HiddenColumns"/> (AB#6247).</summary>
+    private static HashSet<string> HiddenPhysicalColumns(ArchiveSnapshot snapshot) =>
+        new(snapshot.HiddenColumns.Select(ColumnNameMapper.PathToColumnName), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether a formula names one of <paramref name="columns"/> as a whole identifier.</summary>
+    private static bool ReferencesAny(string? formula, HashSet<string> columns) =>
+        !string.IsNullOrEmpty(formula) &&
+        System.Text.RegularExpressions.Regex.Matches(formula, "[A-Za-z_][A-Za-z0-9_]*")
+            .Any(m => columns.Contains(m.Value));
+
+    /// <summary>
+    /// Verifies that the archive identified by <paramref name="archiveRtId"/> exists and is in
+    /// status <see cref="CkArchiveStatus.Activated"/>; throws otherwise.
+    /// </summary>
     private async Task<ArchiveSnapshot> EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
     {
         var snapshot = await _archiveStore.GetAsync(archiveRtId)

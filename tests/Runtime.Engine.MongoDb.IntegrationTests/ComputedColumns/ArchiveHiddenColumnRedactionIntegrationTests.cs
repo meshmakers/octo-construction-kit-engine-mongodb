@@ -128,7 +128,18 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         await Assert.ThrowsAsync<ArchiveNotActivatedException>(() =>
             lane.Repository.InsertAsync(lane.Archive, Point(FirstRow.AddDays(5), 1.0)));
 
-        // Redaction: Pin is gone from table and definition, Value and the rows stay, the archive ingests again.
+        // The row export leaves Pin out as well.
+        var exported = new List<IReadOnlyDictionary<string, object?>>();
+        await foreach (var row in lane.Repository.ExportRowsAsync(lane.Archive, null, TestContext.Current.CancellationToken))
+        {
+            exported.Add(row);
+        }
+
+        Assert.Equal(48, exported.Count);
+        Assert.All(exported, r => Assert.False(r.ContainsKey("pin")));
+        Assert.All(exported, r => Assert.True(r.ContainsKey("value")));
+
+        // Redaction (the archive is Failed): Pin is gone from table and definition, Value and the rows stay, the archive ingests again.
         var result = await lane.Lifecycle.RedactHiddenColumnsAsync(lane.Archive);
 
         Assert.Equal(CkArchiveStatus.Activated, result.Status);
@@ -167,5 +178,16 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         await Assert.ThrowsAsync<ArchivePathInvalidException>(() =>
             lane.Repository.DropIngestedColumnStorageAsync(snapshot, ["Timestamp"], TestContext.Current.CancellationToken));
         Assert.NotNull(await ColumnTypeAsync(lane, "timestamp"));
+
+        // "P.in" maps to the physical column "pin" too: a kept column must never lose its storage.
+        var sharing = snapshot with
+        {
+            Columns = [new CkArchiveColumnSpec("Value", false, false), new CkArchiveColumnSpec("P.in", false, false)]
+        };
+        await Assert.ThrowsAsync<ArchivePathInvalidException>(() =>
+            lane.Repository.DropIngestedColumnStorageAsync(sharing with
+            {
+                Columns = [.. sharing.Columns, new CkArchiveColumnSpec("Pin", false, false)]
+            }, ["Pin"], TestContext.Current.CancellationToken));
     }
 }

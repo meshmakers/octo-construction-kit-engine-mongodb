@@ -71,6 +71,28 @@ public class CrateDbFailedOnHiddenColumnsReadGateTests
     }
 
     [Fact]
+    public async Task FailedOnHiddenColumns_HidesAComputedColumnThatReadsAHiddenColumn()
+    {
+        A.CallTo(() => _store.GetAsync(Archive)).Returns(
+            new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Failed, "meter",
+            [
+                new CkArchiveColumnSpec("Name", Indexed: false, Required: false),
+                new CkArchiveColumnSpec("Pin", Indexed: false, Required: false),
+                new CkArchiveColumnSpec(string.Empty, false, false)
+                {
+                    Name = "pinTimesTwo", Formula = "pin * 2", ComputedState = ComputedColumnState.Active
+                }
+            ])
+            {
+                HiddenColumns = ["Pin"]
+            });
+
+        await Assert.ThrowsAsync<StreamDataException>(() => NewSut().ExecuteQueryAsync(Archive,
+            StreamDataQueryOptions.Create().WithCkTypeId(SomeType).WithColumns(["pinTimesTwo"])));
+        AssertNoSqlExecuted();
+    }
+
+    [Fact]
     public async Task FailedOnHiddenColumns_RefusesEveryWrite()
     {
         Stub(CkArchiveStatus.Failed, "Pin");

@@ -2683,9 +2683,11 @@ the catalog side.
     `Archive.StatusReason` and `Archive.HiddenColumns` (System.StreamData 1.27.0) with the status in one write
     (`SetStatusAsync(rtId, status, reason, hiddenColumns)`; the two-argument write clears both). The query paths of
     `CrateDbStreamDataRepository` use `EnsureArchiveQueryableAsync`: an archive with `IsFailedOnHiddenColumns` answers
-    queries with a snapshot without the Hidden columns (projection and names refused), every write still requires
-    `Activated`. `DropIngestedColumnStorageAsync` drops the columns (`ALTER TABLE … DROP COLUMN IF EXISTS`, never a
-    standard column) and `RemoveIngestedColumnsAsync` removes them from the definition; the engine's
+    queries with a snapshot without the Hidden columns and without computed columns whose formula reads one (projection
+    and names refused); the row export (`ExportRowsAsync`) leaves the Hidden columns out too; every write still requires
+    `Activated`. `DropIngestedColumnStorageAsync` drops the columns (`ALTER TABLE … DROP COLUMN IF EXISTS`; never a
+    standard column, never a physical column a kept path also maps to, only plain identifiers) and
+    `RemoveIngestedColumnsAsync` removes them from the definition; the engine's
     `RedactHiddenColumnsAsync` (CK method `Archive.RedactHiddenColumns-1`) runs both and resumes the archive.
     `ArchiveReconciler` and a failed provisioning record their reason too.
   - Tests: `ArchiveHiddenAccessTests` (reason and columns round-trip through MongoDB, the public re-validation),

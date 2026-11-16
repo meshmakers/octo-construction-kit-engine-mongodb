@@ -3436,7 +3436,9 @@ public class TenantContext : ITenantContext
             var activated = new List<OctoObjectId>();
             await foreach (var archive in GetArchiveRuntimeStore().EnumerateAsync())
             {
-                if (archive.Status == CkArchiveStatus.Activated)
+                // AB#6247: an archive Failed on Hidden columns is re-checked too, so a later model change that makes more
+                // of its columns Hidden extends the recorded list (the read paths hide all of them).
+                if (archive.Status == CkArchiveStatus.Activated || archive.IsFailedOnHiddenColumns)
                 {
                     activated.Add(archive.RtId);
                 }
