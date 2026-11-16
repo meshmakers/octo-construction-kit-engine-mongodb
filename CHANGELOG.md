@@ -36,6 +36,24 @@
   pages of 50 three times: raw and time-range, without sort order and with a sort on an all-ties column, full key order
   checked over all pages; grouped aggregation on both, and the LOCF path with TimeWeightedAverage on the raw archive),
   measurement `StreamDataPaging/StreamDataPagingOrderCostMeasurement` (`OCTO_PAGING_COST_DAYS`).
+- AB#8960 Fix: paging through runtime entities returns every entity exactly once, also without a sort or with a
+  sort key that is not unique. Before, `$skip`/`$limit` ran over an undefined order of the ties: 300 entities with the
+  same `Name`, paged by 7, came back as 300 items of which only 35 were distinct. The page pipeline of
+  `SingleOriginQuery` (and the enrichment read of the page) ends its `$sort` with `_id` in the direction of the last
+  sort key unless the caller's sort already contains `rtId`; without a caller sort it sorts by `_id` ascending (a
+  `$geoNear` or a text search without a caller sort keeps its own order). **Behaviour change:** an unsorted paged query
+  is ordered by rtId, ties of a sorted paged query by rtId.
+  **Index shape (new):** CK Ascending indexes are created as `{ckTypeId, attributes..., _id, rtState}` under the name
+  `<Type>_<n>_id`, so that they provide the order of a page; unique, UniqueNotDeleted, text and system-level indexes are
+  unchanged. Existing indexes in the legacy shape `<Type>_<n>` are **kept** by CK imports and `UpdateIndexesAsync`;
+  the new `ITenantContext.UpgradeTiebreakIndexesAsync` (default interface method) rebuilds them per tenant - the new
+  index is built before the legacy one is dropped, idempotent. `PagingTiebreakGate` leaves out the tiebreak only for a
+  page sorted first by a key whose order a legacy Ascending index or a plain Unique index provides (the tiebreak would
+  read every matching document per page: measured 2 ms to 113 ms for the first page over 100,000 entities); it decides
+  from the collection's indexes, cached per process for 5 minutes. Unsorted pages and pages sorted by other attributes
+  get the tiebreak right after the deploy, also on existing tenants. Unpaged queries, the association navigations and
+  the cached navigation path are unchanged; interface queries already broke ties by rtId (AB#7019). Rules and
+  measurements: `CLAUDE.md`, "Page order of runtime queries".
 - AB#8896 New: a paged runtime-entity query loads at most one page of documents. `SingleOriginQuery.ExecuteQuery`
   no longer puts count and page into one `$facet`, which pushed every matching document through the server and sorted
   the whole set in memory. A paged query now runs a page pipeline (`$match`, the association stages that navigation

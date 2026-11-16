@@ -913,6 +913,76 @@ Tests: `SortIndexHintTests` (unit: index shapes, exclusions, filter fields, comp
 `$sort` -, ascending/descending, rtId; shallow, unsorted and unprovided sorts without hint; transaction; stale hint
 retried; indexed selective filter keeps the planner and counts once).
 
+## Page order of runtime queries: the _id tiebreak (AB#8960)
+
+`$skip`/`$limit` are only deterministic over a total order. Over equal sort keys (or without a sort) MongoDB returns the
+ties in an order that can change from one page to the next: 300 continents with the same `Name`, paged by 7, came back
+as 300 items of which only 35 were distinct. Rules:
+
+- **A page of a type query sorts totally.** `SingleOriginQuery.CreatePagePipelineStageDefinitions(skip, take,
+  idTiebreak)` ends with the `$sort` of `Query.CreatePagingSortDefinition`: the caller's keys, then `_id` in the
+  direction of the last caller key (so one index `{..., attr, _id}` serves the page forwards and backwards), unless a
+  caller key already is `_id` (`rtId`, `IsSortUnique`); without a caller sort `_id` ascending alone. Without a caller
+  sort a `$geoNear` (nearest first) or a text search (best match first, CK queries) keeps its own order and gets no
+  `$sort` (`PreStagesDefineOrder`). The enrichment read of the page uses the same sort, so ties keep their page order.
+- **Only where no index order is lost (the gate).** `PagingTiebreakGate` decides per database, collection and first sort
+  key. A page sorted first by a key whose order an index provides that the tiebreak would break pages without it (the
+  order before AB#8960, from that index): a CK Ascending index in the legacy shape (its first key after `ckTypeId`),
+  and a plain Unique index (its first key; measured: IXSCAN without the tiebreak, a SORT over every document with it;
+  the key is unique within the index's types anyway) - `TiebreakIndexShape.LeadingKeyWithoutTiebreak`. A
+  UniqueNotDeleted index (partial filter on `rtState`) never served the page order and does not count. Every other page
+  gets the tiebreak right away, also on existing tenants: unsorted pages (the System Entity index
+  `{ckTypeId, _id, rtState}` is on every collection) and pages sorted by an attribute no such index leads with (a
+  blocking sort before as well). The answer comes from `listIndexes`, cached per process for `PagingTiebreakGate.Ttl`
+  (5 min) and invalidated by every index update of the same process - no marker, no read per query; it is not read for
+  `take` 0. Several instances: after another instance upgraded, this one pages the legacy way for at most 5 minutes
+  (safe); after a legacy index came back (rollback), this one keeps the tiebreak against it for at most 5 minutes (the
+  regression below for that time). A `listIndexes` failure (any exception but a cancellation) means no tiebreak for
+  sorted pages until the next check and never fails the query. Edge cases of the Unique rule: entities of types outside
+  the index's partial filter (a sort over a base type) and a compound unique index sorted by its first key only are not
+  totally ordered - as before AB#8960.
+- **Index shape.** CK Ascending indexes are `{ckTypeId, attr..., _id, rtState}` and named `<Type>_<n>_id`
+  (`TiebreakIndexShape`, `MongoDbRepositoryDataSource.PrepareAndCreateIndex`): `_id` right after the attribute fields,
+  before `rtState` wherever it stands (a `$ne` range; a key after a range cannot provide a sort), also for indexes with
+  several field groups. An index that holds `_id` already (System Entity `{CkTypeId, _id}`) keeps its shape and name.
+  Unique, UniqueNotDeleted and text indexes and the system-level indexes `_9000` (`rtState`) / `_9001`
+  (`ckTypeId, rtCreatedBy`) keep theirs; CK has no TTL, wildcard or 2dsphere index type. The TTL indexes of the lock,
+  query-result-cache and method-snapshot collections, the GridFS owner index, the RtAssociation and tenant-lifecycle
+  indexes are outside the CK definition and unchanged.
+- **Legacy indexes are kept until the explicit upgrade.** A CK import (also the System model import inside
+  `TryFindTenantContextAsync`, which reaches every collection) and `ITenantContext.UpdateIndexesAsync` keep an existing
+  legacy index and create only missing indexes (in the new shape) - an import must never rebuild the indexes of a large
+  collection while a tenant is resolved. `ITenantContext.UpgradeTiebreakIndexesAsync` (data source
+  `UpgradeTiebreakIndexesAsync`, under `index_update_lock`, collection by collection) builds `<Type>_<n>_id` next to
+  `<Type>_<n>` and drops the legacy index only in the cleanup at the end of the collection, after the build: the
+  collection never lacks the index. A failed build keeps the legacy index. Idempotent. An engine before AB#8960 (rollback)
+  sorts its pages from the new index (prefix) and, on its next index update, rebuilds `<Type>_<n>` and then drops
+  `<Type>_<n>_id` the same way. Both interface members are default interface methods (only NSubstitute fakes implement
+  `ITenantContext` outside this repository); the caller that runs the upgrade per tenant is a story of its own.
+- **Not changed:** unpaged queries keep the caller's sort; the association navigations (`MultipleOrigin*`), whose
+  entity-driven path (AB#4369) relies on an index-backed `$sort` with a `$lookup` between `$sort` and `$limit`; the cached
+  navigation path (page membership comes from the cached id list). Interface queries already break ties by rtId in their
+  merge (`RowComparer`, tie re-fetch, AB#7019).
+- **Measured** with `PagedQueryTiebreakPerformanceTests` (`Category=Performance`; 100,000 entities, 100 distinct names,
+  ~4 KB each, page 50, median of 5, local Testcontainer):
+
+  | CK index on `Name` | Page | skip 0: without / with tiebreak | skip 50,000: without / with tiebreak |
+  |---|---|---|---|
+  | legacy `{ckTypeId, name, rtState}` | sort `Name` | 1 ms (IXSCAN, 50 docs) / 103 ms (SORT over 100,000 docs) | 526 ms / 522 ms (SORT spilled to disk) |
+  | legacy | no sort | 2 ms / 1 ms (`{ckTypeId, _id}`) | 112 ms / 392 ms (50 docs, 50,050 keys) |
+  | tiebreak `{ckTypeId, name, _id, rtState}` | sort `Name` | 2 ms / 2 ms (IXSCAN, no SORT) | 464 ms / 626 ms (no SORT) |
+  | tiebreak | no sort | 1 ms / 1 ms | 138 ms / 329 ms |
+
+  The gate therefore keeps row 1 without the tiebreak until the upgrade; "without" on the tiebreak index is an engine
+  before AB#8960 after a rollback. Deep unsorted pages cost the skip over more index keys (accepted for correctness).
+- Tests: `PagedQueryTiebreakTests` (all pages over tied and unsorted entities, skip and cursor-style paging, sort shapes),
+  `PagedQueryParityTests.PagedQuery_Unsorted_PagesFollowTheRtIdOrder` (every parity shape), `PagedQueryPipelineTests`,
+  `GetRtEntitiesByInterfaceAsyncTests.PagingThroughTiedSortKeys_ReturnsEveryEntityExactlyOnceInRtIdOrder`,
+  `TiebreakIndexUpgradeTests` (shapes per index type, legacy kept by import and update, upgrade replaces gaplessly and is
+  idempotent, descending pages from the same index, rollback plan, gate cache across instances, unindexed sort
+  attribute, Unique and UniqueNotDeleted sort attributes), `TiebreakIndexShapeTests` (unit), `PagedQueryTiebreakTests`
+  (also the `$geoNear` page).
+
 ## GridFS read preference and read-your-writes (AB#7256)
 
 `MongoRepository.GetGridFsBucket()` reads with `SecondaryPreferred`, writes with `w:majority`. A secondary can lag behind

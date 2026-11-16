@@ -572,9 +572,10 @@ public class IndexCreationTests
 
             // Assert
             var indexNames = await GetAbstractRootIndexNamesAsync(tenantId);
-            Assert.Contains("SystemEntity_0", indexNames);
+            // AB#8960: CK Ascending indexes carry the paging tiebreak (_id) and the suffix _id; {CkTypeId, _id} keeps its name.
+            Assert.Contains("SystemEntity_0_id", indexNames);
             Assert.Contains("SystemEntity_1", indexNames);
-            Assert.Contains("SystemEntity_2", indexNames);
+            Assert.Contains("SystemEntity_2_id", indexNames);
             Assert.Contains(indexNames, n => n.EndsWith("_9000"));
             Assert.Contains(indexNames, n => n.EndsWith("_9001"));
         }
@@ -611,7 +612,7 @@ public class IndexCreationTests
             // Arrange - The root's collection misses an index declared by System/Entity, as after a System model upgrade
             var collectionName = await GetAbstractRootCollectionNameAsync(tenantId);
             await GetTenantMongoDatabase(tenantId).GetCollection<BsonDocument>(collectionName).Indexes
-                .DropOneAsync("SystemEntity_0", TestContext.Current.CancellationToken);
+                .DropOneAsync("SystemEntity_0_id", TestContext.Current.CancellationToken);
 
             // Act
             var databaseName = tenantId.ToLowerInvariant();
@@ -627,7 +628,7 @@ public class IndexCreationTests
             }
 
             // Assert
-            Assert.Contains("SystemEntity_0", await GetAbstractRootIndexNamesAsync(tenantId));
+            Assert.Contains("SystemEntity_0_id", await GetAbstractRootIndexNamesAsync(tenantId));
         }
         finally
         {

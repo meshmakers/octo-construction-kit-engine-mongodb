@@ -297,6 +297,8 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
     ///     element of the file, a main-engine capture of exactly these elements does not exist).
     ///     AB#8684 added the enum DeployState, the attributes ItemDefinition and ItemDeployState and the type
     ///     DeployableItem; their five lines were appended the same way.
+    ///     AB#8960 renamed CK Ascending indexes to <c>&lt;Type&gt;_&lt;n&gt;_id</c> (paging tiebreak shape): the index
+    ///     states of ReviewTask and Ticket (<c>TestReviewTask_0</c>, <c>TestTicket_0</c>) were renamed in the golden file.
     /// </summary>
     [Fact]
     public async Task V1Import_WritesTheSameCkDocumentsAsTheMainEngine()
