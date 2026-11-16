@@ -67,7 +67,10 @@ public class TenantDumpPlatformOnlyExclusionTests(SystemFixture systemFixture)
             var restoredCollectionNames = await (await database.ListCollectionNamesAsync(
                 cancellationToken: cancellationToken)).ToListAsync(cancellationToken);
             Assert.DoesNotContain(SecretDefaultCollectionName, restoredCollectionNames);
-            Assert.Contains(OrdinaryCollectionName, restoredCollectionNames);
+            var restoredOrdinaryDocument = await database.GetCollection<BsonDocument>(OrdinaryCollectionName)
+                .Find(FilterDefinition<BsonDocument>.Empty).SingleAsync(cancellationToken);
+            Assert.Equal(1, restoredOrdinaryDocument["_id"].AsInt32);
+            Assert.Equal("ordinary", restoredOrdinaryDocument["Name"].AsString);
         }
         finally
         {
