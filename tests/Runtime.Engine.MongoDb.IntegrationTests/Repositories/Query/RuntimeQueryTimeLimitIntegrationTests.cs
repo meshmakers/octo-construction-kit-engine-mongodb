@@ -11,6 +11,10 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+
+using Microsoft.Extensions.Options;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -114,6 +118,50 @@ public class RuntimeQueryTimeLimitIntegrationTests(SampleRtModelDataFixture fixt
         Assert.True(count > 0);
         Assert.Empty(observed);
         Assert.Null(repository.CreateRuntimeQueryTimeLimiter("Test/StateOrProvince-1"));
+    }
+
+    [Fact]
+    public async Task TheLimit_ReachesMongoDb_AsMaxTimeMS_OfEveryAggregateOfTheQuery()
+    {
+        // Read back from MongoDB's profiler what the server received: the observer alone would also pass if the
+        // limit never reached the driver options.
+        var (repository, _) = CreateRepository(Configured);
+        using var session = await repository.GetSessionAsync();
+        var query = await repository.CreateRtEntitiesByTypeQueryAsync<RtEntity>(session,
+            TestCkIds.RtCkStateOrProvinceTypeId, RtEntityQueryOptions.Create());
+        var collection = query.GetMongoCollection();
+
+        var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
+        var databaseName = collection.Database.DatabaseNamespace.DatabaseName;
+
+        async Task<List<BsonDocument>> ProfiledAggregatesAsync(Func<Task> run) =>
+            (await MongoProfiler.ProfileAggregatesAsync(config, databaseName, run))
+            .Where(op => op["ns"].AsString == collection.CollectionNamespace.FullName)
+            .ToList();
+
+        Task PagedQueryWithCount() => repository.GetRtEntitiesByTypeAsync(session,
+            TestCkIds.RtCkStateOrProvinceTypeId, RtEntityQueryOptions.Create(), 0, 2, true);
+
+        var configured = await ProfiledAggregatesAsync(PagedQueryWithCount);
+        List<BsonDocument> overridden;
+        using (RuntimeQueryTimeLimit.Override(TimeSpan.FromMinutes(30)))
+        {
+            overridden = await ProfiledAggregatesAsync(PagedQueryWithCount);
+        }
+
+        List<BsonDocument> disabled;
+        using (RuntimeQueryTimeLimit.Disable())
+        {
+            disabled = await ProfiledAggregatesAsync(PagedQueryWithCount);
+        }
+
+        // Page and count: two aggregates per run, each with the limit that applied.
+        Assert.Equal(2, configured.Count);
+        Assert.All(configured, op => Assert.Equal(120_000, op["command"]["maxTimeMS"].ToInt64()));
+        Assert.Equal(2, overridden.Count);
+        Assert.All(overridden, op => Assert.Equal(1_800_000, op["command"]["maxTimeMS"].ToInt64()));
+        Assert.Equal(2, disabled.Count);
+        Assert.All(disabled, op => Assert.False(op["command"].AsBsonDocument.Contains("maxTimeMS")));
     }
 
     [Fact]

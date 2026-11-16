@@ -5,7 +5,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 /// <summary>
 ///     The host's opt-in to the runtime query time limit (AB#8897), registered by <c>AddRuntimeQueryTimeLimit</c>. The
 ///     tenant repositories ask for it with <c>GetService</c>: a host without it runs runtime queries without a limit.
-///     Reads <see cref="RuntimeQueryOptions" /> per query, so a reloaded configuration applies to the next query.
+///     Reads <see cref="RuntimeQueryOptions" /> (<c>IOptionsMonitor.CurrentValue</c>) per query: the value the host's
+///     options hold at that moment applies.
 /// </summary>
 internal sealed class RuntimeQueryTimeLimitSettings
 {

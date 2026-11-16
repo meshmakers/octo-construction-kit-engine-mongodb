@@ -15,6 +15,11 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 ///     exceeds it is stopped on the server and ends with <see cref="RuntimeQueryTimeoutException" />; a query that
 ///     completes after more than <see cref="SlowQueryWarningRatio" /> of the limit is logged as a warning. Batch paths
 ///     override the limit at the call site with <see cref="RuntimeQueryTimeLimit" />.
+///     <para>
+///         The limit applies to each MongoDB operation of a query, as <c>maxTimeMS</c> does: a paged query with total
+///         count runs its page and its count (an interface query one count and one fetch per collection), each with
+///         the full limit, so one request can take longer than the limit in total.
+///     </para>
 /// </remarks>
 public sealed class RuntimeQueryOptions
 {

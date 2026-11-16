@@ -4,7 +4,8 @@
 
 - AB#8897 New: a runtime-entity query that runs too long is stopped by MongoDB (`maxTimeMS`) and ends with
   `RuntimeQueryTimeoutException` (tenant, CK type, limit, elapsed time) instead of keeping the database and the service
-  busy. **Opt-in per host:** `AddRuntimeQueryTimeLimit()` on the runtime engine builder; the host binds
+  busy. The limit applies to each MongoDB operation of a query (page and count of a paged query each get the full
+  limit). **Opt-in per host:** `AddRuntimeQueryTimeLimit()` on the runtime engine builder; the host binds
   `RuntimeQueryOptions` (section `RuntimeQuery`, `MaxTimeMs`, default 120,000 ms, 0 = off). Without the call nothing
   changes. Covered: the queries by type, by id, by type with navigation and by CK interface, and their counts
   (`SingleOriginQuery`, `RtInterfaceQueryExecutor`). Not covered yet: association and deep-graph queries

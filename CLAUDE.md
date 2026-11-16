@@ -1217,7 +1217,8 @@ not imported and the CK collections unchanged, missing dependency, 91 with the i
 
 `RuntimeQueries/`: a host that calls `AddRuntimeQueryTimeLimit()` (the asset repository) sends every runtime-entity query
 and count by type, by id, by type with navigation and by CK interface to MongoDB with `maxTimeMS` =
-`RuntimeQueryOptions.MaxTimeMs` (section `RuntimeQuery`, default 120,000, 0 = off). Rules to keep:
+`RuntimeQueryOptions.MaxTimeMs` (section `RuntimeQuery`, default 120,000, 0 = off), per MongoDB operation (page and
+count of a paged query each get the full limit). Rules to keep:
 
 - **One path per operation.** `SingleOriginQuery.AggregateToListAsync` and `RtInterfaceQueryExecutor.RunLimitedAsync`
   run every pipeline and count of a runtime query through `RuntimeQueryTimeLimiter`, which puts the limit into
