@@ -787,7 +787,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)
     {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveQueryableAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
         StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
@@ -848,7 +848,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     public async Task<StreamDataQueryResult> ExecuteAggregationQueryAsync(
         OctoObjectId archiveRtId, StreamDataAggregationQueryOptions options)
     {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveQueryableAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
         // Validated ahead of the time-weighted branch below so that path is covered too. Sort orders
@@ -990,7 +990,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     public async Task<StreamDataQueryResult> ExecuteGroupedAggregationQueryAsync(
         OctoObjectId archiveRtId, StreamDataGroupedAggregationQueryOptions options)
     {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveQueryableAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
         // The group-by columns matter most here: dropping one used to merge groups that should have
@@ -1334,7 +1334,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     public async Task<StreamDataQueryResult> ExecuteDownsamplingQueryAsync(
         OctoObjectId archiveRtId, StreamDataDownsamplingQueryOptions options)
     {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveQueryableAsync(archiveRtId);
         // AB#7360: with local-day bins (TimeZone, BinOrigin or BinInterval) the bins are the local days of the range;
         // Limit does not decide their number and is not required. From and To stay required.
         if (options.HasLocalDayBins)
@@ -1936,6 +1936,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
 
+        // AB#6247: an archive Failed on Hidden columns exports its rows without those columns, like the query paths read
+        // them (the Hidden values stay in the table until RedactHiddenColumns drops them).
+        var hiddenPhysical = snapshot.IsFailedOnHiddenColumns
+            ? ExportExcludedColumns(snapshot)
+            : null;
+
         // Honour the "no backing table ⇒ no rows" contract explicitly instead of letting the first
         // page query fail with CrateDB's RelationUnknown (42P01). The status is no proxy for the
         // table (see ArchiveTableExistsAsync); a blueprint-seeded Disabled archive is the common
@@ -2001,10 +2007,17 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 qualifiedTable, windowed, generationTracked, timeColumn, fromUtc, toUtc, isLast);
             await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, ct))
             {
-                yield return row;
+                yield return hiddenPhysical is null ? row : WithoutColumns(row, hiddenPhysical);
             }
         }
     }
+
+    /// <summary>The row without the excluded physical columns (AB#6247, export of an archive Failed on Hidden columns).</summary>
+    private static IReadOnlyDictionary<string, object?> WithoutColumns(IReadOnlyDictionary<string, object?> row,
+        Func<string, bool> excluded) =>
+        row.Keys.Any(excluded)
+            ? row.Where(kv => !excluded(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value)
+            : row;
 
     /// <summary>
     /// Reads the first and the last instant on the time axis and the number of rows, restricted to
@@ -3722,6 +3735,71 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// AB#6247. Each path maps to one physical column (<see cref="ColumnNameMapper.PathToColumnName"/>);
+    /// <c>ALTER TABLE … DROP COLUMN IF EXISTS</c> makes a retry after a partial run converge. A table that does not
+    /// exist has nothing to drop. The standard columns (timestamp, rtid, cktypeid and the windowed ones) are never
+    /// dropped. Destructive: the stored values of the column are gone.
+    /// </remarks>
+    public async Task DropIngestedColumnStorageAsync(ArchiveSnapshot snapshot, IReadOnlyCollection<string> columnPaths,
+        CancellationToken cancellationToken = default)
+    {
+        if (snapshot.RollupAggregations is not null)
+        {
+            throw new ArchivePathInvalidException(snapshot.RtId, string.Join(", ", columnPaths),
+                "the columns of a rollup archive are derived from its aggregations.");
+        }
+
+        if (columnPaths.Count == 0 || !await ArchiveTableExistsAsync(snapshot.RtId.ToString()))
+        {
+            return;
+        }
+
+        var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        var dropped = new HashSet<string>(columnPaths, StringComparer.OrdinalIgnoreCase);
+        var keptPhysical = new HashSet<string>(snapshot.Columns
+            .Where(c => !c.IsComputed && !string.IsNullOrWhiteSpace(c.Path) && !dropped.Contains(c.Path))
+            .Select(c => ColumnNameMapper.PathToColumnName(c.Path)), StringComparer.OrdinalIgnoreCase);
+        foreach (var path in columnPaths)
+        {
+            var columnName = ColumnNameMapper.PathToColumnName(path);
+            if (StandardColumnNames.Contains(columnName))
+            {
+                throw new ArchivePathInvalidException(snapshot.RtId, path,
+                    $"'{columnName}' is a standard column of the archive table and cannot be dropped.");
+            }
+
+            // Paths map to physical names without a separator (A.Bc and Ab.C both become "abc"): never drop a column a
+            // kept path still stores.
+            if (keptPhysical.Contains(columnName))
+            {
+                throw new ArchivePathInvalidException(snapshot.RtId, path,
+                    $"its physical column '{columnName}' also stores a column that is kept.");
+            }
+
+            // The name goes into DDL that destroys data: only plain identifiers.
+            if (!System.Text.RegularExpressions.Regex.IsMatch(columnName, "^[a-z0-9_]+$"))
+            {
+                throw new ArchivePathInvalidException(snapshot.RtId, path,
+                    $"'{columnName}' is not a plain column name.");
+            }
+
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                $"ALTER TABLE {table} DROP COLUMN IF EXISTS \"{columnName}\";", cancellationToken);
+            _logger.LogWarning("Archive {Table}: dropped column {Column} (path {Path}) and its stored values.",
+                table, columnName, path);
+        }
+    }
+
+    private static readonly HashSet<string> StandardColumnNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        Constants.Timestamp, Constants.RtId, Constants.CkTypeId, Constants.WindowStart, Constants.WindowEnd,
+        Constants.WasUpdated, Constants.Generation, Constants.RowOrigin, Constants.ManualWrittenBy, Constants.ManualWrittenAt,
+        Constants.ManualReason, Constants.ManualCount, Constants.LastManualAt, Constants.RtWellKnownName,
+        Constants.RtCreationDateTime, Constants.RtChangedDateTime
+    };
+
+    /// <inheritdoc />
     public async Task AddPendingComputedColumnStorageAsync(
         ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
     {
@@ -3839,6 +3917,106 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     };
 
     #region Private helpers
+
+    /// <summary>
+    /// The read-side gate of the query paths (AB#6247): an <see cref="CkArchiveStatus.Activated"/> archive, or one the
+    /// access re-validation set to <see cref="CkArchiveStatus.Failed"/> because columns reached a Hidden attribute
+    /// (<see cref="ArchiveSnapshot.IsFailedOnHiddenColumns"/>). Its history stays readable, but the snapshot handed to the
+    /// query builders no longer names the Hidden columns, so they are neither projected nor accepted. Every other status
+    /// throws <see cref="ArchiveNotActivatedException"/> as before. Writes keep using
+    /// <see cref="EnsureArchiveActivatedAsync"/>.
+    /// </summary>
+    private async Task<ArchiveSnapshot> EnsureArchiveQueryableAsync(OctoObjectId archiveRtId)
+    {
+        var snapshot = await _archiveStore.GetAsync(archiveRtId)
+            ?? throw new ArchiveNotFoundException(archiveRtId);
+
+        if (snapshot.IsFailedOnHiddenColumns)
+        {
+            // A computed column whose formula reads a Hidden column would expose values derived from it: hide it too.
+            // Stored formulas use physical column names (ColumnNameMapper).
+            var derived = HiddenDerivedComputedColumns(snapshot, out _);
+            var visible = snapshot.WithoutHiddenColumns();
+            return visible with
+            {
+                Columns = visible.Columns.Where(c => !c.IsComputed || !derived.Contains(c)).ToList()
+            };
+        }
+
+        if (snapshot.Status != CkArchiveStatus.Activated)
+        {
+            throw new ArchiveNotActivatedException(archiveRtId, snapshot.Status);
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>The physical column names of <see cref="ArchiveSnapshot.HiddenColumns"/> (AB#6247).</summary>
+    private static HashSet<string> HiddenPhysicalColumns(ArchiveSnapshot snapshot) =>
+        new(snapshot.HiddenColumns.Select(ColumnNameMapper.PathToColumnName), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The computed columns whose values derive from a Hidden column (AB#6247): their current or pending formula reads a
+    /// Hidden column or, transitively, another such computed column (formulas use physical names, so a computed column is
+    /// matched by its base and every versioned name). <paramref name="excludedPhysical"/> receives the Hidden columns'
+    /// physical names plus the base names of the derived computed columns.
+    /// </summary>
+    private static HashSet<CkArchiveColumnSpec> HiddenDerivedComputedColumns(ArchiveSnapshot snapshot,
+        out HashSet<string> excludedPhysical)
+    {
+        excludedPhysical = HiddenPhysicalColumns(snapshot);
+        var derived = new HashSet<CkArchiveColumnSpec>(ReferenceEqualityComparer.Instance);
+        var computed = snapshot.Columns.Where(c => c.IsComputed && !string.IsNullOrWhiteSpace(c.Name)).ToList();
+        bool added;
+        do
+        {
+            added = false;
+            foreach (var column in computed)
+            {
+                if (derived.Contains(column) || !(ReferencesAny(column.Formula, excludedPhysical) ||
+                                                  ReferencesAny(column.PendingFormula, excludedPhysical)))
+                {
+                    continue;
+                }
+
+                derived.Add(column);
+                excludedPhysical.Add(ComputedColumnNaming.Base(column));
+                excludedPhysical.Add(ComputedColumnNaming.Active(column));
+                excludedPhysical.Add(ComputedColumnNaming.Pending(column));
+                added = true;
+            }
+        } while (added);
+
+        return derived;
+    }
+
+    /// <summary>
+    /// The physical columns the row export leaves out for an archive Failed on Hidden columns (AB#6247): the Hidden
+    /// columns, and every stored version (<c>{base}</c>, <c>{base}__v{N}</c> with a numeric N) of a computed column whose
+    /// values derive from one of them (<see cref="HiddenDerivedComputedColumns"/>).
+    /// </summary>
+    private static Func<string, bool> ExportExcludedColumns(ArchiveSnapshot snapshot)
+    {
+        var derivedBases = HiddenDerivedComputedColumns(snapshot, out var excluded)
+            .Select(ComputedColumnNaming.Base)
+            .ToList();
+        return column => excluded.Contains(column) || derivedBases.Any(b => IsStoredVersionOf(column, b));
+    }
+
+    /// <summary>Whether <paramref name="column"/> is <c>{base}__v{N}</c> with a non-empty, digit-only N.</summary>
+    internal static bool IsStoredVersionOf(string column, string baseName)
+    {
+        var prefix = baseName + "__v";
+        return column.Length > prefix.Length &&
+               column.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+               column.AsSpan(prefix.Length).IndexOfAnyExceptInRange('0', '9') < 0;
+    }
+
+    /// <summary>Whether a formula names one of <paramref name="columns"/> as a whole identifier.</summary>
+    private static bool ReferencesAny(string? formula, HashSet<string> columns) =>
+        !string.IsNullOrEmpty(formula) &&
+        System.Text.RegularExpressions.Regex.Matches(formula, "[A-Za-z_][A-Za-z0-9_]*")
+            .Any(m => columns.Contains(m.Value));
 
     /// <summary>
     /// Verifies that the archive identified by <paramref name="archiveRtId"/> exists and is in

@@ -18,7 +18,29 @@ internal sealed class MemoryArchiveStore : IArchiveRuntimeStore
 
     public Task SetStatusAsync(OctoObjectId archiveRtId, CkArchiveStatus newStatus)
     {
-        _archives[archiveRtId] = _archives[archiveRtId] with { Status = newStatus };
+        _archives[archiveRtId] = _archives[archiveRtId] with { Status = newStatus, StatusReason = null, HiddenColumns = [] };
+        return Task.CompletedTask;
+    }
+
+    // AB#6247: keeps the status reason and the Hidden columns like the Mongo store.
+    public Task SetStatusAsync(OctoObjectId archiveRtId, CkArchiveStatus newStatus, string? statusReason,
+        IReadOnlyList<string> hiddenColumns)
+    {
+        _archives[archiveRtId] = _archives[archiveRtId] with
+        {
+            Status = newStatus, StatusReason = statusReason, HiddenColumns = hiddenColumns.ToList()
+        };
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveIngestedColumnsAsync(OctoObjectId archiveRtId, IReadOnlyCollection<string> columnPaths)
+    {
+        var a = _archives[archiveRtId];
+        _archives[archiveRtId] = a with
+        {
+            Columns = a.Columns.Where(c => c.IsComputed || !columnPaths.Contains(c.Path, StringComparer.OrdinalIgnoreCase))
+                .ToList()
+        };
         return Task.CompletedTask;
     }
 

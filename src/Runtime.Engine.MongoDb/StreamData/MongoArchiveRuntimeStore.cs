@@ -121,6 +121,9 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             // to one row survives; an empty list keeps the historical last-write-wins upsert.
             // System.StreamData 1.13.0.
             ConflictPrecedence = MapConflictPrecedence(entity.ConflictPrecedence),
+            // AB#6247 (System.StreamData 1.27.0): why the archive is Failed, and the columns that reached Hidden.
+            StatusReason = entity.StatusReason,
+            HiddenColumns = entity.HiddenColumns?.Where(c => !string.IsNullOrWhiteSpace(c)).ToList() ?? [],
         };
     }
 
@@ -175,7 +178,13 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
     }
 
     /// <inheritdoc />
-    public async Task SetStatusAsync(OctoObjectId archiveRtId, CkArchiveStatus newStatus)
+    /// <remarks>Clears <c>StatusReason</c> and <c>HiddenColumns</c> (AB#6247).</remarks>
+    public Task SetStatusAsync(OctoObjectId archiveRtId, CkArchiveStatus newStatus) =>
+        SetStatusAsync(archiveRtId, newStatus, null, []);
+
+    /// <inheritdoc />
+    public async Task SetStatusAsync(OctoObjectId archiveRtId, CkArchiveStatus newStatus, string? statusReason,
+        IReadOnlyList<string> hiddenColumns)
     {
         var session = await _tenantRepository.GetSessionAsync();
         var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, archiveRtId)
@@ -185,6 +194,8 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
         var activated = newStatus == CkArchiveStatus.Activated || entity.Status == RtCkArchiveStatusEnum.Activated;
         entity.FirstActivatedAt ??= activated ? DateTime.UtcNow : null;
         entity.Status = (RtCkArchiveStatusEnum)(int)newStatus;
+        entity.StatusReason = statusReason;
+        entity.HiddenColumns = hiddenColumns.Count == 0 ? null : new AttributeStringValueList(hiddenColumns.ToList());
         // Update via the entity's *concrete* CkTypeId (TimeRangeArchive / RollupArchive / RawArchive).
         // Going through the <RtArchive> generic would pass the abstract base CkTypeId to the rule
         // engine, which rejects abstract types.
@@ -227,6 +238,22 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             var kept = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
             kept.AddRange(entity.Columns.Where(
                 c => !(!string.IsNullOrWhiteSpace(c.Formula) && string.Equals(c.Name, name, StringComparison.Ordinal))));
+            entity.Columns = kept;
+        });
+
+    /// <inheritdoc />
+    public Task RemoveIngestedColumnsAsync(OctoObjectId archiveRtId, IReadOnlyCollection<string> columnPaths) =>
+        MutateAsync(archiveRtId, entity =>
+        {
+            if (entity.Columns is null || columnPaths.Count == 0)
+            {
+                return;
+            }
+
+            var remove = new HashSet<string>(columnPaths, StringComparer.OrdinalIgnoreCase);
+            var kept = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
+            kept.AddRange(entity.Columns.Where(c =>
+                !string.IsNullOrWhiteSpace(c.Formula) || c.Path is null || !remove.Contains(c.Path)));
             entity.Columns = kept;
         });
 

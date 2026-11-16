@@ -2695,18 +2695,27 @@ the catalog side.
   column builder (`ArchivePathTypeResolver`) refuses a Hidden column and a whole-record column whose record contains a
   Hidden sub-attribute, and `BuildRecordObject` leaves Hidden sub-attributes out like Secret ones (defence in depth).
   Pinned by `ArchiveHiddenAccessTests` (mutation-checked).
-- **Known limitations of the archive re-check (G3 re-review; Phase 4 prerequisites, User Story AB#6247 under F4.3
-  AB#5697, Epic AB#5584):**
-  - **N2 — services without stream data never re-check.** `RevalidateArchiveAccessAsync` needs the archive lifecycle
-    service, which only exists where a stream-data repository is registered. Identity, comm-controller and
-    platform-services own System.Identity, System.Communication and System.UI but register none, and the services that
-    do have stream data take the `AlreadyInstalled` branch for those models. An attribute made Hidden by one of those
-    models keeps being archived until a stream-data service re-checks (e.g. on its next own import).
-  - **N3 — `Failed` blocks the whole archive.** A `Failed` archive refuses every insert and every query (visible columns
-    included), pipeline writes throw `ArchiveNotActivatedException`, new data is lost until it is fixed. The transition
-    records no reason (one WARN line). Recovery: remove or change the offending column, then retry the activation; there
-    is no "drop column" operation yet.
-  - No production model uses Hidden on an archived attribute before Phase 4, so neither applies today.
+- **N2/N3 closed (AB#6247, F4.3 AB#5697, Epic AB#5584; engine `docs/archive-hidden-columns.md`):**
+  - **N2 — every service's import reaches the archives.** `RevalidateArchiveAccessAsync` is public
+    (`ITenantContext.RevalidateArchiveAccessAsync`, default implementation does nothing). It still needs the archive
+    lifecycle service, so in identity, comm-controller and platform-services it returns at once; the stream-data services
+    run it from `PosCreatePosUpdateTenantConsumer` (octo-common-services) on every `PosUpdateTenant` of scope `Full`, i.e.
+    after a model import in any service.
+  - **N3 — `Failed` on Hidden columns is readable and recoverable.** `MongoArchiveRuntimeStore` persists
+    `Archive.StatusReason` and `Archive.HiddenColumns` (System.StreamData 1.27.0) with the status in one write
+    (`SetStatusAsync(rtId, status, reason, hiddenColumns)`; the two-argument write clears both). The query paths of
+    `CrateDbStreamDataRepository` use `EnsureArchiveQueryableAsync`: an archive with `IsFailedOnHiddenColumns` answers
+    queries with a snapshot without the Hidden columns and without computed columns whose formula reads one (projection
+    and names refused, current and pending formulas); the row export (`ExportRowsAsync`) leaves the Hidden columns and
+    every stored version of such computed columns (transitively, `{base}__v{N}` with a numeric N) out too; every write still requires
+    `Activated`. `DropIngestedColumnStorageAsync` drops the columns (`ALTER TABLE … DROP COLUMN IF EXISTS`; never a
+    standard column, never a physical column a kept path also maps to, only plain identifiers) and
+    `RemoveIngestedColumnsAsync` removes them from the definition; the engine's
+    `RedactHiddenColumnsAsync` (CK method `Archive.RedactHiddenColumns-1`) runs both and resumes the archive.
+    `ArchiveReconciler` and a failed provisioning record their reason too.
+  - Tests: `ArchiveHiddenAccessTests` (reason and columns round-trip through MongoDB, the public re-validation),
+    `ComputedColumns/ArchiveHiddenColumnRedactionIntegrationTests` (real CrateDB: readable history, refused writes, drop,
+    resume, idempotence), `StreamData.UnitTests/CrateDbFailedOnHiddenColumnsReadGateTests`.
 - **Backlog (G3 re-review N6/N7):**
   - **N6 — cost:** the re-check runs after every single model import (also per model of a batch or blueprint): it
     loads the cache, enumerates all archives and loads each active one, between the Pre and Post notification. Skip it

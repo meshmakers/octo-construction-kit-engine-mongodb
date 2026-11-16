@@ -3413,8 +3413,10 @@ public class TenantContext : ITenantContext
     ///     already refuses such columns; this covers a model change after activation. Best-effort: a failure here is
     ///     logged as ERROR and does not fail the import that already succeeded. Skipped when the tenant has stream data
     ///     disabled, no stream-data repository is registered or the System.StreamData model is not installed.
+    ///     Public through <see cref="ITenantContext.RevalidateArchiveAccessAsync" /> (AB#6247): the stream-data services run
+    ///     it on <c>PosUpdateTenant</c> for model imports of other services.
     /// </summary>
-    internal async Task RevalidateArchiveAccessAsync()
+    public async Task RevalidateArchiveAccessAsync()
     {
         try
         {
@@ -3434,7 +3436,9 @@ public class TenantContext : ITenantContext
             var activated = new List<OctoObjectId>();
             await foreach (var archive in GetArchiveRuntimeStore().EnumerateAsync())
             {
-                if (archive.Status == CkArchiveStatus.Activated)
+                // AB#6247: an archive Failed on Hidden columns is re-checked too, so a later model change that makes more
+                // of its columns Hidden extends the recorded list (the read paths hide all of them).
+                if (archive.Status == CkArchiveStatus.Activated || archive.IsFailedOnHiddenColumns)
                 {
                     activated.Add(archive.RtId);
                 }
