@@ -178,6 +178,17 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
     internal IReadOnlyList<(string Path, bool Descending)> SortKeys => _sortKeys;
 
     /// <summary>
+    ///     The keys a page really sorts by (AB#8960): with <paramref name="idTiebreak" /> the caller's keys and then
+    ///     <c>_id</c> in the direction of the last one, as <see cref="CreatePagingSortDefinition" /> builds them (unless the
+    ///     sort is unique already); without it the caller's keys. Empty without a caller sort. An index hint (AB#9138)
+    ///     must provide all of them, or the hinted page would sort every document the index returns.
+    /// </summary>
+    internal IReadOnlyList<(string Path, bool Descending)> PageSortKeys(bool idTiebreak) =>
+        !idTiebreak || _sortKeys.Count == 0 || IsSortUnique
+            ? _sortKeys
+            : [.. _sortKeys, (Constants.IdField, _sortKeys[^1].Descending)];
+
+    /// <summary>
     /// The configured sort definitions combined, or null when no sort order is configured.
     /// </summary>
     internal SortDefinition<TEntity>? CombinedSortDefinition =>

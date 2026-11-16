@@ -111,6 +111,52 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
         });
     }
 
+    /// <summary>
+    ///     A deep sorted page (AB#9138 hint) over an engine-made legacy index keeps its hint to that index: the gate
+    ///     leaves the tiebreak out for this sort, so the hint needs only the caller's key. After the upgrade the hint goes
+    ///     to the tiebreak index, which provides the attribute and <c>_id</c>.
+    /// </summary>
+    [Fact]
+    public async Task DeepPage_IsHintedToTheLegacyIndex_AndAfterTheUpgradeToTheTiebreakIndex()
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.Ascending));
+            var collection = Collection(tenant, "AscModel");
+            await SeedAsync(tenant, "AscModel", 3_000);
+            var legacyName = await MakeLegacyAsync(collection);
+
+            var legacyPage = await DeepPageAsync(tenant, "AscModel");
+            Assert.Equal(legacyName, legacyPage.Hint);
+            Assert.Equal(new BsonDocument(FieldPath, 1),
+                legacyPage.Stages.Single(s => s.GetElement(0).Name == "$sort")["$sort"].AsBsonDocument);
+
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpgradeTiebreakIndexesAsync(adminSession);
+            }
+
+            var tiebreakPage = await DeepPageAsync(tenant, "AscModel");
+            Assert.Equal(legacyName + TiebreakIndexShape.NameSuffix, tiebreakPage.Hint);
+            Assert.Equal(new BsonDocument { { FieldPath, 1 }, { "_id", 1 } },
+                tiebreakPage.Stages.Single(s => s.GetElement(0).Name == "$sort")["$sort"].AsBsonDocument);
+            Assert.False((await ExplainAsync(collection, tiebreakPage.Stages.ToList())).HasSort);
+        });
+    }
+
+    private static async Task<SingleOriginQuery<OctoObjectId, RtEntity>.ExecutedPipeline> DeepPageAsync(
+        ITenantContext tenant, string modelName)
+    {
+        var repository = (TenantRepository)tenant.GetTenantRepository();
+        using var session = await repository.GetSessionAsync();
+        var query = await repository.CreateRtEntitiesByTypeQueryAsync<RtEntity>(session, TypeId(modelName),
+            RtEntityQueryOptions.Create().SortOrder(FieldName, SortOrders.Ascending));
+        var executed = new List<SingleOriginQuery<OctoObjectId, RtEntity>.ExecutedPipeline>();
+        query.PipelineObserver = executed.Add;
+        await query.ExecuteQuery(session, 1_500, 10, includeTotalCount: false);
+        return executed.Single(e => e.Purpose == "page");
+    }
+
     [Fact]
     public async Task Upgrade_ReplacesTheLegacyIndex_PagesWithTiebreakFromTheNewIndex_AndIsIdempotent()
     {
@@ -316,6 +362,39 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
+    ///     An index with our keys that differs only in an option the engine never sets (sparse) can block our build
+    ///     (MongoDB refuses a second index on the same keys that differs only in such options). An index is dropped
+    ///     only once its replacement is built: the other index stays, the import does not fail, and the attribute keeps
+    ///     an index.
+    /// </summary>
+    [Fact]
+    public async Task OurBuildRefusedBecauseOfASparseTwin_KeepsTheTwin()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.Ascending));
+            var collection = Collection(tenant, "AscModel");
+            var tiebreakName = Assert.Single(await IndexesAsync(collection),
+                i => KeysOf(i).SequenceEqual(TiebreakKeys))["name"].AsString;
+            const string twinName = "same_keys_sparse";
+            await collection.Indexes.DropOneAsync(tiebreakName);
+            await collection.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(
+                new BsonDocument { { "ckTypeId", 1 }, { FieldPath, 1 }, { "_id", 1 }, { "rtState", 1 } },
+                new CreateIndexOptions { Name = twinName, Sparse = true }));
+
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.1", IndexTypeDto.Ascending));
+
+            var indexes = await IndexesAsync(collection);
+            Assert.Contains(indexes, i => KeysOf(i).SequenceEqual(TiebreakKeys));
+            // Either MongoDB built ours next to the twin (then the twin was dropped after the build) or it refused
+            // ours (then the twin stays).
+            Assert.True(indexes.Any(i => i["name"].AsString == tiebreakName) ||
+                        indexes.Any(i => i["name"].AsString == twinName));
+            RunProgress.Report("AB#8960 sparse twin: " + string.Join(", ", Describe(indexes)));
+        });
+    }
+
+    /// <summary>
     ///     AC 8: when the build of the changed index fails (here: a compound index over two array fields of one document,
     ///     which MongoDB refuses), the old index with the expected name stays, and the update goes on.
     /// </summary>
@@ -418,8 +497,8 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     ///     Several instances: the gate caches per process. When another instance upgrades the indexes, this one keeps
     ///     paging without the tiebreak until its cache entry expires (safe: the legacy order, still from an index).
     ///     When a legacy index comes back (rollback of another instance), this one keeps the tiebreak until expiry -
-    ///     at most <see cref="PagingTiebreakGate.Ttl" /> of the regression. Expiry is simulated by
-    ///     <see cref="PagingTiebreakGate.Invalidate" />, which an index update of the same process also calls.
+    ///     at most <see cref="CollectionIndexCache.Ttl" /> of the regression. Expiry is simulated by
+    ///     <see cref="CollectionIndexCache.Invalidate{TDocument}" />, which an index update of the same process also calls.
     /// </summary>
     [Fact]
     public async Task Gate_IsCachedPerProcess_AChangeByAnotherInstanceIsSeenAfterExpiry()
@@ -624,8 +703,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
 
     private static async Task<bool> GateAsync(IMongoCollection<BsonDocument> collection, string? sortKey = FieldPath)
     {
-        PagingTiebreakGate.Invalidate(collection.CollectionNamespace.DatabaseNamespace.DatabaseName,
-            collection.CollectionNamespace.CollectionName);
+        CollectionIndexCache.Invalidate(collection);
         return await PagingTiebreakGate.IsEnabledAsync(collection, sortKey);
     }
 
@@ -642,8 +720,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
         await collection.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(
             new BsonDocument { { "ckTypeId", 1 }, { FieldPath, 1 }, { "rtState", 1 } },
             new CreateIndexOptions { Name = legacyName }));
-        PagingTiebreakGate.Invalidate(collection.CollectionNamespace.DatabaseNamespace.DatabaseName,
-            collection.CollectionNamespace.CollectionName);
+        CollectionIndexCache.Invalidate(collection);
         return legacyName;
     }
 

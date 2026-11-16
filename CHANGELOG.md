@@ -50,7 +50,8 @@
   index is built before the legacy one is dropped, idempotent. `PagingTiebreakGate` leaves out the tiebreak only for a
   page sorted first by a key whose order a legacy Ascending index or a plain Unique index provides (the tiebreak would
   read every matching document per page: measured 2 ms to 113 ms for the first page over 100,000 entities); it decides
-  from the collection's indexes, cached per process for 5 minutes. Unsorted pages and pages sorted by other attributes
+  from the collection's indexes, read through the `CollectionIndexCache` of AB#9138 (5 minutes, one invalidation); a deep
+  sorted page with the tiebreak is hinted only to an index that provides `_id` after the sort keys. Unsorted pages and pages sorted by other attributes
   get the tiebreak right after the deploy, also on existing tenants. Unpaged queries, the association navigations and
   the cached navigation path are unchanged; interface queries already broke ties by rtId (AB#7019). Rules and
   measurements: `CLAUDE.md`, "Page order of runtime queries".
@@ -63,7 +64,8 @@
   the right definition under another name is kept as it is (it used to be dropped and rebuilt under the expected
   name); a Unique or UniqueNotDeleted index under another name may filter other types, so the new one is built under
   the expected name next to it and the other one dropped after the build. An index with options the engine never sets
-  (collation, sparse, hidden, TTL, a partial filter on a non-unique index) is never taken for a CK index. **Naming rule:** a CK index is `<Type>_<n>` / `<Type>_<n>_id`, or the same with
+  (collation, sparse, hidden, TTL, a partial filter on a non-unique index) is never taken for a CK index; if it blocks
+  our build, it stays (warning, ours tracked as failed). **Naming rule:** a CK index is `<Type>_<n>` / `<Type>_<n>_id`, or the same with
   `_<6 hex>` after an update of its slot; the name is not a contract, the paging gate and the tiebreak shape are
   decided from the keys (the gate only recognises CK indexes by the name pattern `..._<n>` with the optional hash).
 - AB#8896 New: a paged runtime-entity query loads at most one page of documents. `SingleOriginQuery.ExecuteQuery`

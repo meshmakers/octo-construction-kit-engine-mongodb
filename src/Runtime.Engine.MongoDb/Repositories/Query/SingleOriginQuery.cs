@@ -311,7 +311,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     ///     </para>
     /// </summary>
     internal async Task<((string Name, BsonDocument Key)? Hint, long? ExactTotal)> ChoosePageHintAsync(IOctoSession octoSession, int? skip,
-        IReadOnlyList<IPipelineStageDefinition> pageStages, bool includeTotalCount)
+        IReadOnlyList<IPipelineStageDefinition> pageStages, bool includeTotalCount, bool idTiebreak = false)
     {
         if (!SortIndexHint.IsDeep(skip) || !HasSortDefinitions ||
             octoSession is IOctoSessionInternal { IsTransactionActive: true } || !PageSortFollowsMatch())
@@ -320,7 +320,8 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         }
 
         var indexes = await CollectionIndexCache.GetAsync(_mongoDbDataSourceCollection.GetMongoCollection());
-        var hint = SortIndexHint.Choose(indexes, SortKeys);
+        // AB#8960: with the _id tiebreak the index must provide _id after the caller's keys too.
+        var hint = SortIndexHint.Choose(indexes, PageSortKeys(idTiebreak));
         if (hint == null || !SortIndexHint.HasFilterIndex(indexes!, SortIndexHint.FilterFields(RenderMatch(pageStages)),
                 FirstSortKeyPath))
         {
@@ -470,7 +471,8 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             var pageStages = CreatePagePipelineStageDefinitions(skip, take, idTiebreak);
             // AB#9138: a deep sorted page spent its time in the planner's trial, not in the read - hint the index that
             // provides the sort.
-            (var hint, exactTotal) = await ChoosePageHintAsync(octoSession, skip, pageStages, includeTotalCount);
+            (var hint, exactTotal) =
+                await ChoosePageHintAsync(octoSession, skip, pageStages, includeTotalCount, idTiebreak);
             (pageEntities, var usedHint, var refusedHint) = await ReadPageAsync(octoSession, pageStages, hint);
             Observe<TEntity>("page", pageStages, pageEntities.Count, usedHint, refusedHint);
 

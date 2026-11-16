@@ -888,8 +888,10 @@ the plan cache never kept the winner (the cached works value comes from page 1).
   even when it was stored after it; a failure means no hint and is remembered for 10 s only). The page is hinted by the index's **key pattern**, so
   an index dropped or rebuilt under its name with other keys by another process fails the hint (codes 2/27): the entry is
   invalidated and the page is read once more without a hint. An index whose key pattern another index shares (a collated
-  or partial twin) is never chosen: the server refuses a key-pattern hint that matches several indexes. AB#8960 (PR 253) is to reuse the cache for its tiebreak
-  gate.
+  or partial twin) is never chosen: the server refuses a key-pattern hint that matches several indexes. The tiebreak
+  gate of AB#8960 reads the same cache (one `listIndexes`, one invalidation). With the `_id` tiebreak the page sorts by
+  the caller's keys and `_id` (`Query.PageSortKeys`), so only an index that provides `_id` after them is hinted (the
+  tiebreak shape `{ckTypeId, attr, _id, rtState}`, found by its keys whatever its name).
 - **Settings are process-wide**: `TenantContext` hands `PagingIndexHintMinSkip` / `PagingIndexHintMinMatches` to
   `SortIndexHint` (one system configuration per process, like the schema instance prefix); a value of 0 or less for the
   matches hints without counting.
@@ -933,8 +935,9 @@ as 300 items of which only 35 were distinct. Rules:
   UniqueNotDeleted index (partial filter on `rtState`) never served the page order and does not count. Every other page
   gets the tiebreak right away, also on existing tenants: unsorted pages (the System Entity index
   `{ckTypeId, _id, rtState}` is on every collection) and pages sorted by an attribute no such index leads with (a
-  blocking sort before as well). The answer comes from `listIndexes`, cached per process for `PagingTiebreakGate.Ttl`
-  (5 min) and invalidated by every index update of the same process - no marker, no read per query; it is not read for
+  blocking sort before as well). The answer comes from `listIndexes` through `CollectionIndexCache` (AB#9138, cached per
+  process for 5 min, invalidated with its generation by every index change of the same process) - no marker, no read
+  per query; it is not read for
   `take` 0. Several instances: after another instance upgraded, this one pages the legacy way for at most 5 minutes
   (safe); after a legacy index came back (rollback), this one keeps the tiebreak against it for at most 5 minutes (the
   regression below for that time). A `listIndexes` failure (any exception but a cancellation) means no tiebreak for
@@ -964,7 +967,9 @@ as 300 items of which only 35 were distinct. Rules:
   UniqueNotDeleted indexes the comparison does not see the type filter, so ours is built under the expected name next
   to it and the other one dropped after the build (MongoDB refuses only an identical index, then it is kept). An index
   with options the engine never sets on a CK index of its type (`CkTypeIndexWithName.HasForeignOptions`: collation,
-  sparse, hidden, TTL, a partial filter on a non-unique index) is never adopted, whatever its keys. An index that
+  sparse, hidden, TTL, a partial filter on a non-unique index) is never adopted, whatever its keys. If such an index
+  blocks our build (`IndexOptionsConflict`: same keys, other options only), it stays, a warning is logged and ours is
+  tracked as failed - an index is only dropped once its replacement is built. An index that
   holds the expected name with another definition (a CK update gave the slot other keys) stays until the cleanup at the
   end of the collection; the new index is built next to it under `AlternateIndexName`: `<expected name>_<6 hex>`, the
   SHA-256 of the definition (type, language, key paths and weights), so repeated updates find the same name. MongoDB

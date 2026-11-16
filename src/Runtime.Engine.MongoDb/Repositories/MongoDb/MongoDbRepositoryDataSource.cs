@@ -823,10 +823,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
         finally
         {
-            // The paging gate of this process re-reads the indexes of the collection on the next query (AB#8960).
-            var mongoCollection = collection.GetMongoCollection();
-            PagingTiebreakGate.Invalidate(mongoCollection.CollectionNamespace.DatabaseNamespace.DatabaseName,
-                mongoCollection.CollectionNamespace.CollectionName);
+            // The paging gate and the index hint of this process re-read the indexes of the collection on the next
+            // query (AB#8960, AB#9138).
+            CollectionIndexCache.Invalidate(collection.GetMongoCollection());
 
             // Always save tracked index states before ending tracking
             try
@@ -1163,6 +1162,21 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         catch (MongoCommandException ex) when (occupant == null &&
                                                ex.Code is IndexOptionsConflictCode or IndexKeySpecsConflictCode)
         {
+            // An index with the same keys but options the engine never sets (e.g. sparse or hidden) blocks ours:
+            // MongoDB refuses a second index on the same keys that differs only in such options. It stays - an index is
+            // dropped only once its replacement is built (AB#8960, decided in the design review) - and ours is not
+            // applied (tracked as failed by the caller).
+            var twin = repositoryIndices.FirstOrDefault(i => i.HasForeignOptions && i.CompareToInSequence(ckTypeIndex));
+            if (ex.Code == IndexOptionsConflictCode && twin != null)
+            {
+                repositoryIndices.Remove(twin);
+                _logger.LogWarning(
+                    "Index '{IndexName}' of '{CollectionName}' was not built: index '{OtherName}' has the same keys " +
+                    "with other options and is kept",
+                    indexName, collectionName, twin.Name);
+                throw;
+            }
+
             // The expected name belongs to an index that is no longer in repositoryIndices because it was kept for
             // another definition of this collection: build under the alternate name.
             targetName = AlternateIndexName(indexName, ckTypeIndex);
