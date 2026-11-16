@@ -1086,31 +1086,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // index differ only in their name and their type filter, e.g. after a type moved to another model.
         // The one carrying the expected name is ours; a differently named one is taken over only when it is
         // the single candidate, otherwise it belongs to another type or is obsolete and dropped at the end.
-        var repositoryIndex = FindMatchingIndex(repositoryIndices, ckTypeIndex, indexName);
-        if (repositoryIndex != null && repositoryIndex.Name != indexName &&
-            ckTypeIndex.IndexType is IndexTypes.Unique or IndexTypes.UniqueNotDeleted)
-        {
-            // The comparison does not see the type filter of a unique index: one under another name may filter other
-            // types (e.g. of the model a type moved away from). Ours is built next to it under the expected name and the
-            // other one is dropped by the cleanup after the build; MongoDB refuses only an identical index under a
-            // second name (IndexOptionsConflict), and then the existing one is ours and kept (AB#8960).
-            try
-            {
-                await CreateIndexAsync(collection, indexName, ckTypeIndex, collectionRootType, indexDefiningType);
-                return new IndexCreation(indexName, repositoryIndex.Name);
-            }
-            catch (MongoCommandException ex) when (ex.Code == IndexOptionsConflictCode)
-            {
-                // Identical index under another name: kept below.
-            }
-            catch (MongoCommandException)
-            {
-                // Not built: the existing index stays.
-                repositoryIndices.Remove(repositoryIndex);
-                throw;
-            }
-        }
-
+        // A unique index filters its types (the defining type and its descendants): an index with the keys but another
+        // type set (a descendant was added, the type moved to another model) is not ours and is replaced (AB#8960).
+        var typeIds = ckTypeIndex.IndexType is IndexTypes.Unique or IndexTypes.UniqueNotDeleted
+            ? CollectTypeIdsForIndex(collectionRootType, indexDefiningType, ckTypeIndex.IndexType.ToString())
+                .Select(t => t.ToString()).ToHashSet(StringComparer.Ordinal)
+            : null;
+        var repositoryIndex = FindMatchingIndex(repositoryIndices, ckTypeIndex, indexName, typeIds);
         if (repositoryIndex != null)
         {
             // Remove the matching index from the list so it won't be dropped later
@@ -1134,21 +1116,27 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
 
         // An existing index with this name and another definition stays in repositoryIndices: the cleanup at the end of
-        // the collection drops it after the new index is built under the alternate name (AB#8960).
-        var occupant = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
+        // the collection drops it after the new index is built under the alternate name (AB#8960). A collection holds at
+        // most one text index, so a changed text index replaces the existing text index whatever its name (it may have
+        // been kept under the name of an earlier slot).
+        var occupant = (ckTypeIndex.IndexType == IndexTypes.Text
+                           ? repositoryIndices.FirstOrDefault(i => i.IndexType == IndexTypes.Text)
+                           : null)
+                       ?? repositoryIndices.FirstOrDefault(i => i.Name == indexName);
         var targetName = indexName;
         if (occupant != null && (ckTypeIndex.IndexType == IndexTypes.Text || occupant.IndexType == IndexTypes.Text))
         {
-            // A collection holds at most one text index: the old one has to go before the new one can be built.
+            // The old text index has to go before the new one can be built.
             repositoryIndices.Remove(occupant);
             _logger.LogInformation("Text index '{IndexName}' of '{CollectionName}' exists with another definition, " +
-                                   "recreating (a collection holds only one text index)", indexName, collectionName);
-            await collection.DropIndexAsync(indexName);
+                                   "recreating as '{NewName}' (a collection holds only one text index)",
+                occupant.Name, collectionName, indexName);
+            await collection.DropIndexAsync(occupant.Name);
             occupant = null;
         }
         else if (occupant != null)
         {
-            targetName = AlternateIndexName(indexName, ckTypeIndex);
+            targetName = AlternateIndexName(indexName, ckTypeIndex, typeIds);
             _logger.LogInformation(
                 "Index '{IndexName}' of '{CollectionName}' exists with another definition; building the new one as " +
                 "'{TargetName}' before the old one is dropped",
@@ -1166,7 +1154,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // MongoDB refuses a second index on the same keys that differs only in such options. It stays - an index is
             // dropped only once its replacement is built (AB#8960, decided in the design review) - and ours is not
             // applied (tracked as failed by the caller).
-            var twin = repositoryIndices.FirstOrDefault(i => i.HasForeignOptions && i.CompareToInSequence(ckTypeIndex));
+            var twin = repositoryIndices.FirstOrDefault(i => i.HasForeignOptions && SameDefinition(i, ckTypeIndex));
             if (ex.Code == IndexOptionsConflictCode && twin != null)
             {
                 repositoryIndices.Remove(twin);
@@ -1179,7 +1167,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
             // The expected name belongs to an index that is no longer in repositoryIndices because it was kept for
             // another definition of this collection: build under the alternate name.
-            targetName = AlternateIndexName(indexName, ckTypeIndex);
+            targetName = AlternateIndexName(indexName, ckTypeIndex, typeIds);
             _logger.LogInformation(
                 "Index name '{IndexName}' of '{CollectionName}' is taken by a kept index; building as '{TargetName}'",
                 indexName, collectionName, targetName);
@@ -1232,12 +1220,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <summary>
     ///     The name an index is built under while an index with another definition holds its expected name (AB#8960):
     ///     <c>&lt;expected name&gt;_&lt;6 hex digits&gt;</c>, the digits from the SHA-256 of the definition (type, language,
-    ///     the key paths with their weights). Deterministic, so a repeated update finds the same name.
+    ///     the key paths with their weights and, for a unique index, its type set). Deterministic, so a repeated update
+    ///     finds the same name.
     /// </summary>
-    internal static string AlternateIndexName(string indexName, CkTypeIndex ckTypeIndex)
+    internal static string AlternateIndexName(string indexName, CkTypeIndex ckTypeIndex,
+        IReadOnlySet<string>? typeIds = null)
     {
         var definition = ckTypeIndex.IndexType + "|" + ckTypeIndex.Language + "|" + string.Join(";",
-            ckTypeIndex.Fields.Select(f => f.Weight + ":" + string.Join(",", f.AttributeNames)));
+                             ckTypeIndex.Fields.Select(f => f.Weight + ":" + string.Join(",", f.AttributeNames))) +
+                         "|" + string.Join(",", (typeIds ?? new HashSet<string>()).Order(StringComparer.Ordinal));
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(definition));
         return indexName + "_" + Convert.ToHexStringLower(hash)[..TiebreakIndexShape.AlternateNameHashLength];
     }
@@ -1245,14 +1236,45 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <summary>
     ///     The existing index with <paramref name="definition" />: the one named <paramref name="expectedName" />,
     ///     otherwise the only one with that definition (several types of one collection can declare the same index),
-    ///     otherwise null.
+    ///     otherwise null. With <paramref name="typeIds" /> (a unique index) its partial filter must name exactly these
+    ///     types.
     /// </summary>
     private static CkTypeIndexWithName? FindMatchingIndex(IEnumerable<CkTypeIndexWithName> repositoryIndices,
-        CkTypeIndex definition, string expectedName)
+        CkTypeIndex definition, string expectedName, IReadOnlySet<string>? typeIds = null)
     {
         // An index with options the engine never sets is not ours, whatever its keys (AB#8960: it is never adopted).
-        var matching = repositoryIndices.Where(i => !i.HasForeignOptions && i.CompareToInSequence(definition)).ToList();
+        var matching = repositoryIndices.Where(i => !i.HasForeignOptions && SameDefinition(i, definition) &&
+                                                    (typeIds == null || (i.PartialFilterTypeIds != null &&
+                                                                         i.PartialFilterTypeIds.SetEquals(typeIds))))
+            .ToList();
         return matching.FirstOrDefault(i => i.Name == expectedName) ?? (matching.Count == 1 ? matching[0] : null);
+    }
+
+    /// <summary>
+    ///     True when an existing index has <paramref name="definition" />. A text index compares its field groups
+    ///     (weights); every other index its keys in order: the engine builds a definition with several field groups as
+    ///     one key list, and <c>listIndexes</c> reads it back as one group (AB#8960).
+    /// </summary>
+    private static bool SameDefinition(CkTypeIndexWithName index, CkTypeIndex definition)
+    {
+        if (index.IndexType != definition.IndexType)
+        {
+            return false;
+        }
+
+        if (definition.IndexType == IndexTypes.Text)
+        {
+            // The language defaults to "en" when the index is built (CreateTextIndexAsync) and listIndexes reports it;
+            // the paths and their weights are a set - listIndexes groups them by weight, not by the CK field groups.
+            static HashSet<string> Weighted(CkTypeIndex i) => i.Fields
+                .SelectMany(f => f.AttributeNames.Select(a => a.ToLowerInvariant() + ":" + (f.Weight ?? 1)))
+                .ToHashSet(StringComparer.Ordinal);
+            return string.Equals(index.Language ?? "en", definition.Language ?? "en", StringComparison.Ordinal) &&
+                   Weighted(index).SetEquals(Weighted(definition));
+        }
+
+        return index.Fields.SelectMany(f => f.AttributeNames)
+            .SequenceEqual(definition.Fields.SelectMany(f => f.AttributeNames), StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -1287,7 +1309,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         CkTypeIndexWithName? legacy = null;
         if (legacyRule != null &&
-            !repositoryIndices.Any(i => !i.HasForeignOptions && i.CompareToInSequence(ckTypeIndex)))
+            !repositoryIndices.Any(i => !i.HasForeignOptions && SameDefinition(i, ckTypeIndex)))
         {
             legacy = FindMatchingIndex(repositoryIndices, legacyRule.LegacyIndex, baseName);
             if (legacy != null && !legacyRule.Upgrade)

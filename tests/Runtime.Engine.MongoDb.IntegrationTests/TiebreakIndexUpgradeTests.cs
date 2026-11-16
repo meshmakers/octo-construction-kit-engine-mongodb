@@ -36,6 +36,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     private const string TypeName = "SimpleType";
     private const string OtherFieldName = "OtherField";
     private const string OtherFieldPath = "attributes.otherField";
+    private const string ChildTypeName = "ChildType";
 
     private static readonly string[] LegacyKeys = ["ckTypeId", FieldPath, "rtState"];
     private static readonly string[] TiebreakKeys = ["ckTypeId", FieldPath, "_id", "rtState"];
@@ -221,7 +222,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
             var sawBoth = false;
             do
             {
-                var indexes = await IndexesAsync(collection);
+                var indexes = await FinishedIndexesAsync(collection);
                 var onTheAttribute = indexes.Count(i => KeysOf(i).Take(2).SequenceEqual(["ckTypeId", FieldPath]));
                 Assert.True(onTheAttribute >= 1, $"observation {observations}: no index on {FieldPath}");
                 sawBoth |= onTheAttribute == 2;
@@ -422,6 +423,113 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
+    ///     A unique index filters its types. When a CK update adds a descendant of the defining type, the index with the
+    ///     old type set is replaced by one that names the new type too (built next to it, the old one dropped after),
+    ///     so the descendant's values are unique-checked; a further import keeps it.
+    /// </summary>
+    [Theory]
+    [InlineData(IndexTypeDto.Unique)]
+    [InlineData(IndexTypeDto.UniqueNotDeleted)]
+    public async Task UniqueIndex_AfterADescendantIsAdded_FiltersTheNewTypeToo(IndexTypeDto indexType)
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("UniqModel", "1.0.0", indexType));
+            var collection = Collection(tenant, "UniqModel");
+
+            await tenant.ImportCkModelAsync(Model("UniqModel", "1.0.1", indexType, withChildType: true));
+
+            var unique = Assert.Single(await IndexesAsync(collection), i => i.GetValue("unique", false).ToBoolean());
+            Assert.Contains($"UniqModel/{ChildTypeName}", unique["partialFilterExpression"].ToJson());
+            var after = Describe(await IndexesAsync(collection));
+            await tenant.ImportCkModelAsync(Model("UniqModel", "1.0.2", indexType, withChildType: true));
+            Assert.Equal(after, Describe(await IndexesAsync(collection)));
+        });
+    }
+
+    /// <summary>
+    ///     A text index kept under the name of an earlier slot (a regular index was added before it) is still the one a
+    ///     change of its fields replaces: a collection holds only one text index.
+    /// </summary>
+    [Fact]
+    public async Task TextIndex_KeptUnderAnEarlierSlotName_IsReplacedWhenItsFieldsChange()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("TextModel", "1.0.0", IndexTypeDto.Text));
+            var collection = Collection(tenant, "TextModel");
+            var textName = Assert.Single(await IndexesAsync(collection), i => KeysOf(i).Contains("_fts"))["name"]
+                .AsString;
+
+            // An Ascending index before it: the text index moves to slot 1 and is kept under its slot-0 name.
+            await tenant.ImportCkModelAsync(Model("TextModel", "1.0.1", IndexTypeDto.None, indexes:
+            [
+                Index(IndexTypeDto.Ascending, Fields(OtherFieldName)),
+                Index(IndexTypeDto.Text, new CkIndexFieldsDto { AttributePaths = [FieldName], Weight = 1 })
+            ]));
+            Assert.Equal(textName,
+                Assert.Single(await IndexesAsync(collection), i => KeysOf(i).Contains("_fts"))["name"].AsString);
+
+            // Now its fields change.
+            await tenant.ImportCkModelAsync(Model("TextModel", "1.0.2", IndexTypeDto.None, indexes:
+            [
+                Index(IndexTypeDto.Ascending, Fields(OtherFieldName)),
+                Index(IndexTypeDto.Text, new CkIndexFieldsDto { AttributePaths = [OtherFieldName], Weight = 1 })
+            ]));
+            var text = Assert.Single(await IndexesAsync(collection), i => KeysOf(i).Contains("_fts"));
+            Assert.Equal([OtherFieldPath], text["weights"].AsBsonDocument.Names);
+        });
+    }
+
+    /// <summary>
+    ///     An Ascending definition with several field groups is built as one key list and read back by
+    ///     <c>listIndexes</c> as one group; it still matches its definition, so a further import neither keeps a
+    ///     legacy index wrongly nor rebuilds it.
+    /// </summary>
+    [Fact]
+    public async Task AscendingIndexWithSeveralFieldGroups_IsFoundByTheNextImport()
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            List<CkTypeIndexDto> indexes = [Index(IndexTypeDto.Ascending, Fields(FieldName), Fields(OtherFieldName))];
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.None, indexes: indexes));
+            var collection = Collection(tenant, "AscModel");
+            var before = await IndexesAsync(collection);
+            Assert.Single(before,
+                i => KeysOf(i).SequenceEqual(["ckTypeId", FieldPath, OtherFieldPath, "_id", "rtState"]));
+
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.1", IndexTypeDto.None, indexes: indexes));
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpdateIndexesAsync(adminSession);
+            }
+
+            Assert.Equal(Describe(before), Describe(await IndexesAsync(collection)));
+        });
+    }
+
+    /// <summary>
+    ///     AB#8960 gate: a legacy index leaves the tiebreak out only when it provides the complete caller sort. Sorted by
+    ///     (Name, Rank) over a legacy index on Name alone, the page sorts in memory anyway, so it gets the tiebreak and a
+    ///     total order.
+    /// </summary>
+    [Fact]
+    public async Task Gate_SortByMoreKeysThanTheLegacyIndexProvides_GetsTheTiebreak()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.Ascending));
+            var collection = Collection(tenant, "AscModel");
+            await MakeLegacyAsync(collection);
+
+            Assert.False(await PagingTiebreakGate.IsEnabledAsync(collection, [(FieldPath, false)]));
+            Assert.False(await PagingTiebreakGate.IsEnabledAsync(collection, [(FieldPath, true)]));
+            Assert.True(await PagingTiebreakGate.IsEnabledAsync(collection,
+                [(FieldPath, false), (OtherFieldPath, false)]));
+        });
+    }
+
+    /// <summary>
     ///     AC 8: when the build of the changed index fails (here: a compound index over two array fields of one document,
     ///     which MongoDB refuses), the old index with the expected name stays, and the update goes on.
     /// </summary>
@@ -482,7 +590,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
         string? gap = null;
         do
         {
-            var indexes = await IndexesAsync(collection);
+            var indexes = await FinishedIndexesAsync(collection);
             var onOld = indexes.Any(i => KeysOf(i).SequenceEqual(oldKeys));
             var onNew = indexes.Any(i => KeysOf(i).SequenceEqual(newKeys));
             gap ??= onOld || onNew
@@ -650,7 +758,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     }
 
     private static CkCompiledModelRoot Model(string modelName, string version, IndexTypeDto indexType,
-        string[]? indexedFields = null)
+        string[]? indexedFields = null, List<CkTypeIndexDto>? indexes = null, bool withChildType = false)
     {
         var modelVersion = $"{modelName}-{version}";
         return new CkCompiledModelRoot
@@ -685,7 +793,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
                             AttributeName = OtherFieldName
                         }
                     ],
-                    Indexes = indexType == IndexTypeDto.None
+                    Indexes = indexes ?? (indexType == IndexTypeDto.None
                         ? []
                         :
                     [
@@ -701,11 +809,28 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
                                 }
                             ]
                         }
-                    ]
-                }
+                    ])
+                },
+                .. withChildType
+                    ? new List<CkCompiledTypeDto>
+                    {
+                        new()
+                        {
+                            TypeId = new CkTypeId(ChildTypeName),
+                            DerivedFromCkTypeId = new CkId<CkTypeId>($"{modelVersion}/{TypeName}"),
+                            Attributes = []
+                        }
+                    }
+                    : []
             ]
         };
     }
+
+    private static CkTypeIndexDto Index(IndexTypeDto indexType, params List<CkIndexFieldsDto> fields) =>
+        new() { IndexType = indexType, Fields = fields };
+
+    private static CkIndexFieldsDto Fields(params string[] attributePaths) =>
+        new() { AttributePaths = attributePaths.ToList() };
 
     private static RtCkId<CkTypeId> TypeId(string modelName) => new($"{modelName}/{TypeName}");
 
@@ -716,6 +841,13 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
             .GetMongoCollection();
         return collection.Database.GetCollection<BsonDocument>(collection.CollectionNamespace.CollectionName);
     }
+
+    /// <summary>
+    ///     The indexes a query can use: <c>listIndexes</c> lists an index build in progress too (with a
+    ///     <c>buildUUID</c>), which must not count as present in a gapless check.
+    /// </summary>
+    private static async Task<List<BsonDocument>> FinishedIndexesAsync(IMongoCollection<BsonDocument> collection) =>
+        (await IndexesAsync(collection)).Where(i => !i.Contains("buildUUID")).ToList();
 
     private static async Task<List<BsonDocument>> IndexesAsync(IMongoCollection<BsonDocument> collection)
     {

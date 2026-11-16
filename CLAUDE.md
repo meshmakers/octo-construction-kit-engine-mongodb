@@ -927,9 +927,10 @@ as 300 items of which only 35 were distinct. Rules:
   caller key already is `_id` (`rtId`, `IsSortUnique`); without a caller sort `_id` ascending alone. Without a caller
   sort a `$geoNear` (nearest first) or a text search (best match first, CK queries) keeps its own order and gets no
   `$sort` (`PreStagesDefineOrder`). The enrichment read of the page uses the same sort, so ties keep their page order.
-- **Only where no index order is lost (the gate).** `PagingTiebreakGate` decides per database, collection and first sort
-  key. A page sorted first by a key whose order an index provides that the tiebreak would break pages without it (the
-  order before AB#8960, from that index): a CK Ascending index in the legacy shape (its first key after `ckTypeId`),
+- **Only where no index order is lost (the gate).** `PagingTiebreakGate` decides per database, collection and caller
+  sort. A page sorted by keys whose order an index provides that the tiebreak would break pages without it (the
+  order before AB#8960, from that index): a CK Ascending index in the legacy shape that provides the complete caller
+  sort (`SortIndexHint.Provides`; with more keys than it provides the page sorts in memory anyway and gets the tiebreak),
   and a plain Unique index (its first key; measured: IXSCAN without the tiebreak, a SORT over every document with it;
   the key is unique within the index's types anyway) - `TiebreakIndexShape.LeadingKeyWithoutTiebreak`. A
   UniqueNotDeleted index (partial filter on `rtState`) never served the page order and does not count. Every other page
@@ -963,9 +964,14 @@ as 300 items of which only 35 were distinct. Rules:
   `<Type>_<n>_id` the same way. Both interface members are default interface methods (only NSubstitute fakes implement
   `ITenantContext` outside this repository); the caller that runs the upgrade per tenant is a story of its own.
 - **Index updates never leave a gap (AC 8, AC 13).** `CreateOrUpdateIndex` never drops an index before its replacement is
-  built. An index with the right definition under another name is kept (adopted: no drop, no rebuild); for Unique and
-  UniqueNotDeleted indexes the comparison does not see the type filter, so ours is built under the expected name next
-  to it and the other one dropped after the build (MongoDB refuses only an identical index, then it is kept). An index
+  built. An index with the right definition under another name is kept (adopted: no drop, no rebuild). The definition
+  is compared by `SameDefinition`: a text index by its language (default `en`) and its paths with their weights (a set:
+  `listIndexes` groups them by weight; before AB#8960 the missing default language made every text index look changed,
+  so it was dropped and rebuilt on every import), every other index by its keys in order
+  (a definition with several field groups is built as one key list and read back as one group). A Unique or
+  UniqueNotDeleted index must also name exactly the types of the definition in its partial filter
+  (`CkTypeIndexWithName.PartialFilterTypeIds`): after a descendant was added, or the type moved to another model, the
+  index is replaced like an index with other keys, so the new types are unique-checked. An index
   with options the engine never sets on a CK index of its type (`CkTypeIndexWithName.HasForeignOptions`: collation,
   sparse, hidden, TTL, a partial filter on a non-unique index) is never adopted, whatever its keys. If such an index
   blocks our build (`IndexOptionsConflict`: same keys, other options only), it stays, a warning is logged and ours is
@@ -976,10 +982,12 @@ as 300 items of which only 35 were distinct. Rules:
   `ckTypeId`, so a hand-made index whose default name (`attributes.code_1`) matches the name pattern gets the tiebreak. An index that
   holds the expected name with another definition (a CK update gave the slot other keys) stays until the cleanup at the
   end of the collection; the new index is built next to it under `AlternateIndexName`: `<expected name>_<6 hex>`, the
-  SHA-256 of the definition (type, language, key paths and weights), so repeated updates find the same name. MongoDB
+  SHA-256 of the definition (type, language, key paths and weights, the type set of a unique index), so repeated
+  updates find the same name. MongoDB
   can neither rename an index nor hold the same keys under two names, so keeping the expected name would cost a second
   build. A failed build keeps the old index. Exception: a text index (a collection holds only one) is still dropped
-  before the changed one is built. If the expected name is held by an index kept for another slot
+  before the changed one is built - the existing text index whatever its name (it may be kept under the name of an
+  earlier slot). If the expected name is held by an index kept for another slot
   (`IndexOptionsConflict` 85 / `IndexKeySpecsConflict` 86), the build falls back to the alternate name. Index state
   tracking uses the real name (the replaced one is removed). Names are therefore not a contract: the tiebreak shape is
   decided by `_id` in the keys, the gate recognises CK indexes by `..._<n>` with the optional `_<6 hex>`

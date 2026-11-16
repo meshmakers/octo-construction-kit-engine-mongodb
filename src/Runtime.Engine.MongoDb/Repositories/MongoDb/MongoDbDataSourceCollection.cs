@@ -223,6 +223,33 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
     }
 
+    /// <summary>The values of the <c>ckTypeId: {$in: [...]}</c> condition of a partial filter, or null without one.</summary>
+    private static IReadOnlySet<string>? FindTypeIds(BsonDocument filter)
+    {
+        foreach (var element in filter)
+        {
+            if (element.Name == nameof(RtEntity.CkTypeId).ToCamelCase() && element.Value is BsonDocument condition &&
+                condition.TryGetValue("$in", out var values) && values is BsonArray array)
+            {
+                return array.Select(v => v.ToString()!).ToHashSet(StringComparer.Ordinal);
+            }
+
+            var nested = element.Value switch
+            {
+                BsonDocument document => FindTypeIds(document),
+                BsonArray conditions => conditions.OfType<BsonDocument>().Select(FindTypeIds)
+                    .FirstOrDefault(found => found != null),
+                _ => null
+            };
+            if (nested != null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
     public async Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string? prefix = null)
     {
         try
@@ -335,7 +362,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                                             (doc.TryGetValue("sparse", out var sparse) && sparse.ToBoolean()) ||
                                             (doc.TryGetValue("hidden", out var hidden) && hidden.ToBoolean()) ||
                                             doc.Contains("expireAfterSeconds") ||
-                                            (hasPartialFilter && !isUnique)
+                                            (hasPartialFilter && !isUnique),
+                        PartialFilterTypeIds = hasPartialFilter && partialFilterElement is BsonDocument partialFilter
+                            ? FindTypeIds(partialFilter)
+                            : null
                     };
                     indexes.Add(index);
                 }

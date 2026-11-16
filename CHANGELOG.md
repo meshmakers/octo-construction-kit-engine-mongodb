@@ -60,10 +60,13 @@
   (MongoDB can neither rename an index nor build one with other keys under a taken name); the new index is built under
   `<expected name>_<6 hex digits>` (the digits from the SHA-256 of the definition, so a repeated update finds the same
   name), and the old one is dropped at the end of the collection, after the build. If the build fails, the old index
-  stays. A text index is still dropped before its replacement is built (a collection holds only one). An index with
-  the right definition under another name is kept as it is (it used to be dropped and rebuilt under the expected
-  name); a Unique or UniqueNotDeleted index under another name may filter other types, so the new one is built under
-  the expected name next to it and the other one dropped after the build. An index with options the engine never sets
+  stays. A text index is still dropped before its replacement is built (a collection holds only one), whatever its
+  name. An index with the right definition under another name is kept as it is (it used to be dropped and rebuilt
+  under the expected name); definitions compare their keys in order (several field groups are one key list), and a
+  Unique or UniqueNotDeleted index must name exactly the definition's types in its partial filter - after a descendant
+  was added it is replaced like an index with other keys. **Pre-existing:** a text index never matched its definition
+  either (the default language `en` was compared with a missing one) and was dropped and rebuilt on every import. A legacy index leaves the tiebreak out only when it provides
+  the complete caller sort. An index with options the engine never sets
   (collation, sparse, hidden, TTL, a partial filter on a non-unique index) is never taken for a CK index; if it blocks
   our build, it stays (warning, ours tracked as failed). **Pre-existing bug fixed:** `GetIndexListAsync` read every
   partial unique index as UniqueNotDeleted, so a CK Unique index never matched its definition and was dropped and rebuilt

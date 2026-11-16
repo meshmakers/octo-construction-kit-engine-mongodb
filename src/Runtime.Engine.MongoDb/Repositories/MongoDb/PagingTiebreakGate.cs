@@ -26,19 +26,32 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 internal static class PagingTiebreakGate
 {
     /// <summary>
-    ///     True when a page of <paramref name="collection" /> sorted first by <paramref name="firstSortKeyPath" /> (null:
-    ///     no caller sort) gets the <c>_id</c> tiebreak.
+    ///     True when a page of <paramref name="collection" /> sorted ascending by <paramref name="firstSortKeyPath" />
+    ///     alone (null: no caller sort) gets the <c>_id</c> tiebreak.
+    /// </summary>
+    internal static Task<bool> IsEnabledAsync<TDocument>(IMongoCollection<TDocument> collection,
+        string? firstSortKeyPath, CancellationToken cancellationToken = default) =>
+        IsEnabledAsync(collection, firstSortKeyPath == null ? [] : [(firstSortKeyPath, false)], cancellationToken);
+
+    /// <summary>
+    ///     True when a page of <paramref name="collection" /> sorted by <paramref name="sortKeys" /> (empty: no caller
+    ///     sort) gets the <c>_id</c> tiebreak. A legacy Ascending index leaves it out only when it provides the complete
+    ///     sort (<see cref="SortIndexHint.Provides" />): otherwise the page sorts in memory anyway, and leaving out the
+    ///     tiebreak would only lose the order of the ties. A plain Unique index leaves it out for its first key.
     /// </summary>
     internal static async Task<bool> IsEnabledAsync<TDocument>(IMongoCollection<TDocument> collection,
-        string? firstSortKeyPath, CancellationToken cancellationToken = default)
+        IReadOnlyList<(string Path, bool Descending)> sortKeys, CancellationToken cancellationToken = default)
     {
-        if (firstSortKeyPath == null)
+        if (sortKeys.Count == 0)
         {
             return true;
         }
 
         var indexes = await CollectionIndexCache.GetAsync(collection, cancellationToken).ConfigureAwait(false);
         return indexes != null && !indexes.Any(index =>
-            string.Equals(TiebreakIndexShape.LeadingKeyWithoutTiebreak(index), firstSortKeyPath, StringComparison.Ordinal));
+            string.Equals(TiebreakIndexShape.LeadingKeyWithoutTiebreak(index), sortKeys[0].Path,
+                StringComparison.Ordinal) &&
+            ((index.TryGetValue("unique", out var unique) && unique.ToBoolean()) ||
+             SortIndexHint.Provides(index, sortKeys)));
     }
 }

@@ -467,7 +467,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         {
             // AB#8960: the _id tiebreak unless a legacy index provides the order of this sort.
             idTiebreak = await PagingTiebreakGate.IsEnabledAsync(_mongoDbDataSourceCollection.GetMongoCollection(),
-                FirstSortKeyPath);
+                SortKeys);
             var pageStages = CreatePagePipelineStageDefinitions(skip, take, idTiebreak);
             // AB#9138: a deep sorted page spent its time in the planner's trial, not in the read - hint the index that
             // provides the sort.
