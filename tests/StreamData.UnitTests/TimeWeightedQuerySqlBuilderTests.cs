@@ -66,6 +66,8 @@ public class TimeWeightedQuerySqlBuilderTests
         // Group column selected verbatim and grouped in the outer SELECT.
         Assert.Contains("SELECT \"rtwellknownname\",", sql);
         Assert.Contains("GROUP BY \"rtwellknownname\"", sql);
+        // AB#9110: the groups are paged by the caller, so their order is fixed.
+        Assert.EndsWith("GROUP BY \"rtwellknownname\"\nORDER BY \"rtwellknownname\" ASC;", sql.ReplaceLineEndings("\n"));
     }
 
     [Fact]

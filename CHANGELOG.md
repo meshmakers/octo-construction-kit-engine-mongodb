@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- AB#9110 Fix: paged stream-data queries return every row exactly once, also without a sort order. The simple query
+  (`ExecuteQueryAsync`, transient and persistent `rows`) ran LIMIT/OFFSET without ORDER BY when no sort order was given
+  (`AddOrderByTiebreaker` did nothing without an existing ORDER BY), and with a sort order only `timestamp` broke ties.
+  CrateDB returns the rows of a sharded table in any order per call, so the pages of a multi-node cluster repeated some
+  rows and skipped others (FH VSCT, 3.5.71: 103-122 of 192 rows unique). `CrateQueryBuilder.EnsureDeterministicOrder`
+  (replaces `AddOrderByTiebreaker`) appends the row key, ascending, to every page query: raw archives `timestamp, rtid,
+  cktypeid`, windowed archives `window_start, window_end, rtid, cktypeid`. Without a sort order that is the default order
+  (time axis, then rtId); with one, the key columns the caller did not name break its ties, in the caller's direction
+  where the caller named them. The grouped aggregation (query builder and LOCF statement) now orders by its group-by
+  columns; the GraphQL connection pages its groups by running it again per page. ORDER BY renders a column the
+  way GROUP BY does (`QueryVariable.ToOrderByString`), so `row_origin` / `manual_count` are ordered by their
+  `COALESCE(...)` expression, not by the bare name. Downsampling already ordered by bin,
+  then series. **Behaviour change:** rows that had no defined order now come in the default order. **Cost:** measured on
+  2,880,000 rows (3 shards, single-node test container, median of 5): first page 7 -> 17 ms unfiltered, 9 -> 8 ms for one
+  day; deep page 28 -> 2650 ms unfiltered (offset 2,879,900), 10 -> 57 ms for one day (offset 95,900). Accepted by Odin
+  (correctness first). Tests: `CrateQueryBuilderTests` (`EnsureDeterministicOrder_*`), `TimeWeightedQuerySqlBuilderTests`,
+  `StreamDataPaging/StreamDataPagingIntegrationTests` (real CrateDB, 4 shards, 8 anchors on the same timestamps / windows,
+  pages of 50 three times: raw and time-range, without sort order and with a sort on an all-ties column, full key order
+  checked over all pages; grouped aggregation on both, and the LOCF path with TimeWeightedAverage on the raw archive),
+  measurement `StreamDataPaging/StreamDataPagingOrderCostMeasurement` (`OCTO_PAGING_COST_DAYS`).
 - AB#8896 New: a paged runtime-entity query loads at most one page of documents. `SingleOriginQuery.ExecuteQuery`
   no longer puts count and page into one `$facet`, which pushed every matching document through the server and sorted
   the whole set in memory. A paged query now runs a page pipeline (`$match`, the association stages that navigation

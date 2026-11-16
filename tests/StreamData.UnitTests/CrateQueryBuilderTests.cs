@@ -378,18 +378,58 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
-    public void AddOrderByTiebreaker_AddsTimestampWhenNotPresent()
+    public void EnsureDeterministicOrder_WithoutSortOrder_OrdersByTheRowKeyOfARawArchive()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.IncludeDefaultVariables();
+        queryBuilder.EnsureDeterministicOrder().WithLimit(50).WithOffset(50);
+
+        var query = new CrateQueryCompiler().CompileQuery(queryBuilder);
+
+        Assert.EndsWith("""ORDER BY "timestamp" ASC, "rtid" ASC, "cktypeid" ASC LIMIT 50 OFFSET 50""", query);
+    }
+
+    [Fact]
+    public void EnsureDeterministicOrder_WithoutSortOrder_OrdersAWindowedArchiveByWindowStartFirst()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.IncludeDefaultVariables();
+        queryBuilder.EnsureDeterministicOrder();
+
+        var query = new CrateQueryCompiler().CompileQuery(queryBuilder);
+
+        // window_end is selected as "timestamp" (the logical time column of every archive).
+        Assert.EndsWith("""ORDER BY "window_start" ASC, "timestamp" ASC, "rtid" ASC, "cktypeid" ASC""", query);
+    }
+
+    [Fact]
+    public void EnsureDeterministicOrder_WithSortOrder_AppendsTheRowKeyAsTiebreaker()
     {
         var queryBuilder = new CrateQueryBuilder(Table);
         queryBuilder.IncludeDefaultVariables();
         queryBuilder.AddVariable("received", "received", null);
         queryBuilder.OrderBy("received", SortOrderDto.Descending);
-        queryBuilder.AddOrderByTiebreaker("timestamp", SortOrderDto.Ascending);
+        queryBuilder.EnsureDeterministicOrder();
 
-        var compiler = new CrateQueryCompiler();
-        var query = compiler.CompileQuery(queryBuilder);
+        var query = new CrateQueryCompiler().CompileQuery(queryBuilder);
 
-        Assert.Contains("""ORDER BY "received" DESC, "timestamp" ASC""", query);
+        Assert.EndsWith("""ORDER BY "received" DESC, "timestamp" ASC, "rtid" ASC, "cktypeid" ASC""", query);
+    }
+
+    [Fact]
+    public void EnsureDeterministicOrder_KeepsTheCallersDirectionOfAKeyColumn_AndDoesNotRepeatIt()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.IncludeDefaultVariables();
+        queryBuilder.OrderBy(Constants.RtId, SortOrderDto.Descending);
+        queryBuilder.OrderBy(Constants.WindowEnd, SortOrderDto.Descending);
+        queryBuilder.EnsureDeterministicOrder();
+
+        var query = new CrateQueryCompiler().CompileQuery(queryBuilder);
+
+        Assert.EndsWith("""ORDER BY "rtid" DESC, "timestamp" DESC, "window_start" ASC, "cktypeid" ASC""", query);
     }
 
     [Fact]
