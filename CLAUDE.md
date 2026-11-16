@@ -2684,7 +2684,8 @@ the catalog side.
     (`SetStatusAsync(rtId, status, reason, hiddenColumns)`; the two-argument write clears both). The query paths of
     `CrateDbStreamDataRepository` use `EnsureArchiveQueryableAsync`: an archive with `IsFailedOnHiddenColumns` answers
     queries with a snapshot without the Hidden columns and without computed columns whose formula reads one (projection
-    and names refused); the row export (`ExportRowsAsync`) leaves the Hidden columns out too; every write still requires
+    and names refused, current and pending formulas); the row export (`ExportRowsAsync`) leaves the Hidden columns and
+    every stored version of such computed columns out too; every write still requires
     `Activated`. `DropIngestedColumnStorageAsync` drops the columns (`ALTER TABLE … DROP COLUMN IF EXISTS`; never a
     standard column, never a physical column a kept path also maps to, only plain identifiers) and
     `RemoveIngestedColumnsAsync` removes them from the definition; the engine's

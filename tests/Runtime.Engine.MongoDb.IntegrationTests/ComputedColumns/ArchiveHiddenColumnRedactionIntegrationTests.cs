@@ -151,7 +151,7 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         Assert.Empty(redacted.HiddenColumns);
         Assert.Null(redacted.StatusReason);
         A.CallTo(() => lane.Audit.RecordTransitionAsync(A<string>._, lane.Archive, CkArchiveStatus.Failed,
-            CkArchiveStatus.Failed, A<string>.That.Contains("RedactHiddenColumns dropped"))).MustHaveHappenedOnceExactly();
+            CkArchiveStatus.Failed, A<string>.That.Contains("RedactHiddenColumns drops"))).MustHaveHappenedOnceExactly();
 
         await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
         Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table}"));
@@ -163,6 +163,31 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         var again = await lane.Lifecycle.RedactHiddenColumnsAsync(lane.Archive);
         Assert.Empty(again.RemovedColumns);
         Assert.Equal(CkArchiveStatus.Activated, again.Status);
+    }
+
+    [Fact]
+    public async Task AComputedColumnOverAHiddenColumn_IsNeitherExportedNorQueryable_AndBlocksTheRedaction()
+    {
+        var pinHidden = false;
+        var lane = await NewLaneAsync(() => pinHidden);
+        await lane.Lifecycle.AddComputedColumnAsync(lane.Archive, "pinDoubled", "pin * 2", FormulaResultType.Double,
+            indexed: false);
+
+        pinHidden = true;
+        Assert.False(await lane.Lifecycle.RevalidateAccessAsync(lane.Archive));
+
+        var exported = new List<IReadOnlyDictionary<string, object?>>();
+        await foreach (var row in lane.Repository.ExportRowsAsync(lane.Archive, null, TestContext.Current.CancellationToken))
+        {
+            exported.Add(row);
+        }
+
+        Assert.Equal(48, exported.Count);
+        Assert.All(exported, r => Assert.DoesNotContain(r.Keys, k => k.StartsWith("pin", StringComparison.OrdinalIgnoreCase)));
+        await Assert.ThrowsAnyAsync<StreamDataException>(() => lane.Repository.ExecuteQueryAsync(lane.Archive,
+            StreamDataQueryOptions.Create().WithCkTypeId(SensorType).WithColumns(["pinDoubled"])));
+        await Assert.ThrowsAnyAsync<StreamDataException>(() => lane.Lifecycle.RedactHiddenColumnsAsync(lane.Archive));
+        Assert.NotNull(await ColumnTypeAsync(lane, "pin"));
     }
 
     [Fact]

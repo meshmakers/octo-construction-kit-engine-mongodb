@@ -1931,7 +1931,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // AB#6247: an archive Failed on Hidden columns exports its rows without those columns, like the query paths read
         // them (the Hidden values stay in the table until RedactHiddenColumns drops them).
         var hiddenPhysical = snapshot.IsFailedOnHiddenColumns
-            ? HiddenPhysicalColumns(snapshot)
+            ? ExportExcludedColumns(snapshot)
             : null;
 
         // Honour the "no backing table ⇒ no rows" contract explicitly instead of letting the first
@@ -2004,11 +2004,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
     }
 
-    /// <summary>The row without the given physical columns (AB#6247, export of an archive Failed on Hidden columns).</summary>
+    /// <summary>The row without the excluded physical columns (AB#6247, export of an archive Failed on Hidden columns).</summary>
     private static IReadOnlyDictionary<string, object?> WithoutColumns(IReadOnlyDictionary<string, object?> row,
-        HashSet<string> columns) =>
-        row.Keys.Any(columns.Contains)
-            ? row.Where(kv => !columns.Contains(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value)
+        Func<string, bool> excluded) =>
+        row.Keys.Any(excluded)
+            ? row.Where(kv => !excluded(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value)
             : row;
 
     /// <summary>
@@ -3931,7 +3931,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             var visible = snapshot.WithoutHiddenColumns();
             return visible with
             {
-                Columns = visible.Columns.Where(c => !c.IsComputed || !ReferencesAny(c.Formula, hidden)).ToList()
+                Columns = visible.Columns.Where(c => !c.IsComputed ||
+                    (!ReferencesAny(c.Formula, hidden) && !ReferencesAny(c.PendingFormula, hidden))).ToList()
             };
         }
 
@@ -3946,6 +3947,24 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// <summary>The physical column names of <see cref="ArchiveSnapshot.HiddenColumns"/> (AB#6247).</summary>
     private static HashSet<string> HiddenPhysicalColumns(ArchiveSnapshot snapshot) =>
         new(snapshot.HiddenColumns.Select(ColumnNameMapper.PathToColumnName), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The physical columns the row export leaves out for an archive Failed on Hidden columns (AB#6247): the Hidden
+    /// columns, and every stored version (<c>{base}</c>, <c>{base}__v{N}</c>) of a computed column whose current or pending
+    /// formula reads one of them, because its values are derived from the Hidden attribute.
+    /// </summary>
+    private static Func<string, bool> ExportExcludedColumns(ArchiveSnapshot snapshot)
+    {
+        var hidden = HiddenPhysicalColumns(snapshot);
+        var derivedBases = snapshot.Columns
+            .Where(c => c.IsComputed && !string.IsNullOrWhiteSpace(c.Name) &&
+                        (ReferencesAny(c.Formula, hidden) || ReferencesAny(c.PendingFormula, hidden)))
+            .Select(ComputedColumnNaming.Base)
+            .ToList();
+        return column => hidden.Contains(column) || derivedBases.Any(b =>
+            string.Equals(column, b, StringComparison.OrdinalIgnoreCase) ||
+            column.StartsWith(b + "__v", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>Whether a formula names one of <paramref name="columns"/> as a whole identifier.</summary>
     private static bool ReferencesAny(string? formula, HashSet<string> columns) =>
