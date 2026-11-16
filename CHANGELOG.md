@@ -11,7 +11,9 @@
   total count stay the same (page and count parity tests per query shape and per data-permission caller). New
   additive overloads `ITenantRepository.GetRtEntitiesByTypeAsync` / `GetRtEntitiesGraphByTypeAsync` with
   `includeTotalCount`: `false` runs no count at all and returns a lower bound as `TotalCount` (skip + returned
-  entities, 0 for an empty page). The existing overloads always count and are unchanged for every caller. A paged
+  entities, 0 for an empty page). Exception: a paged graph query that uses the query result cache (Filter mode with
+  navigation pairs) returns the exact total of the cached id list, also for an empty page beyond the cached ids.
+  The existing overloads always count and are unchanged for every caller. A paged
   query with `take` 0 returns no entity without reading a page (it used to fail with `$limit` 0).
 - AB#8993 Test (deferred review finding of #249, applied with AB#9016): `DownsamplingManyIdsPerformanceTests.CreateSeededArchiveAsync`
   drops the archive table when the seed or its `REFRESH TABLE` fails, so a failed seed leaves no partial multi-million-row
