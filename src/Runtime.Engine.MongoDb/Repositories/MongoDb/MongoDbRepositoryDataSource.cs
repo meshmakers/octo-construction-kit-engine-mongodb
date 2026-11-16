@@ -1088,10 +1088,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // the single candidate, otherwise it belongs to another type or is obsolete and dropped at the end.
         // A unique index filters its types (the defining type and its descendants): an index with the keys but another
         // type set (a descendant was added, the type moved to another model) is not ours and is replaced (AB#8960).
-        var typeIds = ckTypeIndex.IndexType is IndexTypes.Unique or IndexTypes.UniqueNotDeleted
+        var uniqueTypes = ckTypeIndex.IndexType is IndexTypes.Unique or IndexTypes.UniqueNotDeleted
             ? CollectTypeIdsForIndex(collectionRootType, indexDefiningType, ckTypeIndex.IndexType.ToString())
-                .Select(t => t.ToString()).ToHashSet(StringComparer.Ordinal)
             : null;
+        var typeIds = uniqueTypes?.Select(t => t.ToString()).ToHashSet(StringComparer.Ordinal);
         var repositoryIndex = FindMatchingIndex(repositoryIndices, ckTypeIndex, indexName, typeIds);
         if (repositoryIndex != null)
         {
@@ -1115,26 +1115,31 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             return null;
         }
 
-        // An existing index with this name and another definition stays in repositoryIndices: the cleanup at the end of
-        // the collection drops it after the new index is built under the alternate name (AB#8960). A collection holds at
-        // most one text index, so a changed text index replaces the existing text index whatever its name (it may have
-        // been kept under the name of an earlier slot).
-        var occupant = (ckTypeIndex.IndexType == IndexTypes.Text
-                           ? repositoryIndices.FirstOrDefault(i => i.IndexType == IndexTypes.Text)
-                           : null)
-                       ?? repositoryIndices.FirstOrDefault(i => i.Name == indexName);
-        var targetName = indexName;
-        if (occupant != null && (ckTypeIndex.IndexType == IndexTypes.Text || occupant.IndexType == IndexTypes.Text))
+        // A collection holds at most one text index: a changed text index replaces the existing one (whatever its name -
+        // it may be kept under the name of an earlier slot), which has to go before the new one can be built. A text
+        // index with options the engine never sets is not ours and stays; ours is then refused.
+        if (ckTypeIndex.IndexType == IndexTypes.Text)
         {
-            // The old text index has to go before the new one can be built.
-            repositoryIndices.Remove(occupant);
-            _logger.LogInformation("Text index '{IndexName}' of '{CollectionName}' exists with another definition, " +
-                                   "recreating as '{NewName}' (a collection holds only one text index)",
-                occupant.Name, collectionName, indexName);
-            await collection.DropIndexAsync(occupant.Name);
-            occupant = null;
+            var oldText = repositoryIndices.FirstOrDefault(i => i.IndexType == IndexTypes.Text && !i.HasForeignOptions);
+            if (oldText != null)
+            {
+                repositoryIndices.Remove(oldText);
+                _logger.LogInformation(
+                    "Text index '{OldName}' of '{CollectionName}' exists with another definition, recreating as " +
+                    "'{IndexName}' (a collection holds only one text index)", oldText.Name, collectionName, indexName);
+                await collection.DropIndexAsync(oldText.Name);
+            }
         }
-        else if (occupant != null)
+
+        // The index this definition replaces stays in repositoryIndices until the new one is built; the cleanup at the end
+        // of the collection drops it after the build, and a failed build keeps it (AB#8960): the index holding the
+        // expected name, and for a unique index the one with its keys but another type set, whatever its name.
+        var occupant = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
+        var replaced = typeIds == null
+            ? null
+            : repositoryIndices.FirstOrDefault(i => !i.HasForeignOptions && SameDefinition(i, ckTypeIndex));
+        var targetName = indexName;
+        if (occupant != null)
         {
             targetName = AlternateIndexName(indexName, ckTypeIndex, typeIds);
             _logger.LogInformation(
@@ -1145,46 +1150,58 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         try
         {
-            await CreateIndexAsync(collection, targetName, ckTypeIndex, collectionRootType, indexDefiningType);
-        }
-        catch (MongoCommandException ex) when (occupant == null &&
-                                               ex.Code is IndexOptionsConflictCode or IndexKeySpecsConflictCode)
-        {
-            // An index with the same keys but options the engine never sets (e.g. sparse or hidden) blocks ours:
-            // MongoDB refuses a second index on the same keys that differs only in such options. It stays - an index is
-            // dropped only once its replacement is built (AB#8960, decided in the design review) - and ours is not
-            // applied (tracked as failed by the caller).
-            var twin = repositoryIndices.FirstOrDefault(i => i.HasForeignOptions && SameDefinition(i, ckTypeIndex));
-            if (ex.Code == IndexOptionsConflictCode && twin != null)
+            try
             {
-                repositoryIndices.Remove(twin);
-                _logger.LogWarning(
-                    "Index '{IndexName}' of '{CollectionName}' was not built: index '{OtherName}' has the same keys " +
-                    "with other options and is kept",
-                    indexName, collectionName, twin.Name);
-                throw;
+                await CreateIndexAsync(collection, targetName, ckTypeIndex, uniqueTypes);
+            }
+            catch (MongoCommandException ex) when (occupant == null &&
+                                                   ex.Code is IndexOptionsConflictCode or IndexKeySpecsConflictCode)
+            {
+                // An index with the same keys but options the engine never sets (e.g. sparse or hidden) blocks ours:
+                // MongoDB refuses a second index on the same keys that differs only in such options. It stays - an index
+                // is dropped only once its replacement is built (AB#8960, decided in the design review) - and ours is
+                // not applied (tracked as failed by the caller).
+                var twin = repositoryIndices.FirstOrDefault(i => i.HasForeignOptions && SameDefinition(i, ckTypeIndex));
+                if (ex.Code == IndexOptionsConflictCode && twin != null)
+                {
+                    repositoryIndices.Remove(twin);
+                    _logger.LogWarning(
+                        "Index '{IndexName}' of '{CollectionName}' was not built: index '{OtherName}' has the same keys " +
+                        "with other options and is kept",
+                        indexName, collectionName, twin.Name);
+                    throw;
+                }
+
+                // The expected name belongs to an index that is no longer in repositoryIndices because it was kept for
+                // another definition of this collection: build under the alternate name.
+                targetName = AlternateIndexName(indexName, ckTypeIndex, typeIds);
+                _logger.LogInformation(
+                    "Index name '{IndexName}' of '{CollectionName}' is taken by a kept index; building as '{TargetName}'",
+                    indexName, collectionName, targetName);
+                await CreateIndexAsync(collection, targetName, ckTypeIndex, uniqueTypes);
+            }
+        }
+        catch (MongoCommandException)
+        {
+            // The new index was not built: the index it replaces stays.
+            if (occupant != null)
+            {
+                repositoryIndices.Remove(occupant);
             }
 
-            // The expected name belongs to an index that is no longer in repositoryIndices because it was kept for
-            // another definition of this collection: build under the alternate name.
-            targetName = AlternateIndexName(indexName, ckTypeIndex, typeIds);
-            _logger.LogInformation(
-                "Index name '{IndexName}' of '{CollectionName}' is taken by a kept index; building as '{TargetName}'",
-                indexName, collectionName, targetName);
-            await CreateIndexAsync(collection, targetName, ckTypeIndex, collectionRootType, indexDefiningType);
-        }
-        catch (MongoCommandException) when (occupant != null)
-        {
-            // The new index was not built: the old one stays.
-            repositoryIndices.Remove(occupant);
+            if (replaced != null)
+            {
+                repositoryIndices.Remove(replaced);
+            }
+
             throw;
         }
 
-        return new IndexCreation(targetName, occupant?.Name);
+        return new IndexCreation(targetName, occupant?.Name ?? replaced?.Name);
     }
 
-    private async Task CreateIndexAsync<TKey, TDocument>(IMongoDbDataSourceCollection<TKey, TDocument> collection,
-        string indexName, CkTypeIndex ckTypeIndex, CkTypeInfo? collectionRootType, CkType? indexDefiningType)
+    private static async Task CreateIndexAsync<TKey, TDocument>(IMongoDbDataSourceCollection<TKey, TDocument> collection,
+        string indexName, CkTypeIndex ckTypeIndex, List<RtCkId<CkTypeId>>? uniqueTypes)
         where TDocument : class, new()
         where TKey : notnull
     {
@@ -1199,18 +1216,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     ckTypeIndex.Fields);
                 break;
             case IndexTypes.Unique:
-                var uniqueTypeIds = CollectTypeIdsForIndex(collectionRootType, indexDefiningType, "Unique");
-
                 await collection.CreateUniqueIndexAsync(indexName,
-                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames),
-                    uniqueTypeIds);
+                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames), uniqueTypes!);
                 break;
             case IndexTypes.UniqueNotDeleted:
-                var typeIds = CollectTypeIdsForIndex(collectionRootType, indexDefiningType, "UniqueNotDeleted");
-
                 await collection.CreateUniqueNotDeletedIndexAsync(indexName,
-                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames),
-                    typeIds);
+                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames), uniqueTypes!);
                 break;
             default:
                 throw OperationFailedException.IndexTypeNotSupported(ckTypeIndex.IndexType);

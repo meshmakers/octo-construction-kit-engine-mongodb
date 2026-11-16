@@ -26,14 +26,6 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 internal static class PagingTiebreakGate
 {
     /// <summary>
-    ///     True when a page of <paramref name="collection" /> sorted ascending by <paramref name="firstSortKeyPath" />
-    ///     alone (null: no caller sort) gets the <c>_id</c> tiebreak.
-    /// </summary>
-    internal static Task<bool> IsEnabledAsync<TDocument>(IMongoCollection<TDocument> collection,
-        string? firstSortKeyPath, CancellationToken cancellationToken = default) =>
-        IsEnabledAsync(collection, firstSortKeyPath == null ? [] : [(firstSortKeyPath, false)], cancellationToken);
-
-    /// <summary>
     ///     True when a page of <paramref name="collection" /> sorted by <paramref name="sortKeys" /> (empty: no caller
     ///     sort) gets the <c>_id</c> tiebreak. A legacy Ascending index leaves it out only when it provides the complete
     ///     sort (<see cref="SortIndexHint.Provides" />): otherwise the page sorts in memory anyway, and leaving out the

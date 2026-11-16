@@ -220,20 +220,27 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
             var upgrade = tenant.UpgradeTiebreakIndexesAsync(adminSession);
             var observations = 0;
             var sawBoth = false;
+            var inBuild = 0;
+            string? gap = null;
             do
             {
-                var indexes = await FinishedIndexesAsync(collection);
+                var (indexes, building) = await FinishedIndexesAsync(collection);
                 var onTheAttribute = indexes.Count(i => KeysOf(i).Take(2).SequenceEqual(["ckTypeId", FieldPath]));
-                Assert.True(onTheAttribute >= 1, $"observation {observations}: no index on {FieldPath}");
+                // Recorded, not asserted here: the upgrade must finish before the tenant is dropped.
+                gap ??= onTheAttribute >= 1 ? null : $"observation {observations}: no finished index on {FieldPath}";
                 sawBoth |= onTheAttribute == 2;
+                inBuild += building.Any(i => KeysOf(i).SequenceEqual(TiebreakKeys)) ? 1 : 0;
                 observations++;
             } while (!upgrade.IsCompleted);
 
             await upgrade;
+            Assert.Null(gap);
+
             Assert.True(observations >= 2, $"only {observations} observation(s) during the upgrade");
             Assert.Single(await IndexesAsync(collection), i => KeysOf(i).SequenceEqual(TiebreakKeys));
             // Informative: whether the build was slow enough to see both indexes at once.
-            RunProgress.Report($"AB#8960 gapless upgrade: observations {observations}, both indexes seen: {sawBoth}");
+            RunProgress.Report($"AB#8960 gapless upgrade: observations {observations}, new index only in build: " +
+                               $"{inBuild}, both finished indexes seen: {sawBoth}");
         });
     }
 
@@ -448,6 +455,45 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
+    ///     The unique index a type-set change replaces stays when the replacement cannot be built (here: the new
+    ///     descendant already holds duplicate values), also when it is not under the expected name.
+    /// </summary>
+    [Fact]
+    public async Task UniqueIndex_UnderAnotherName_StaysWhenItsReplacementFails()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("UniqModel", "1.0.0", IndexTypeDto.Unique));
+            var collection = Collection(tenant, "UniqModel");
+            var unique = Assert.Single(await IndexesAsync(collection), i => i.GetValue("unique", false).ToBoolean());
+            const string keptName = "unique_under_another_name";
+            await collection.Indexes.DropOneAsync(unique["name"].AsString);
+            await collection.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(unique["key"].AsBsonDocument,
+                new CreateIndexOptions<BsonDocument>
+                {
+                    Name = keptName, Unique = true,
+                    PartialFilterExpression = unique["partialFilterExpression"].AsBsonDocument
+                }));
+
+            // Entities of the descendant-to-be with the same value: the replacement that covers them must fail.
+            await SeedAsync(tenant, "UniqModel", 1, distinctValues: true);
+            var template = await collection.Find(new BsonDocument()).FirstAsync();
+            foreach (var _ in Enumerable.Range(0, 2))
+            {
+                var document = template.DeepClone().AsBsonDocument;
+                document["_id"] = ObjectId.GenerateNewId();
+                document["ckTypeId"] = $"UniqModel/{ChildTypeName}";
+                document["attributes"].AsBsonDocument["simpleField"] = "duplicate";
+                await collection.InsertOneAsync(document);
+            }
+
+            await tenant.ImportCkModelAsync(Model("UniqModel", "1.0.1", IndexTypeDto.Unique, withChildType: true));
+
+            Assert.Contains(await IndexesAsync(collection), i => i["name"].AsString == keptName);
+        });
+    }
+
+    /// <summary>
     ///     A text index kept under the name of an earlier slot (a regular index was added before it) is still the one a
     ///     change of its fields replaces: a collection holds only one text index.
     /// </summary>
@@ -587,10 +633,12 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     {
         var observations = 0;
         var sawBoth = false;
+        var inBuild = 0;
         string? gap = null;
         do
         {
-            var indexes = await FinishedIndexesAsync(collection);
+            var (indexes, building) = await FinishedIndexesAsync(collection);
+            inBuild += building.Any(i => KeysOf(i).SequenceEqual(newKeys)) ? 1 : 0;
             var onOld = indexes.Any(i => KeysOf(i).SequenceEqual(oldKeys));
             var onNew = indexes.Any(i => KeysOf(i).SequenceEqual(newKeys));
             gap ??= onOld || onNew
@@ -605,7 +653,8 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
         Assert.Null(gap);
         Assert.True(observations >= 2, $"{step}: only {observations} observation(s) during the update");
         Assert.Contains(await IndexesAsync(collection), i => KeysOf(i).SequenceEqual(newKeys));
-        RunProgress.Report($"AB#8960 AC 13 {step}: observations {observations}, both indexes seen: {sawBoth}");
+        RunProgress.Report($"AB#8960 AC 13 {step}: observations {observations}, new index only in build: {inBuild}, " +
+                           $"both finished indexes seen: {sawBoth}");
     }
 
     [Fact]
@@ -650,14 +699,14 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
                 new BsonDocument { { "ckTypeId", 1 }, { FieldPath, 1 }, { "_id", 1 }, { "rtState", 1 } },
                 new CreateIndexOptions { Name = legacyName + TiebreakIndexShape.NameSuffix }));
             await collection.Indexes.DropOneAsync(legacyName);
-            Assert.False(await PagingTiebreakGate.IsEnabledAsync(collection, FieldPath));
+            Assert.False(await PagingTiebreakGate.IsEnabledAsync(collection, [(FieldPath, false)]));
             Assert.True(await GateAsync(collection));
 
             // Another instance rolls back: the legacy index is back - this process keeps the tiebreak until expiry.
             await collection.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(
                 new BsonDocument { { "ckTypeId", 1 }, { FieldPath, 1 }, { "rtState", 1 } },
                 new CreateIndexOptions { Name = legacyName }));
-            Assert.True(await PagingTiebreakGate.IsEnabledAsync(collection, FieldPath));
+            Assert.True(await PagingTiebreakGate.IsEnabledAsync(collection, [(FieldPath, false)]));
             Assert.False(await GateAsync(collection));
         });
     }
@@ -843,11 +892,23 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
-    ///     The indexes a query can use: <c>listIndexes</c> lists an index build in progress too (with a
-    ///     <c>buildUUID</c>), which must not count as present in a gapless check.
+    ///     The indexes a query can use. <c>listIndexes</c> lists an index build in progress too; with
+    ///     <c>includeBuildUUIDs</c> such an entry is <c>{ spec, buildUUID }</c> and is left out, so it never counts as
+    ///     present in a gapless check.
     /// </summary>
-    private static async Task<List<BsonDocument>> FinishedIndexesAsync(IMongoCollection<BsonDocument> collection) =>
-        (await IndexesAsync(collection)).Where(i => !i.Contains("buildUUID")).ToList();
+    private static async Task<(List<BsonDocument> Finished, List<BsonDocument> InBuild)> FinishedIndexesAsync(
+        IMongoCollection<BsonDocument> collection)
+    {
+        var result = await collection.Database.RunCommandAsync<BsonDocument>(new BsonDocument
+        {
+            { "listIndexes", collection.CollectionNamespace.CollectionName },
+            { "includeBuildUUIDs", true },
+            { "cursor", new BsonDocument("batchSize", 1000) }
+        });
+        var all = result["cursor"]["firstBatch"].AsBsonArray.Select(i => i.AsBsonDocument).ToList();
+        return (all.Where(i => !i.Contains("buildUUID")).ToList(),
+            all.Where(i => i.Contains("buildUUID")).Select(i => i["spec"].AsBsonDocument).ToList());
+    }
 
     private static async Task<List<BsonDocument>> IndexesAsync(IMongoCollection<BsonDocument> collection)
     {
@@ -863,7 +924,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     private static async Task<bool> GateAsync(IMongoCollection<BsonDocument> collection, string? sortKey = FieldPath)
     {
         CollectionIndexCache.Invalidate(collection);
-        return await PagingTiebreakGate.IsEnabledAsync(collection, sortKey);
+        return await PagingTiebreakGate.IsEnabledAsync(collection, sortKey == null ? [] : [(sortKey, false)]);
     }
 
     /// <summary>
