@@ -72,19 +72,33 @@ internal sealed class CopyStatement
     /// <summary>
     /// <c>COPY &lt;table&gt; WHERE &lt;time&gt; ∈ [from, to) TO DIRECTORY '&lt;location&gt;' WITH (compression = 'gzip', …)</c>
     /// — one time slice of a data table as gzip-compressed, line-wise JSON.
+    /// With <paramref name="columns"/> (AB#9141: a dump that leaves Hidden columns out) the statement names them,
+    /// <c>COPY &lt;table&gt; ("a", "b") WHERE …</c>, and sets <c>format = 'json_object'</c>: a column list alone
+    /// would switch CrateDB to <c>json_array</c>, which <c>COPY FROM</c> cannot load.
     /// </summary>
     public static CopyStatement CopyTo(
         string qualifiedTable, string timeColumn, DateTime fromUtc, DateTime toUtc,
-        ArchiveCopyStagingLocation location)
+        ArchiveCopyStagingLocation location, IReadOnlyList<string>? columns = null)
     {
+        if (columns is { Count: 0 })
+        {
+            throw new ArgumentException("A column list must name at least one column.", nameof(columns));
+        }
+
         string Render(bool redacted)
         {
             var sb = new StringBuilder();
-            sb.Append("COPY ").Append(qualifiedTable)
-                .Append(" WHERE \"").Append(timeColumn).Append("\" >= ").Append(Literal(FormatTs(fromUtc)))
+            sb.Append("COPY ").Append(qualifiedTable);
+            if (columns is not null)
+            {
+                sb.Append(" (").Append(string.Join(", ", columns.Select(Identifier))).Append(')');
+            }
+
+            sb.Append(" WHERE \"").Append(timeColumn).Append("\" >= ").Append(Literal(FormatTs(fromUtc)))
                 .Append(" AND \"").Append(timeColumn).Append("\" < ").Append(Literal(FormatTs(toUtc)))
                 .Append(" TO DIRECTORY ").Append(Literal(redacted ? location.RedactedUri : location.RevealUri()))
-                .Append(" WITH (").Append(Options(location, redacted, overwriteDuplicates: null)).Append(')');
+                .Append(" WITH (").Append(Options(location, redacted, overwriteDuplicates: null,
+                    format: columns is null ? null : "json_object")).Append(')');
             return sb.ToString();
         }
 
@@ -132,9 +146,15 @@ internal sealed class CopyStatement
     }
 
     private static string Options(
-        ArchiveCopyStagingLocation location, bool redacted, bool? overwriteDuplicates, int? bulkSize = null)
+        ArchiveCopyStagingLocation location, bool redacted, bool? overwriteDuplicates, int? bulkSize = null,
+        string? format = null)
     {
         var parts = new List<string> { "compression = 'gzip'" };
+        if (format is not null)
+        {
+            parts.Add("format = " + Literal(format));
+        }
+
         if (overwriteDuplicates is { } overwrite)
         {
             parts.Add("overwrite_duplicates = " + (overwrite ? "true" : "false"));
@@ -182,6 +202,9 @@ internal sealed class CopyStatement
         // A masked value ("***") of a bare option stays a string so the redacted text is still readable.
         return long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _) ? value : Literal(value);
     }
+
+    /// <summary>A double-quoted SQL identifier.</summary>
+    internal static string Identifier(string name) => "\"" + name.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
     /// <summary>A single-quoted SQL string literal.</summary>
     internal static string Literal(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";

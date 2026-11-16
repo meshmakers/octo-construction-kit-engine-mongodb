@@ -119,6 +119,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     public async Task EnsureArchiveCreatedAsync(ArchiveSnapshot snapshot)
     {
+        // AB#9141: an archive that is not Activated gets a table without the columns that still reach Hidden (and the
+        // computed columns derived from them). Only a restore provisions such an archive (the lifecycle refuses every
+        // activation while a column reaches Hidden); its backup holds no values for these columns.
+        snapshot = WithoutColumnsStillHidden(snapshot);
+
         // AB#8992: activation or re-provisioning may follow a drop by another process; a remembered window phase of
         // the table is not trusted across it.
         _recomputeProcessState.WindowPhases.Forget(TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString()));
@@ -1938,9 +1943,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         // AB#6247: an archive Failed on Hidden columns exports its rows without those columns, like the query paths read
         // them (the Hidden values stay in the table until RedactHiddenColumns drops them).
-        var hiddenPhysical = snapshot.IsFailedOnHiddenColumns
-            ? ExportExcludedColumns(snapshot)
-            : null;
+        // AB#9141: also the columns that reach Hidden under the current model, for an archive the re-validation has not
+        // failed (yet), and the aggregate columns of a rollup over a Hidden attribute. Backups use the same rule.
+        var hiddenPhysical = FindHiddenColumnExclusion(snapshot, includeRecorded: true) is { } exclusion
+            ? exclusion.Excludes
+            : (Func<string, bool>?)null;
 
         // Honour the "no backing table ⇒ no rows" contract explicitly instead of letting the first
         // page query fail with CrateDB's RelationUnknown (42P01). The status is no proxy for the
@@ -2215,7 +2222,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return new ArchiveCopyTarget(archiveRtId, TenantSchema.SchemaName(_tenantId), tableName,
             snapshot.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp,
             // A rollup has a generation map next to its data table; every other archive never touches one.
-            snapshot.RollupAggregations is not null ? tableName + "__genmap" : null);
+            snapshot.RollupAggregations is not null ? tableName + "__genmap" : null,
+            // AB#9141: a dump never carries the values of a column that reaches a Hidden attribute.
+            FindHiddenColumnExclusion(snapshot, includeRecorded: true) is { } exclusion ? exclusion.Excludes : null);
     }
 
     /// <inheritdoc />
@@ -2277,6 +2286,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // while the archive is Disabled so no live writes race the import).
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
+        // AB#9141: a table provisioned for an archive that is not Activated has no column that reaches Hidden
+        // (EnsureArchiveCreatedAsync, the restore path); a value an imported row carries for one of them is ignored. A table
+        // that still has such a column (provisioned before it became Hidden, maybe NOT NULL) keeps receiving it as before.
+        snapshot = await WithoutHiddenColumnsTheTableLacksAsync(snapshot);
 
         // AB#8737: a computed column has no path (it is named by Name and derived by its Formula), so it is no
         // input of the import. The value an exported row carries for it is ignored; the column is evaluated again
@@ -3951,6 +3964,73 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return snapshot;
     }
 
+    /// <summary>
+    /// AB#9141: for a raw or time-range archive that is not Activated, the snapshot without the columns that reach Hidden
+    /// under the current CK model, the computed columns derived from them and the conflict precedence keys on them; every
+    /// other snapshot unchanged. The lifecycle refuses every activation while a column reaches Hidden (so it never provisions
+    /// such a snapshot); a restore provisions and imports one this way - an archive Failed on Hidden columns, or a Disabled one.
+    /// A column whose attribute is visible again is provisioned as before (RetryActivation after a model change back).
+    /// </summary>
+    private ArchiveSnapshot WithoutColumnsStillHidden(ArchiveSnapshot snapshot)
+    {
+        if (snapshot.Status == CkArchiveStatus.Activated || snapshot.RollupAggregations is not null ||
+            FindHiddenColumnExclusion(snapshot, includeRecorded: false) is not { } exclusion)
+        {
+            return snapshot;
+        }
+
+        _logger.LogInformation(
+            "Archive {ArchiveRtId} of tenant {TenantId} ({Status}) is used without {Count} column(s) that reach Hidden attributes " +
+            "or derive from them", snapshot.RtId, _tenantId, snapshot.Status, exclusion.Columns.Count);
+        return exclusion.Apply(snapshot);
+    }
+
+    /// <summary>
+    /// AB#9141: <see cref="WithoutColumnsStillHidden"/> for an import, column by column: a left-out ingested column that the
+    /// table has (provisioned before it became Hidden, maybe NOT NULL) is kept and still receives its values, together with
+    /// its conflict precedence key; only the columns the table lacks (a table the restore provisioned without them) are left
+    /// out. When the table's columns cannot be read, every left-out column stays out.
+    /// </summary>
+    private async Task<ArchiveSnapshot> WithoutHiddenColumnsTheTableLacksAsync(ArchiveSnapshot snapshot)
+    {
+        var stripped = WithoutColumnsStillHidden(snapshot);
+        if (ReferenceEquals(stripped, snapshot))
+        {
+            return snapshot;
+        }
+
+        var existing = await _platformColumns.ReadPhysicalColumnNamesAsync(snapshot.RtId.ToString());
+        if (existing.Count == 0)
+        {
+            return stripped;
+        }
+
+        var remaining = new HashSet<CkArchiveColumnSpec>(stripped.Columns, ReferenceEqualityComparer.Instance);
+        var keptBack = new HashSet<string>(
+            snapshot.Columns
+                .Where(c => !remaining.Contains(c) && !c.IsComputed && !string.IsNullOrWhiteSpace(c.Path))
+                .Select(c => ColumnNameMapper.PathToColumnName(c.Path))
+                .Where(existing.Contains),
+            StringComparer.OrdinalIgnoreCase);
+        if (keptBack.Count == 0)
+        {
+            return stripped;
+        }
+
+        var remainingKeys = new HashSet<ArchiveConflictKey>(stripped.ConflictPrecedence, ReferenceEqualityComparer.Instance);
+        return snapshot with
+        {
+            Columns = snapshot.Columns
+                .Where(c => remaining.Contains(c) || (!c.IsComputed && !string.IsNullOrWhiteSpace(c.Path) &&
+                                                      keptBack.Contains(ColumnNameMapper.PathToColumnName(c.Path))))
+                .ToList(),
+            ConflictPrecedence = snapshot.ConflictPrecedence
+                .Where(k => remainingKeys.Contains(k) ||
+                            (!k.IsOrigin && keptBack.Contains(ColumnNameMapper.PathToColumnName(k.Column))))
+                .ToList()
+        };
+    }
+
     /// <summary>The physical column names of <see cref="ArchiveSnapshot.HiddenColumns"/> (AB#6247).</summary>
     private static HashSet<string> HiddenPhysicalColumns(ArchiveSnapshot snapshot) =>
         new(snapshot.HiddenColumns.Select(ColumnNameMapper.PathToColumnName), StringComparer.OrdinalIgnoreCase);
@@ -3965,6 +4045,17 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         out HashSet<string> excludedPhysical)
     {
         excludedPhysical = HiddenPhysicalColumns(snapshot);
+        return DerivedComputedColumns(snapshot, excludedPhysical);
+    }
+
+    /// <summary>
+    /// The computed columns whose current or pending formula reads one of <paramref name="excludedPhysical"/> or,
+    /// transitively, another such computed column. Adds the base and the stored names of every found column to
+    /// <paramref name="excludedPhysical"/>.
+    /// </summary>
+    private static HashSet<CkArchiveColumnSpec> DerivedComputedColumns(ArchiveSnapshot snapshot,
+        HashSet<string> excludedPhysical)
+    {
         var derived = new HashSet<CkArchiveColumnSpec>(ReferenceEqualityComparer.Instance);
         var computed = snapshot.Columns.Where(c => c.IsComputed && !string.IsNullOrWhiteSpace(c.Name)).ToList();
         bool added;
@@ -3991,16 +4082,109 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// The physical columns the row export leaves out for an archive Failed on Hidden columns (AB#6247): the Hidden
-    /// columns, and every stored version (<c>{base}</c>, <c>{base}__v{N}</c> with a numeric N) of a computed column whose
-    /// values derive from one of them (<see cref="HiddenDerivedComputedColumns"/>).
+    /// The columns of an archive that reach a Hidden attribute, and everything derived from them (AB#9141): what a backup
+    /// leaves out and what a table provisioned for an archive Failed on Hidden columns does not get.
     /// </summary>
-    private static Func<string, bool> ExportExcludedColumns(ArchiveSnapshot snapshot)
+    /// <param name="Columns">The column specs left out: ingested Hidden columns (raw, time-range), aggregate columns of an
+    /// aggregation over a Hidden attribute (rollup), and the computed columns derived from either.</param>
+    /// <param name="Physical">Their physical names, and the base names of the derived computed columns.</param>
+    /// <param name="DerivedBases">Base names of the derived computed columns; every stored version is left out too.</param>
+    internal sealed record HiddenColumnExclusion(
+        IReadOnlyCollection<CkArchiveColumnSpec> Columns, IReadOnlySet<string> Physical, IReadOnlyList<string> DerivedBases)
     {
-        var derivedBases = HiddenDerivedComputedColumns(snapshot, out var excluded)
-            .Select(ComputedColumnNaming.Base)
-            .ToList();
-        return column => excluded.Contains(column) || derivedBases.Any(b => IsStoredVersionOf(column, b));
+        /// <summary>Whether a physical column of the table is left out.</summary>
+        public bool Excludes(string physicalColumn) =>
+            Physical.Contains(physicalColumn) || DerivedBases.Any(b => IsStoredVersionOf(physicalColumn, b));
+
+        /// <summary>
+        /// The snapshot without the left-out columns and without the conflict precedence keys that name one of them (a key
+        /// on a missing column would make the conflict guard refuse every write).
+        /// </summary>
+        public ArchiveSnapshot Apply(ArchiveSnapshot snapshot) => snapshot with
+        {
+            Columns = snapshot.Columns.Where(c => !Columns.Contains(c)).ToList(),
+            ConflictPrecedence = snapshot.ConflictPrecedence
+                .Where(k => k.IsOrigin || !Physical.Contains(ColumnNameMapper.PathToColumnName(k.Column)))
+                .ToList()
+        };
+    }
+
+    /// <summary>
+    /// Determines <see cref="HiddenColumnExclusion"/> for <paramref name="snapshot"/> (AB#9141): the columns that reach a
+    /// Hidden attribute under the tenant's <b>current</b> CK model (<see cref="ArchiveHiddenColumnGuard.FindHiddenColumns"/>)
+    /// and, with <paramref name="includeRecorded"/>, the columns the access re-validation recorded
+    /// (<see cref="ArchiveSnapshot.HiddenColumns"/>), so a backup also leaves out columns of an archive that was not
+    /// re-validated yet (a Disabled archive, or a model import whose re-validation has not run). <c>null</c> when nothing is
+    /// left out. When the CK model cannot be read, only the recorded columns count (logged as a warning).
+    /// </summary>
+    internal HiddenColumnExclusion? FindHiddenColumnExclusion(ArchiveSnapshot snapshot, bool includeRecorded)
+    {
+        // The guard reads an unknown type as "nothing Hidden"; without the type the recorded columns are the only evidence.
+        IReadOnlyList<(string Path, string Attribute)> current = [];
+        Exception? failure = null;
+        var typeKnown = false;
+        try
+        {
+            typeKnown = _ckCacheService.TryGetRtCkType(_tenantId, snapshot.TargetCkTypeId, out _);
+            if (typeKnown)
+            {
+                current = ArchiveHiddenColumnGuard.FindHiddenColumns(_ckCacheService, _tenantId, snapshot);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            failure = ex;
+            typeKnown = false;
+            current = [];
+        }
+
+        if (!typeKnown)
+        {
+            _logger.LogWarning(failure,
+                "Archive {ArchiveRtId} of tenant {TenantId}: its columns could not be checked against the CK model for Hidden " +
+                "attributes; only the recorded Hidden columns are left out", snapshot.RtId, _tenantId);
+            includeRecorded = true;
+        }
+
+        var physical = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (snapshot.RollupAggregations is { } aggregations)
+        {
+            // A rollup stores values derived from its aggregation sources: the aggregate columns of an aggregation over a
+            // Hidden attribute are left out (the rollup records no Hidden columns, see RevalidateAccessAsync).
+            var hiddenSources = new HashSet<string>(current.Select(h => h.Path), StringComparer.OrdinalIgnoreCase);
+            foreach (var spec in aggregations.Where(a => hiddenSources.Contains(a.SourcePath)))
+            {
+                foreach (var name in RollupColumnGenerator.TargetColumnNamesFor(spec))
+                {
+                    physical.Add(ColumnNameMapper.PathToColumnName(name));
+                }
+            }
+        }
+        else
+        {
+            var paths = current.Select(h => h.Path);
+            if (includeRecorded)
+            {
+                paths = paths.Concat(snapshot.HiddenColumns);
+            }
+
+            foreach (var path in paths.Where(p => !string.IsNullOrWhiteSpace(p)))
+            {
+                physical.Add(ColumnNameMapper.PathToColumnName(path));
+            }
+        }
+
+        if (physical.Count == 0)
+        {
+            return null;
+        }
+
+        var ingested = snapshot.Columns
+            .Where(c => !c.IsComputed && !string.IsNullOrWhiteSpace(c.Path) &&
+                        physical.Contains(ColumnNameMapper.PathToColumnName(c.Path)));
+        var derived = DerivedComputedColumns(snapshot, physical);
+        var columns = new HashSet<CkArchiveColumnSpec>(ingested.Concat(derived), ReferenceEqualityComparer.Instance);
+        return new HiddenColumnExclusion(columns, physical, derived.Select(ComputedColumnNaming.Base).ToList());
     }
 
     /// <summary>Whether <paramref name="column"/> is <c>{base}__v{N}</c> with a non-empty, digit-only N.</summary>
