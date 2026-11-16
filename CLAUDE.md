@@ -857,6 +857,62 @@ Implementation in `SingleOriginRtQuery.CreateAssociationCountNavigation`:
 - Triggered when `NavigationPair.AssociationCountFilter` is set
 - Runs pre-pagination in `_associationStageDefinitions`, then enriches post-pagination via `CreateInnerNavigation`
 
+## Deep sorted pages: the index hint (AB#9138)
+
+Since AB#8896 a page (`$match`, `$sort`, `$skip`, `$limit`) is planned by MongoDB as a whole. For a deep page no
+candidate plan returns results early, so the multi-planner ran every candidate through its trial on every request, and
+the plan cache never kept the winner (the cached works value comes from page 1). On sbeg (909,000 `EdaMessage`, skip
+50,000) that took 56-67 s; the execution itself took ~90 ms, and with a hint 52 ms. Rules:
+
+- **Hint the index that provides the sort.** `SingleOriginQuery.ChoosePageHintAsync` hints the page read
+  (`AggregateOptions.Hint`) to the first index `SortIndexHint.Choose` finds: keys `ckTypeId` followed by the sort keys,
+  further keys allowed, all directions equal or all reversed. Never a partial, sparse, hidden or collated index, never
+  text/hashed/2dsphere keys: a hint must not return fewer documents or force an index the query cannot use. Both CK
+  shapes qualify (legacy `{ckTypeId, attr, rtState}`, AB#8960 `{ckTypeId, attr, _id, rtState}`), and the System Entity
+  index `{ckTypeId, _id, rtState}` serves a sort by rtId.
+- **Only deep pages** (`OctoSystemConfiguration.PagingIndexHintMinSkip`, default 1000; 0 always, negative never): below
+  it the trial ends early (skip 1,000: 14 ms without, 1 ms with the hint).
+- **A filter with an index of its own** (`SortIndexHint.HasFilterIndex`: an index leading, after `ckTypeId`, with a
+  filtered field other than `ckTypeId`, `rtState` and the first sort key) is a real alternative for the planner: few
+  matches read through it and sorted are faster than the walk along the sort index (2,000 matches: 32 ms planner,
+  406 ms hinted). The page is then hinted only with at least `PagingIndexHintMinMatches` matches (default 50,000):
+  counted exactly when the caller asked for the total - that count then runs **before** the page and is reused (the
+  asset repository's `TotalCoveringThePage` keeps the total at least `offset + items`, in both orders) - otherwise with a
+  capped count (`ExecuteCappedCount`, `$limit` before `$count`, 2-21 ms over 900,000 entities).
+- **No hint** without a sort, inside a transaction (a hint naming an index dropped meanwhile fails the command, which
+  aborts the transaction - no retry possible; GraphQL queries run without a transaction), and for pipelines with stages
+  around the match (`$geoNear`, text search, association filters: `PageSortFollowsMatch`).
+- **Index list** from `CollectionIndexCache` (`listIndexes` per database + collection, cached 5 minutes per process;
+  every index create/drop of `MongoDbDataSourceCollection` invalidates it: an entry carries the invalidation generation it
+  was read in and is used only while that generation is current, so a list read across an invalidation is never reused,
+  even when it was stored after it; a failure means no hint and is remembered for 10 s only). The page is hinted by the index's **key pattern**, so
+  an index dropped or rebuilt under its name with other keys by another process fails the hint (codes 2/27): the entry is
+  invalidated and the page is read once more without a hint. An index whose key pattern another index shares (a collated
+  or partial twin) is never chosen: the server refuses a key-pattern hint that matches several indexes. AB#8960 (PR 253) is to reuse the cache for its tiebreak
+  gate.
+- **Settings are process-wide**: `TenantContext` hands `PagingIndexHintMinSkip` / `PagingIndexHintMinMatches` to
+  `SortIndexHint` (one system configuration per process, like the schema instance prefix); a value of 0 or less for the
+  matches hints without counting.
+
+Measured with `PagedQuerySortHintPerformanceTests` (`Category=Performance`; 900,000 entities, page 10, 8 candidate plans,
+median of 3, local Testcontainer; planner -> hint):
+
+| Case | Skip | Planner | Hint | Engine (decision included) |
+|---|---|---|---|---|
+| sort rtId | 0 / 100 / 1,000 / 10,000 | 2 / 3 / 14 / 158 ms | 1 / 1 / 1 / 7 ms | |
+| sort rtId | 50,000 | 616 ms | 21 ms | 17 ms (with total 141 ms) |
+| sort CK attribute asc / desc | 50,000 | 742 / 666 ms | 22 / 20 ms | |
+| filter without index (half), sort rtId | 50,000 | 3,350 ms | 487 ms | |
+| indexed range filter, 2,000 matches | 1,000 | 32 ms | 406 ms | 8 ms, planner kept (capped count 2 ms) |
+| indexed range filter, 20,000 matches | 10,000 | 20 ms | 405 ms | 30 ms, planner kept (capped count 9 ms) |
+| indexed range filter, 100,000 matches | 50,000 | 1,781 ms | 426 ms | 433 ms, hinted (capped count 21 ms) |
+
+Tests: `SortIndexHintTests` (unit: index shapes, exclusions, filter fields, competing indexes),
+`CollectionIndexCacheTests` (unit: reuse until invalidated, a list read across an invalidation is not reused),
+`PagedQuerySortHintTests` (explain: deep page hinted without SORT - neither in the winning plan nor as an aggregation-level
+`$sort` -, ascending/descending, rtId; shallow, unsorted and unprovided sorts without hint; transaction; stale hint
+retried; indexed selective filter keeps the planner and counts once).
+
 ## GridFS read preference and read-your-writes (AB#7256)
 
 `MongoRepository.GetGridFsBucket()` reads with `SecondaryPreferred`, writes with `w:majority`. A secondary can lag behind

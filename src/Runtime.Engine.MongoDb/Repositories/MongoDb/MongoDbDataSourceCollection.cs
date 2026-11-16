@@ -90,6 +90,13 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         return _documentCollection.Aggregate(((IOctoSessionInternal)session).SessionHandle, pipelineDefinition);
     }
 
+    public IAsyncCursor<TOutput> Aggregate<TOutput>(IOctoSession session,
+        PipelineDefinition<TDocument, TOutput> pipelineDefinition, AggregateOptions? options)
+    {
+        return _documentCollection.Aggregate(((IOctoSessionInternal)session).SessionHandle, pipelineDefinition,
+            options);
+    }
+
     public string CollectionName => _documentCollection.CollectionNamespace.CollectionName;
 
     public async Task CreateAscendingIndexAsync(string name, IEnumerable<string> fields)
@@ -103,6 +110,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
             Builders<TDocument>.IndexKeys.Combine(indexKeys), new CreateIndexOptions { Background = true, Name = name }
         ));
+        // AB#9138: the page hint of this process reads the indexes of the collection again.
+        CollectionIndexCache.Invalidate(_documentCollection);
     }
 
     public async Task CreateTextIndexAsync(string name, string language,
@@ -139,6 +148,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 indexKeys),
             new CreateIndexOptions { Name = name, Weights = new BsonDocument(weights), DefaultLanguage = language }
         ));
+        // AB#9138: the page hint of this process reads the indexes of the collection again.
+        CollectionIndexCache.Invalidate(_documentCollection);
     }
 
     public async Task CreateUniqueIndexAsync(string name, IEnumerable<string> fields,
@@ -162,6 +173,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             Builders<TDocument>.IndexKeys.Combine(indexKeys),
             options
         ));
+        // AB#9138: the page hint of this process reads the indexes of the collection again.
+        CollectionIndexCache.Invalidate(_documentCollection);
     }
 
     public async Task CreateUniqueNotDeletedIndexAsync(string name, IEnumerable<string> fields,
@@ -187,6 +200,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             Builders<TDocument>.IndexKeys.Combine(indexKeys),
             options
         ));
+        // AB#9138: the page hint of this process reads the indexes of the collection again.
+        CollectionIndexCache.Invalidate(_documentCollection);
     }
 
     public async Task DropIndexAsync(string name)
@@ -201,6 +216,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 string.Compare(indexName, name, StringComparison.InvariantCultureIgnoreCase) == 0)
             {
                 await _documentCollection.Indexes.DropOneAsync(indexName);
+                // AB#9138: the page hint of this process reads the indexes of the collection again.
+                CollectionIndexCache.Invalidate(_documentCollection);
                 return;
             }
         }
@@ -334,6 +351,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             if (!string.IsNullOrEmpty(indexName) && indexName.StartsWith(prefix))
             {
                 await _documentCollection.Indexes.DropOneAsync(indexName);
+                // AB#9138: the page hint of this process reads the indexes of the collection again.
+                CollectionIndexCache.Invalidate(_documentCollection);
             }
         }
     }
