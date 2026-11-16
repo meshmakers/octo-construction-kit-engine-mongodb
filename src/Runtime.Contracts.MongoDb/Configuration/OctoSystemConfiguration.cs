@@ -149,6 +149,25 @@ public class OctoSystemConfiguration()
     public int SlowQueryThresholdMs { get; set; } = 100;
 
     /// <summary>
+    /// AB#9138: from this skip on, a sorted page of a runtime-entity type query is hinted to the index that provides
+    /// its sort (when there is one). A deep page otherwise spends its time in MongoDB's plan trial, which cannot end
+    /// early once the skipped documents exceed what one trial produces. Shallow pages keep the planner's choice: a
+    /// selective filter is often answered faster by its own index plus a small sort than by a walk along the sort
+    /// index. 0 hints every sorted page, a negative value never hints. Env var
+    /// <c>OCTO_System__PagingIndexHintMinSkip</c>.
+    /// </summary>
+    public int PagingIndexHintMinSkip { get; set; } = 1000;
+
+    /// <summary>
+    /// AB#9138: when the filter of a deep sorted page has an index of its own, the page is hinted to the sort index only
+    /// when at least this many entities match (exact count when the caller asked for the total, otherwise a count
+    /// capped at this value). With fewer matches the planner answers faster through the filter's index and a small sort
+    /// (measured 20-32 ms against 405-406 ms with the hint over 900,000 entities). Env var
+    /// 0 or less hints such a page without counting. Env var <c>OCTO_System__PagingIndexHintMinMatches</c>.
+    /// </summary>
+    public int PagingIndexHintMinMatches { get; set; } = 50_000;
+
+    /// <summary>
     /// Threshold in milliseconds above which the truncated BSON command body is included in the slow-query
     /// WARN log line. Must be greater than or equal to <see cref="SlowQueryThresholdMs"/>; values below
     /// the slow-query threshold are ignored. Set to 0 to disable full-command logging.

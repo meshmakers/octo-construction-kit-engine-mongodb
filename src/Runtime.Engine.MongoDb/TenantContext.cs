@@ -83,6 +83,9 @@ public class TenantContext : ITenantContext
         _systemConfiguration = systemConfiguration;
         _serviceProvider = serviceProvider;
         DatabaseName = databaseName;
+        // AB#9138: one value per process, like the other query settings of the system configuration.
+        SortIndexHint.MinSkip = systemConfiguration.Value.PagingIndexHintMinSkip;
+        SortIndexHint.MinMatches = systemConfiguration.Value.PagingIndexHintMinMatches;
         _catalogService = serviceProvider.GetRequiredService<ICatalogService>();
         _tenantNotifications = serviceProvider.GetRequiredService<ITenantNotifications>();
         _ckModelRepositoryService = serviceProvider.GetRequiredService<IDatabaseCkModelRepository>();

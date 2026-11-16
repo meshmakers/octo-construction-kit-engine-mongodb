@@ -240,24 +240,155 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     internal Action<ExecutedPipeline>? PipelineObserver { get; set; }
 
     /// <summary>One pipeline run of <see cref="ExecuteQuery" />, reported to <see cref="PipelineObserver" />.</summary>
-    internal sealed record ExecutedPipeline(string Purpose, IReadOnlyList<BsonDocument> Stages, int DocumentCount);
+    internal sealed record ExecutedPipeline(string Purpose, IReadOnlyList<BsonDocument> Stages, int DocumentCount)
+    {
+        /// <summary>The index the read was hinted to (AB#9138), or null.</summary>
+        public string? Hint { get; init; }
+    }
 
-    private void Observe<TOutput>(string purpose, IReadOnlyList<IPipelineStageDefinition> stages, int documentCount)
+    private void Observe<TOutput>(string purpose, IReadOnlyList<IPipelineStageDefinition> stages, int documentCount,
+        string? hint = null)
     {
         if (PipelineObserver == null)
         {
             return;
         }
 
-        var rendered = stages.Count == 0
+        PipelineObserver(new ExecutedPipeline(purpose, Render<TOutput>(stages), documentCount) { Hint = hint });
+    }
+
+    /// <summary>The stages rendered as the server receives them.</summary>
+    private IReadOnlyList<BsonDocument> Render<TOutput>(IReadOnlyList<IPipelineStageDefinition> stages) =>
+        stages.Count == 0
             ? []
             : PipelineDefinition<TEntity, TOutput>.Create(stages)
                 .Render(new RenderArgs<TEntity>(_mongoDbDataSourceCollection.GetMongoCollection().DocumentSerializer,
                     _mongoDbDataSourceCollection.GetMongoCollection().Settings.SerializerRegistry))
                 .Documents
                 .ToList();
-        PipelineObserver(new ExecutedPipeline(purpose, rendered, documentCount));
+
+    /// <summary>
+    ///     True when the page pipeline is <c>$match</c> followed by its <c>$sort</c>: no stage before the match (a
+    ///     <c>$geoNear</c>, a text search) and no association stage between the match and the sort. Only then is the
+    ///     sort part of the query MongoDB plans on the collection, and only then can an index hint provide it.
+    /// </summary>
+    internal bool PageSortFollowsMatch()
+    {
+        var preStages = new List<IPipelineStageDefinition>();
+        AddPagePreStagesToPipeline(preStages);
+        var associationStages = new List<IPipelineStageDefinition>();
+        AddPrePaginationPostStagesToPipeline(associationStages);
+        return preStages.Count == 0 && associationStages.Count == 0;
     }
+
+    /// <summary>
+    ///     The index a sorted page is hinted to (AB#9138, <see cref="SortIndexHint" />), and the exact total when the
+    ///     decision had to count it. The hint names the index that provides the caller's sort after the
+    ///     <c>ckTypeId</c> equality, taken from the cached indexes of the collection
+    ///     (<see cref="CollectionIndexCache" />). No hint - the planner decides as before - for a page above
+    ///     <see cref="SortIndexHint.MinSkip" /> (the trial ends early there), without a sort, when the page pipeline has
+    ///     stages around the match (<see cref="PageSortFollowsMatch" />), inside a transaction (a hint naming an index
+    ///     dropped meanwhile would fail the command and abort the transaction, so there is no retry) and when no index
+    ///     provides the sort.
+    ///     <para>
+    ///         When the filter has an index of its own (<see cref="SortIndexHint.HasFilterIndex" />), the planner can
+    ///         read few matches through it and sort them faster than the hinted walk along the sort index reaches the
+    ///         page. The page is then hinted only when at least <see cref="SortIndexHint.MinMatches" /> entities match:
+    ///         counted exactly when the caller asked for the total (the count runs before the page and is reused, so it
+    ///         costs nothing extra), otherwise with a count capped at that number.
+    ///     </para>
+    /// </summary>
+    internal async Task<((string Name, BsonDocument Key)? Hint, long? ExactTotal)> ChoosePageHintAsync(IOctoSession octoSession, int? skip,
+        IReadOnlyList<IPipelineStageDefinition> pageStages, bool includeTotalCount)
+    {
+        if (!SortIndexHint.IsDeep(skip) || !HasSortDefinitions ||
+            octoSession is IOctoSessionInternal { IsTransactionActive: true } || !PageSortFollowsMatch())
+        {
+            return (null, null);
+        }
+
+        var indexes = await CollectionIndexCache.GetAsync(_mongoDbDataSourceCollection.GetMongoCollection());
+        var hint = SortIndexHint.Choose(indexes, SortKeys);
+        if (hint == null || !SortIndexHint.HasFilterIndex(indexes!, SortIndexHint.FilterFields(RenderMatch(pageStages)),
+                FirstSortKeyPath))
+        {
+            return (hint, null);
+        }
+
+        if (SortIndexHint.MinMatches <= 0)
+        {
+            return (hint, null);
+        }
+
+        if (includeTotalCount)
+        {
+            var total = await ExecuteCount(octoSession);
+            return (total >= SortIndexHint.MinMatches ? hint : null, total);
+        }
+
+        var capped = await ExecuteCappedCount(octoSession, SortIndexHint.MinMatches);
+        return (capped >= SortIndexHint.MinMatches ? hint : null, null);
+    }
+
+    /// <summary>The path of the caller's first sort key, or null without a sort.</summary>
+    private string? FirstSortKeyPath => SortKeys.Count > 0 ? SortKeys[0].Path : null;
+
+    /// <summary>The filter of the page's leading <c>$match</c>, rendered; empty when the page has none.</summary>
+    private BsonDocument RenderMatch(IReadOnlyList<IPipelineStageDefinition> pageStages)
+    {
+        var first = Render<TEntity>(pageStages.Take(1).ToList()).FirstOrDefault();
+        return first != null && first.TryGetValue("$match", out var match) && match is BsonDocument filter
+            ? filter
+            : new BsonDocument();
+    }
+
+    /// <summary>
+    ///     Counts the matching entities up to <paramref name="limit" /> (AB#9138): the count pipeline with a
+    ///     <c>$limit</c> before its <c>$count</c>, so the server stops at the limit instead of counting every match.
+    /// </summary>
+    internal async Task<long> ExecuteCappedCount(IOctoSession octoSession, long limit)
+    {
+        var stages = CreateCountPipelineStageDefinitions().ToList();
+        stages.Insert(stages.Count - 1, PipelineStageDefinitionBuilder.Limit<TEntity>(limit));
+        var countResult = await _mongoDbDataSourceCollection
+            .Aggregate(octoSession, PipelineDefinition<TEntity, AggregateCountResult>.Create(stages))
+            .FirstOrDefaultAsync();
+        Observe<AggregateCountResult>("capped count", stages, countResult == null ? 0 : 1);
+        return countResult?.Count ?? 0;
+    }
+
+    /// <summary>
+    ///     Reads one page, hinted by the key pattern of <paramref name="hint" /> when given, and returns the name of the
+    ///     index the read was really hinted to. A hint whose index no longer exists - dropped by another process within
+    ///     the cache interval, or rebuilt under its name with other keys - fails with a command error: the cached
+    ///     indexes of the collection are forgotten and the page is read once more without a hint.
+    /// </summary>
+    private async Task<(List<TEntity> Entities, string? UsedHint)> ReadPageAsync(IOctoSession octoSession,
+        IReadOnlyList<IPipelineStageDefinition> pageStages, (string Name, BsonDocument Key)? hint)
+    {
+        var pipeline = PipelineDefinition<TEntity, TEntity>.Create(pageStages);
+        if (hint == null)
+        {
+            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync(), null);
+        }
+
+        try
+        {
+            var options = new AggregateOptions { Hint = hint.Value.Key };
+            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline, options).ToListAsync(),
+                hint.Value.Name);
+        }
+        catch (MongoCommandException exception) when (IsUnusableHint(exception))
+        {
+            CollectionIndexCache.Invalidate(_mongoDbDataSourceCollection.GetMongoCollection());
+            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync(), null);
+        }
+    }
+
+    /// <summary>The server refused the hint: no index with its key pattern exists (any more).</summary>
+    private static bool IsUnusableHint(MongoCommandException exception) =>
+        exception.Code is 2 or 27 &&
+        exception.ErrorMessage?.Contains("hint", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <summary>
     ///     Runs the query. Without <paramref name="skip" /> and <paramref name="take" /> one pipeline returns all
@@ -317,12 +448,15 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         }
 
         var pageEntities = new List<TEntity>();
+        long? exactTotal = null;
         if (take is not 0)
         {
             var pageStages = CreatePagePipelineStageDefinitions(skip, take);
-            pageEntities = await _mongoDbDataSourceCollection
-                .Aggregate(octoSession, PipelineDefinition<TEntity, TEntity>.Create(pageStages)).ToListAsync();
-            Observe<TEntity>("page", pageStages, pageEntities.Count);
+            // AB#9138: a deep sorted page spent its time in the planner's trial, not in the read - hint the index that
+            // provides the sort.
+            (var hint, exactTotal) = await ChoosePageHintAsync(octoSession, skip, pageStages, includeTotalCount);
+            (pageEntities, var usedHint) = await ReadPageAsync(octoSession, pageStages, hint);
+            Observe<TEntity>("page", pageStages, pageEntities.Count, usedHint);
 
             meter.SetCheckpoint("page executed");
         }
@@ -348,7 +482,8 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         long totalCount;
         if (includeTotalCount)
         {
-            totalCount = await ExecuteCount(octoSession);
+            // The hint decision may have counted already (AB#9138); the count is not repeated.
+            totalCount = exactTotal ?? await ExecuteCount(octoSession);
         }
         else
         {
