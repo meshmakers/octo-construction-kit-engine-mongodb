@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- AB#8993 Test (deferred review finding of #249, applied with AB#9016): `DownsamplingManyIdsPerformanceTests.CreateSeededArchiveAsync`
+  drops the archive table when the seed or its `REFRESH TABLE` fails, so a failed seed leaves no partial multi-million-row
+  table in the shared CrateDB container. A failing cleanup is reported and does not replace the seed's error.
+- AB#9016 New: a late stream-data delivery refreshes the rollups only for the series it touched, and in place.
+  `CrateDbStreamDataRepository` records the distinct rtIds of the late, in-reach automated rows on the dirty window. Above
+  `StreamData:Recompute:MaxScopedRtIds` (**new setting**, default 200) it records none, which means every series.
+  `MongoArchiveRecomputeStateStore` / `MongoRecomputeJobStore` persist the sets (System.StreamData 1.26.0).
+  `CrateDbArchiveRecomputeExecutor.ExecuteScopedRefreshAsync` (the repository delegates to it) stages the buckets for those
+  series only (`rtid IN (...)` in the aggregation, the expected-row count and the LOCF carry). It then upserts the staged
+  rows into the live table at the generation the readers select for each (window, rtId)
+  (`GenerationFilterSql.RenderActiveGeneration`, the same CASE as the read predicate). No new generation, no pointer flip,
+  no generation sweep. A bucket row of the series whose source rows are gone is removed, as a full recompute removes it:
+  rows at the active generation older than the refresh marker, the `rtchangeddatetime` of the oldest staged row. They are
+  counted first and deleted only when there are any. A slice CrateDB stores short is written once more, then the refresh
+  fails (AB#8680 rule; the check counts only rows newer than the marker). The recompute
+  preparation is shared with `ExecuteAsync` (`PrepareRunAsync`); the full recompute is unchanged.
+  `RecomputeLateDataOptions` (`LateDataDebounce` default 5 min, `MaxScopedRtIds` default 200) is bound from
+  `StreamData:Recompute` in both registration paths. `TenantContext` hands it to the orchestrator. Needs the engine
+  release of AB#9016: this package builds only against it (merge order, §2.4a: engine with or before this repository).
+  Tests: `LateDeliveryScopeTests` (unit), `StreamDataLateDelivery/ScopedRefreshEquivalenceTests` (real CrateDB: scoped
+  refresh and full recompute give the same reader view for every series on an hourly + daily ladder, TimeWeightedAvg
+  carry bucket included; no pointer added).
 - AB#8993 Test: performance budget for downsampling over many ids. `DownsamplingManyIdsPerformanceTests` (trait
   `Category=Performance`, runs only in the performance pipeline) seeds a time-range archive of 3500 entities with 15-minute
   windows into a CrateDB testcontainer and requires every downsampling call over 400 ids and 7 days to finish in under 5 s

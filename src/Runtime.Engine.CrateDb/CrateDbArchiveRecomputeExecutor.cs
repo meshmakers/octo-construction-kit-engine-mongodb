@@ -213,74 +213,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // aggregation, the generation-pointer entry, and the sweep are all restricted to this entity.
         var scope = rtIdScope?.ToString() ?? GenerationMapSqlBuilder.AllRtIdsScope;
 
-        // Load the rollup's full archive snapshot — it carries Columns + RollupAggregations, which
-        // the rollup-specific snapshot does not. Resolve the storage columns exactly as the table was
-        // created, so the staging table matches the live table column-for-column.
-        var rollupSnapshot = await _archiveStore.GetAsync(rollup.RtId)
-            ?? throw new InvalidOperationException($"Rollup archive {rollup.RtId} not found for recompute.");
-        if (rollupSnapshot.RollupAggregations is not { } aggregations)
-        {
-            throw new InvalidOperationException($"Archive {rollup.RtId} is not a rollup.");
-        }
-
-        var resolvedColumns = RollupColumnTypeResolver.Resolve(rollupSnapshot.Columns, aggregations);
-        var columnNames = Constants.DefaultWindowedStreamDataFields
-            .Concat(resolvedColumns.Select(ArchiveDdlGenerator.ResolveColumnName))
-            .Concat(ArchiveRowOriginFields.RollupFields)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        // The aggregation names the origin of the source rows, the copy the manual columns of the live table
-        // (AB#7727); either may predate them.
-        await _platformColumns.EnsureAsync(source, cancellationToken);
-        await _platformColumns.EnsureRollupColumnsAsync(rollup.RtId.ToString(), cancellationToken);
-
-        var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, source.RtId.ToString());
-        var liveTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
-        var stagingTable = RollupRecomputeSqlBuilder.StagingTable(_tenantId, rollup.RtId.ToString());
-        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, rollup.RtId.ToString());
-
-        // Dead rows first: what a failed sweep of an earlier call left, and — once per process — what
-        // any earlier process left. Never fails this call; see ReclaimDeadGenerationsAsync.
-        await ReclaimDeadGenerationsAsync(rollup.RtId.ToString(), liveTable, genMapTable, cancellationToken);
-        // Deferred sweeps whose grace period has passed (AB#6968); the records are CrateDB rows, so this also
-        // finds the ones a restart interrupted. With a grace period of zero nothing is deferred and the
-        // records are not looked for (the host's sweep tick still drains the ones left from an earlier setting).
-        if (_sweepGracePeriod > TimeSpan.Zero)
-        {
-            await SweepDueAsync(rollup.RtId, cancellationToken);
-        }
-
-        // Per-source resolution (AB#5157 §3) — the same binding the forward aggregation uses for
-        // this (rollup, source) pair, resolved once per execution and reused for every bucket. A
-        // rollup source needs its rollup snapshot for the child-aggregation rule.
-        RollupArchiveSnapshot? sourceRollup = null;
-        if (source.RollupAggregations is not null)
-        {
-            if (_rollupArchiveStore is null)
-            {
-                // Same breadcrumb the forward aggregation path leaves: without the rollup store only
-                // rule 1 applies, so a logical spec fails below with "no rollup snapshot".
-                _logger.LogDebug(
-                    "Source archive {SourceRtId} is a rollup but no rollup store is wired — only verbatim declared columns resolve.",
-                    source.RtId);
-            }
-            else
-            {
-                sourceRollup = await _rollupArchiveStore.GetAsync(source.RtId);
-            }
-        }
-
-        var resolvedAggregations = RollupAggregationColumns.ResolveForSource(
-            aggregations, rollup.RtId, source, sourceRollup);
-
-        // An empty staging table with the live windowed shape. includeGeneration:true so the shared
-        // RollupAggregationSqlBuilder (which always writes a generation column) targets a matching
-        // schema; staging's generation is always 0 and is overridden to the new generation when the
-        // staged rows are copied into the live table. One shard, no replicas: see the class remarks.
-        var createStagingSql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
-            stagingTable, resolvedColumns, numberOfShards: 1, numberOfReplicas: 0, includeGeneration: true);
-        await PrepareStagingAsync(liveTable, stagingTable, createStagingSql, cancellationToken);
+        var (sourceTable, liveTable, stagingTable, genMapTable, columnNames, resolvedAggregations) =
+            await PrepareRunAsync(source, rollup, cancellationToken);
 
         // Calendar buckets snap to this zone's local wall-clock boundaries (AB#4300 / O6); null ⇒
         // UTC. Resolved once per recompute — the enumerator yields the zone-correct UTC instants
@@ -518,6 +452,274 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                 : sweepCompleted ? string.Empty : " — the sweep did not complete, the rest is reclaimed by the next call");
 
         return new RecomputeExecutionResult(rows, windows);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// The in-place refresh of a late delivery (AB#9016). The buckets of the range are aggregated for the series of
+    /// <paramref name="rtIds"/> only (<c>rtid IN (...)</c>) into staging, exactly as <see cref="ExecuteAsync"/> stages
+    /// them, and the staged rows are then upserted into the live table at the generation each (window, rtId) row is
+    /// read at today (<see cref="GenerationFilterSql.RenderActiveGeneration"/> over the pointer entries that can apply
+    /// to these series). The rows of every other series, the pointer table and the generation counter stay untouched,
+    /// and there is nothing to sweep - the DELETEs of the superseded generation were the largest CrateDB cost of the
+    /// per-delivery full-day recompute.
+    /// </para>
+    /// <para>
+    /// Equivalence: the staged row of a (window, rtId) is the row a full recompute of the range would stage for it, and
+    /// it ends up at the generation the readers select, so every query sees the same values as after the full
+    /// recompute. A bucket row of these series whose source rows are gone is left out of the new generation by a full
+    /// recompute; the refresh removes it too: every row of the series at the active generation in the range that this run
+    /// did not write (older than the refresh marker, <see cref="RollupRecomputeSqlBuilder.BuildStaleInScope"/>). Counted
+    /// first, deleted only when there is one - bounded by series × buckets like the upsert, normally none. Concurrency: a row is replaced by one statement; the orchestrator's active-job guard keeps every
+    /// other recompute of the rollup from running at the same time (the pointer entries read here cannot change under
+    /// it). The forward aggregation never writes inside the range: the orchestrator clamps it to the lag-closed buckets.
+    /// </para>
+    /// </remarks>
+    public async Task<RecomputeExecutionResult> ExecuteScopedRefreshAsync(
+        ArchiveSnapshot source,
+        RollupArchiveSnapshot rollup,
+        DateTime rangeStart,
+        DateTime rangeEnd,
+        RtIdSet rtIds,
+        CancellationToken cancellationToken)
+    {
+        if (_restoreGate is not null && await _restoreGate.IsPendingAsync(cancellationToken))
+        {
+            throw new RestoreReconcilePendingException(_tenantId, rollup.RtId, "recompute");
+        }
+
+        var members = rtIds.ToStrings();
+        var scopeCondition = RollupAggregationSqlBuilder.ScopeCondition(null, members)!;
+        var (sourceTable, liveTable, stagingTable, genMapTable, columnNames, resolvedAggregations) =
+            await PrepareRunAsync(source, rollup, cancellationToken);
+
+        var calendar = BucketCalendar.For(rollup);
+        var rows = 0;
+        var windows = 0;
+        foreach (var (bucketStart, bucketEnd) in RecomputeBucketEnumerator.Enumerate(rangeStart, rangeEnd, calendar))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string BuildAggregateSql(IReadOnlyList<GenerationRange>? sourceGenerationRanges) =>
+                RollupAggregationSqlBuilder.Build(
+                    sourceTable,
+                    stagingTable,
+                    rollup.TargetCkTypeId.SemanticVersionedFullName,
+                    resolvedAggregations,
+                    bucketStart,
+                    bucketEnd,
+                    source.UsesWindowedStorage,
+                    rtIdScope: null,
+                    carryLookback: rollup.CarryLookback,
+                    sourceGenerationRanges: sourceGenerationRanges,
+                    sourceIsRollup: source.RollupAggregations is not null,
+                    rtIdSet: members);
+
+            string BuildExpectedCountSql(IReadOnlyList<GenerationRange>? sourceGenerationRanges) =>
+                RollupAggregationSqlBuilder.BuildExpectedRowCount(
+                    sourceTable,
+                    resolvedAggregations,
+                    bucketStart,
+                    bucketEnd,
+                    source.UsesWindowedStorage,
+                    rtIdScope: null,
+                    carryLookback: rollup.CarryLookback,
+                    sourceGenerationRanges: sourceGenerationRanges,
+                    rtIdSet: members);
+
+            async Task DiscardStagedBucketAsync(CancellationToken ct)
+            {
+                await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, ct);
+                await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                    RollupRecomputeSqlBuilder.BuildDeleteStagedBucket(stagingTable, bucketStart),
+                    CrateStatementClass.Maintenance, ct);
+                await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, ct);
+            }
+
+            // The source's pointer entries are read unscoped (rtIdScope null): every entry of any of the series - and
+            // the unscoped ones - can select a source row of this statement.
+            rows += await _bucketAggregator.AggregateAsync(
+                source, bucketStart, bucketEnd, null, BuildAggregateSql, BuildExpectedCountSql, stagingTable,
+                DiscardStagedBucketAsync, cancellationToken);
+            windows++;
+        }
+
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, cancellationToken);
+
+        // The generation each staged row is read at: the pointer entries overlapping the range whose scope is all
+        // rtIds or one of these series. Read after a refresh, so an entry a recompute committed just before is seen.
+        await EnsureGenMapAsync(liveTable, genMapTable, cancellationToken);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
+        var applicable = GenerationFilterSql.Overlapping(await ReadPointersAsync(genMapTable, cancellationToken), rangeStart, rangeEnd)
+            .Where(e => e.Scope.Length == 0 || members.Contains(e.Scope, StringComparer.Ordinal))
+            .ToList();
+        var activeGeneration = GenerationFilterSql.RenderActiveGeneration(applicable);
+        var activeGenerationPredicate = GenerationFilterSql.Render(applicable);
+
+        // The refresh marker: what this run writes carries at least this rtchangeddatetime, every untouched row is older.
+        long? marker = null;
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(
+                           _tenantId, RollupRecomputeSqlBuilder.BuildReadRefreshMarker(stagingTable), cancellationToken))
+        {
+            marker = row.TryGetValue("marker", out var value) && value is not null
+                ? Convert.ToInt64(value, CultureInfo.InvariantCulture)
+                : null;
+        }
+
+        var upserted = default(SlicedRun);
+        if (marker is { } markerMs)
+        {
+            upserted = await RunSlicedAsync(
+                rangeStart, rangeEnd,
+                (from, to) => RollupRecomputeSqlBuilder.BuildCountStaged(stagingTable, from, to),
+                (from, to) => RollupRecomputeSqlBuilder.BuildUpsertFromStagingAtActiveGenerationSlice(
+                    liveTable, stagingTable, columnNames, activeGeneration, from, to),
+                cancellationToken,
+                // The upsert is idempotent: a slice CrateDB stored only in part (AB#8680) is written once more as a whole,
+                // and still short afterwards (fewer freshly written rows than staged) it fails the refresh. Only rows at
+                // least as new as the marker count: the upsert mostly replaces rows that existed before.
+                writeCheck: new SliceWriteCheck(
+                    liveTable,
+                    (from, to) => RollupRecomputeSqlBuilder.BuildUpsertFromStagingAtActiveGenerationSlice(
+                        liveTable, stagingTable, columnNames, activeGeneration, from, to),
+                    (from, to) => RollupRecomputeSqlBuilder.BuildCountRefreshedInScope(
+                        liveTable, from, to, scopeCondition, activeGenerationPredicate, markerMs),
+                    (from, to, expected, written) => FormattableString.Invariant(
+                        $"Refresh of rollup {rollup.RtId} slice [{from:O}, {to:O}) for {rtIds.Count} series from {stagingTable}: {written} of {expected} staged rows are in the live table.")));
+        }
+
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
+
+        // Equivalence with the full recompute: a bucket row of these series whose source rows are gone is left out of the
+        // new generation there, so it has to go here too - every row of the series at the active generation in the range
+        // that this run did not write. Counted first; the DELETE runs only when there is such a row (normally none).
+        var stale = await _databaseClient.GetCountAsync(
+            _tenantId,
+            RollupRecomputeSqlBuilder.BuildStaleInScope(
+                liveTable, rangeStart, rangeEnd, scopeCondition, activeGenerationPredicate, marker, delete: false),
+            CrateStatementClass.Maintenance, cancellationToken);
+        if (stale > 0)
+        {
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                RollupRecomputeSqlBuilder.BuildStaleInScope(
+                    liveTable, rangeStart, rangeEnd, scopeCondition, activeGenerationPredicate, marker, delete: true),
+                CrateStatementClass.Maintenance, cancellationToken);
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
+            _logger.LogInformation(
+                "Refresh of rollup {RollupRtId} range [{From:O},{To:O}): removed {Rows} bucket row(s) of the {Series} series whose source rows are gone.",
+                rollup.RtId, rangeStart, rangeEnd, stale, rtIds.Count);
+        }
+
+        try
+        {
+            await ClearStagingAsync(liveTable, stagingTable, upserted.Rows, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The refresh is written; the next run finds and removes what is left in staging before it stages.
+            _logger.LogWarning(ex,
+                "Rollup {RollupRtId} range [{From:O},{To:O}) is refreshed for {Series} series, but the staging cleanup failed: {Error}. Readers are not affected.",
+                rollup.RtId, rangeStart, rangeEnd, rtIds.Count, ex.Message);
+        }
+
+        _logger.LogInformation(
+            "Refreshed rollup {RollupRtId} range [{From:O},{To:O}) in place for {Series} series: {Windows} windows / " +
+            "{Rows} staged rows upserted at the active generation in {Statements} statement(s); no generation flipped.",
+            rollup.RtId, rangeStart, rangeEnd, rtIds.Count, windows, rows, upserted.Statements);
+
+        return new RecomputeExecutionResult(rows, windows);
+    }
+
+    /// <summary>The tables and column bindings one recompute or refresh call works with.</summary>
+    private sealed record RunContext(
+        string SourceTable,
+        string LiveTable,
+        string StagingTable,
+        string GenMapTable,
+        IReadOnlyList<string> ColumnNames,
+        IReadOnlyList<RollupSourceAggregation> ResolvedAggregations);
+
+    /// <summary>
+    /// What every recompute and every set-scoped refresh does before it aggregates (shared by <see cref="ExecuteAsync"/>
+    /// and <see cref="ExecuteScopedRefreshAsync"/>, AB#9016): resolves the rollup's storage columns and the per-source
+    /// binding, makes sure the platform columns exist, reclaims dead generations, runs due deferred sweeps and leaves an
+    /// empty staging table of the live shape behind.
+    /// </summary>
+    private async Task<RunContext> PrepareRunAsync(
+        ArchiveSnapshot source, RollupArchiveSnapshot rollup, CancellationToken cancellationToken)
+    {
+
+        // Load the rollup's full archive snapshot — it carries Columns + RollupAggregations, which
+        // the rollup-specific snapshot does not. Resolve the storage columns exactly as the table was
+        // created, so the staging table matches the live table column-for-column.
+        var rollupSnapshot = await _archiveStore.GetAsync(rollup.RtId)
+            ?? throw new InvalidOperationException($"Rollup archive {rollup.RtId} not found for recompute.");
+        if (rollupSnapshot.RollupAggregations is not { } aggregations)
+        {
+            throw new InvalidOperationException($"Archive {rollup.RtId} is not a rollup.");
+        }
+
+        var resolvedColumns = RollupColumnTypeResolver.Resolve(rollupSnapshot.Columns, aggregations);
+        var columnNames = Constants.DefaultWindowedStreamDataFields
+            .Concat(resolvedColumns.Select(ArchiveDdlGenerator.ResolveColumnName))
+            .Concat(ArchiveRowOriginFields.RollupFields)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        // The aggregation names the origin of the source rows, the copy the manual columns of the live table
+        // (AB#7727); either may predate them.
+        await _platformColumns.EnsureAsync(source, cancellationToken);
+        await _platformColumns.EnsureRollupColumnsAsync(rollup.RtId.ToString(), cancellationToken);
+
+        var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, source.RtId.ToString());
+        var liveTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
+        var stagingTable = RollupRecomputeSqlBuilder.StagingTable(_tenantId, rollup.RtId.ToString());
+        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, rollup.RtId.ToString());
+
+        // Dead rows first: what a failed sweep of an earlier call left, and — once per process — what
+        // any earlier process left. Never fails this call; see ReclaimDeadGenerationsAsync.
+        await ReclaimDeadGenerationsAsync(rollup.RtId.ToString(), liveTable, genMapTable, cancellationToken);
+        // Deferred sweeps whose grace period has passed (AB#6968); the records are CrateDB rows, so this also
+        // finds the ones a restart interrupted. With a grace period of zero nothing is deferred and the
+        // records are not looked for (the host's sweep tick still drains the ones left from an earlier setting).
+        if (_sweepGracePeriod > TimeSpan.Zero)
+        {
+            await SweepDueAsync(rollup.RtId, cancellationToken);
+        }
+
+        // Per-source resolution (AB#5157 §3) — the same binding the forward aggregation uses for
+        // this (rollup, source) pair, resolved once per execution and reused for every bucket. A
+        // rollup source needs its rollup snapshot for the child-aggregation rule.
+        RollupArchiveSnapshot? sourceRollup = null;
+        if (source.RollupAggregations is not null)
+        {
+            if (_rollupArchiveStore is null)
+            {
+                // Same breadcrumb the forward aggregation path leaves: without the rollup store only
+                // rule 1 applies, so a logical spec fails below with "no rollup snapshot".
+                _logger.LogDebug(
+                    "Source archive {SourceRtId} is a rollup but no rollup store is wired — only verbatim declared columns resolve.",
+                    source.RtId);
+            }
+            else
+            {
+                sourceRollup = await _rollupArchiveStore.GetAsync(source.RtId);
+            }
+        }
+
+        var resolvedAggregations = RollupAggregationColumns.ResolveForSource(
+            aggregations, rollup.RtId, source, sourceRollup);
+
+        // An empty staging table with the live windowed shape. includeGeneration:true so the shared
+        // RollupAggregationSqlBuilder (which always writes a generation column) targets a matching
+        // schema; staging's generation is always 0 and is overridden to the new generation when the
+        // staged rows are copied into the live table. One shard, no replicas: see the class remarks.
+        var createStagingSql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
+            stagingTable, resolvedColumns, numberOfShards: 1, numberOfReplicas: 0, includeGeneration: true);
+        await PrepareStagingAsync(liveTable, stagingTable, createStagingSql, cancellationToken);
+
+        return new RunContext(sourceTable, liveTable, stagingTable, genMapTable, columnNames, resolvedAggregations);
     }
 
     /// <summary>

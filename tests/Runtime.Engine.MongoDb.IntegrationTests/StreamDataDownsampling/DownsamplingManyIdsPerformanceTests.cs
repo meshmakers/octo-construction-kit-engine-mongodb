@@ -159,25 +159,45 @@ public class DownsamplingManyIdsPerformanceTests(CrateStagingCopyFixture fixture
         var start = SeedEnd.AddDays(-SeedDays);
         var windows = SeedDays * 96;
         var watch = Stopwatch.StartNew();
-        await using (var connection = new NpgsqlConnection(fixture.ConnectionString + ";Pooling=false"))
+        try
         {
-            await connection.OpenAsync();
-            for (var e0 = 0; e0 < entities; e0 += 50)
+            await using (var connection = new NpgsqlConnection(fixture.ConnectionString + ";Pooling=false"))
             {
-                var e1 = Math.Min(entities, e0 + 50) - 1;
-                await using var command = new NpgsqlCommand(
-                    $"INSERT INTO {table} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"amount\", \"obis\") " +
-                    $"SELECT '{start:O}'::TIMESTAMP + (CAST(w AS BIGINT) * 900000), " +
-                    $"'{start:O}'::TIMESTAMP + ((CAST(w AS BIGINT) + 1) * 900000), " +
-                    $"'67000000000000' || lpad(CAST(e AS TEXT), 10, '0'), 'Test/Meter', (e % 7) + w * 0.001, " +
-                    $"CASE WHEN e % 2 = 0 THEN '1-1:1.9.0' ELSE '1-1:2.9.0' END " +
-                    $"FROM generate_series({e0}, {e1}) AS g1(e), generate_series(0, {windows - 1}) AS g2(w)",
-                    connection) { CommandTimeout = 0 };
-                await command.ExecuteNonQueryAsync();
+                await connection.OpenAsync();
+                for (var e0 = 0; e0 < entities; e0 += 50)
+                {
+                    var e1 = Math.Min(entities, e0 + 50) - 1;
+                    await using var command = new NpgsqlCommand(
+                        $"INSERT INTO {table} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"amount\", \"obis\") " +
+                        $"SELECT '{start:O}'::TIMESTAMP + (CAST(w AS BIGINT) * 900000), " +
+                        $"'{start:O}'::TIMESTAMP + ((CAST(w AS BIGINT) + 1) * 900000), " +
+                        $"'67000000000000' || lpad(CAST(e AS TEXT), 10, '0'), 'Test/Meter', (e % 7) + w * 0.001, " +
+                        $"CASE WHEN e % 2 = 0 THEN '1-1:1.9.0' ELSE '1-1:2.9.0' END " +
+                        $"FROM generate_series({e0}, {e1}) AS g1(e), generate_series(0, {windows - 1}) AS g2(w)",
+                        connection) { CommandTimeout = 0 };
+                    await command.ExecuteNonQueryAsync();
+                }
             }
+
+            await fixture.SqlAsync($"REFRESH TABLE {table}");
+        }
+        catch
+        {
+            // AB#8993 review finding (deferred to AB#9016): a failed seed must not leave a partial multi-million-row table in
+            // the shared CrateDB container.
+            try
+            {
+                await fixture.SqlAsync($"DROP TABLE IF EXISTS {table}");
+            }
+            catch (Exception cleanupException)
+            {
+                // Report the cleanup failure but keep the seed failure as the test's error.
+                RunProgress.Report($"AB#8993 cleanup of the partial table {table} failed: {cleanupException.Message}");
+            }
+
+            throw;
         }
 
-        await fixture.SqlAsync($"REFRESH TABLE {table}");
         RunProgress.Report($"AB#8993 seeded {entities} entities x {windows} windows in {watch.Elapsed.TotalSeconds:F0} s");
 
         var store = A.Fake<IArchiveRuntimeStore>();

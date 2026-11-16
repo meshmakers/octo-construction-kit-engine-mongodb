@@ -1768,6 +1768,36 @@ timestamp schedules a recompute of years of history.
   `null` cap — manual/chained recompute stays unbounded, matching `recomputeArchive` /
   `rewindRollupWatermark`.
 
+### Late Deliveries Refresh Only Their Series, In Place (AB#9016)
+
+`DetectAndRecordRetroactiveWriteAsync` records the distinct rtIds of the late, in-reach automated rows on the dirty window
+(`RetroactiveWriteDetector.TryBuildDirtyWindow(..., maxScopedRtIds, ...)`). Above `StreamData:Recompute:MaxScopedRtIds` it
+records none, which means every series. The engine's orchestrator debounces the obligations and runs them as one
+set-scoped refresh: `CrateDbArchiveRecomputeExecutor.ExecuteScopedRefreshAsync`, to which the repository delegates. Rules
+to keep:
+
+- **Stage like the full recompute, write at the active generation.** The aggregation, the expected-row count and the LOCF
+  carry are restricted with `RollupAggregationSqlBuilder.ScopeCondition` (`rtid IN (...)`). The staged rows are upserted
+  into the live table with `RollupRecomputeSqlBuilder.BuildUpsertFromStagingAtActiveGenerationSlice`, whose generation is
+  `GenerationFilterSql.RenderActiveGeneration` over the pointer entries with scope `''` or one of the series. The reader
+  predicate is built from the same function, so the two cannot drift.
+- **No generation, no pointer, no sweep.** Do not add a flip or a generation sweep to this path: avoiding them is the
+  point (the cleanup DELETEs dominated CrateDB cost on prod-2).
+- **Refresh marker.** The marker is `BuildReadRefreshMarker`, the `rtchangeddatetime` of the oldest staged row. Rows the
+  upsert wrote are at least as new; untouched rows are older.
+- **Write check.** A short slice is written once more and then fails (AB#8680). The check counts only freshly written
+  rows (`BuildCountRefreshedInScope`).
+- **Vanished buckets.** After the upsert, the rows of the series at the active generation in the range that are older
+  than the marker (all of them when nothing was staged) are removed (`BuildStaleInScope`, count first, DELETE only when
+  needed). Without this step the refresh would be weaker than the full recompute.
+- **Not atomic across rows.** While a refresh runs, or after it failed part way, readers can see some buckets of the series
+  refreshed and others not yet; every written row holds its final value and the retry completes the rest. The full
+  recompute keeps its all-or-nothing flip.
+- **Serialised by the engine.** The active-job guard keeps every other recompute of the rollup out. The source's pointer
+  entries are read unscoped (a superset is correct).
+- Tests: `LateDeliveryScopeTests` (unit), `StreamDataLateDelivery/ScopedRefreshEquivalenceTests` (real CrateDB). Concept:
+  engine `docs/concept-rollup-recompute.md` §4a.
+
 ### Manual Writes Reach the Rollups (AB#7594)
 
 `DetectAndRecordRetroactiveWriteAsync` splits a batch by origin. Automated rows keep the single, reach-capped

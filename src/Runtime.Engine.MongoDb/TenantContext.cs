@@ -2982,6 +2982,8 @@ public class TenantContext : ITenantContext
             audit,
             _loggerFactory.CreateLogger<RecomputeOrchestrator>(),
             () => DateTime.UtcNow,
+            // AB#9016: late-delivery debounce and the rtId cap (StreamData:Recompute:LateDataDebounce / MaxScopedRtIds).
+            _serviceProvider.GetService<IOptions<RecomputeLateDataOptions>>()?.Value ?? new RecomputeLateDataOptions(),
             maxBucketsPerChunk,
             // AB#5157: a committed recompute changes what the rollup holds — drop its memoised coverage.
             coverageInvalidator: GetArchiveCoverageCache());
