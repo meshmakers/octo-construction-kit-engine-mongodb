@@ -32,6 +32,11 @@ internal static partial class MongoToolArguments
             args.Add($"--collection={options.Collection}");
         }
 
+        foreach (var excludedCollection in options.ExcludeCollections)
+        {
+            args.Add($"--excludeCollection={excludedCollection}");
+        }
+
         if (!string.IsNullOrEmpty(options.OutputDirectory))
         {
             args.Add($"--out={options.OutputDirectory}");

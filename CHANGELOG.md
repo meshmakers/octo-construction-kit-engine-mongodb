@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- AB#9127 Fix: a tenant dump (`TenantBackupService.BackupTenantAsync`, used by the bot's dump job, the pre-sweep dump and
+  the clone to a temp tenant) leaves out platform-only collections, today `RtEntity_SystemCommunicationSecretDefault`
+  (`MongoDumpOptions.PlatformOnlyTenantCollections`, `ForTenantArchive`, one `--excludeCollection` each). The secret
+  defaults the communication controller projects into a tenant are platform-only and must never reach a file a tenant
+  identity can read; the controller projects them again after a restore (AB#7245). `MongoDumpOptions.ExcludeCollections`
+  is new and empty by default, so `ForArchive` and every other dump are unchanged.
+
 - AB#9110 Fix: paged stream-data queries return every row exactly once, also without a sort order. The simple query
   (`ExecuteQueryAsync`, transient and persistent `rows`) ran LIMIT/OFFSET without ORDER BY when no sort order was given
   (`AddOrderByTiebreaker` did nothing without an existing ORDER BY), and with a sort order only `timestamp` broke ties.
