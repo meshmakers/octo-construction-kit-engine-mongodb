@@ -93,6 +93,51 @@ public class CrateDbFailedOnHiddenColumnsReadGateTests
     }
 
     [Fact]
+    public async Task FailedOnHiddenColumns_HidesComputedColumnsDerivedTransitively()
+    {
+        A.CallTo(() => _store.GetAsync(Archive)).Returns(
+            new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Failed, "meter",
+            [
+                new CkArchiveColumnSpec("Name", Indexed: false, Required: false),
+                new CkArchiveColumnSpec("Pin", Indexed: false, Required: false),
+                new CkArchiveColumnSpec(string.Empty, false, false)
+                {
+                    Name = "first", Formula = "pin * 2", ComputedState = ComputedColumnState.Active
+                },
+                new CkArchiveColumnSpec(string.Empty, false, false)
+                {
+                    Name = "second", Formula = "first + 1", ComputedState = ComputedColumnState.Active, ComputedVersion = 0
+                },
+                new CkArchiveColumnSpec(string.Empty, false, false)
+                {
+                    Name = "third", Formula = "name", ComputedState = ComputedColumnState.Active,
+                    PendingFormula = "second * 3"
+                }
+            ])
+            {
+                HiddenColumns = ["Pin"]
+            });
+
+        foreach (var column in new[] { "second", "third" })
+        {
+            await Assert.ThrowsAsync<StreamDataException>(() => NewSut().ExecuteQueryAsync(Archive,
+                StreamDataQueryOptions.Create().WithCkTypeId(SomeType).WithColumns([column])));
+        }
+
+        AssertNoSqlExecuted();
+    }
+
+    [Theory]
+    [InlineData("pin__v1", true)]
+    [InlineData("PIN__V12", true)]
+    [InlineData("pin__v", false)]
+    [InlineData("pin__voltage", false)]
+    [InlineData("pin__v1a", false)]
+    [InlineData("pinx__v1", false)]
+    public void AStoredVersion_HasADigitOnlySuffix(string column, bool expected) =>
+        Assert.Equal(expected, CrateDbStreamDataRepository.IsStoredVersionOf(column, "pin"));
+
+    [Fact]
     public async Task FailedOnHiddenColumns_RefusesEveryWrite()
     {
         Stub(CkArchiveStatus.Failed, "Pin");

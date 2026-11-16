@@ -3927,12 +3927,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         {
             // A computed column whose formula reads a Hidden column would expose values derived from it: hide it too.
             // Stored formulas use physical column names (ColumnNameMapper).
-            var hidden = HiddenPhysicalColumns(snapshot);
+            var derived = HiddenDerivedComputedColumns(snapshot, out _);
             var visible = snapshot.WithoutHiddenColumns();
             return visible with
             {
-                Columns = visible.Columns.Where(c => !c.IsComputed ||
-                    (!ReferencesAny(c.Formula, hidden) && !ReferencesAny(c.PendingFormula, hidden))).ToList()
+                Columns = visible.Columns.Where(c => !c.IsComputed || !derived.Contains(c)).ToList()
             };
         }
 
@@ -3949,21 +3948,60 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         new(snapshot.HiddenColumns.Select(ColumnNameMapper.PathToColumnName), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The computed columns whose values derive from a Hidden column (AB#6247): their current or pending formula reads a
+    /// Hidden column or, transitively, another such computed column (formulas use physical names, so a computed column is
+    /// matched by its base and every versioned name). <paramref name="excludedPhysical"/> receives the Hidden columns'
+    /// physical names plus the base names of the derived computed columns.
+    /// </summary>
+    private static HashSet<CkArchiveColumnSpec> HiddenDerivedComputedColumns(ArchiveSnapshot snapshot,
+        out HashSet<string> excludedPhysical)
+    {
+        excludedPhysical = HiddenPhysicalColumns(snapshot);
+        var derived = new HashSet<CkArchiveColumnSpec>(ReferenceEqualityComparer.Instance);
+        var computed = snapshot.Columns.Where(c => c.IsComputed && !string.IsNullOrWhiteSpace(c.Name)).ToList();
+        bool added;
+        do
+        {
+            added = false;
+            foreach (var column in computed)
+            {
+                if (derived.Contains(column) || !(ReferencesAny(column.Formula, excludedPhysical) ||
+                                                  ReferencesAny(column.PendingFormula, excludedPhysical)))
+                {
+                    continue;
+                }
+
+                derived.Add(column);
+                excludedPhysical.Add(ComputedColumnNaming.Base(column));
+                excludedPhysical.Add(ComputedColumnNaming.Active(column));
+                excludedPhysical.Add(ComputedColumnNaming.Pending(column));
+                added = true;
+            }
+        } while (added);
+
+        return derived;
+    }
+
+    /// <summary>
     /// The physical columns the row export leaves out for an archive Failed on Hidden columns (AB#6247): the Hidden
-    /// columns, and every stored version (<c>{base}</c>, <c>{base}__v{N}</c>) of a computed column whose current or pending
-    /// formula reads one of them, because its values are derived from the Hidden attribute.
+    /// columns, and every stored version (<c>{base}</c>, <c>{base}__v{N}</c> with a numeric N) of a computed column whose
+    /// values derive from one of them (<see cref="HiddenDerivedComputedColumns"/>).
     /// </summary>
     private static Func<string, bool> ExportExcludedColumns(ArchiveSnapshot snapshot)
     {
-        var hidden = HiddenPhysicalColumns(snapshot);
-        var derivedBases = snapshot.Columns
-            .Where(c => c.IsComputed && !string.IsNullOrWhiteSpace(c.Name) &&
-                        (ReferencesAny(c.Formula, hidden) || ReferencesAny(c.PendingFormula, hidden)))
+        var derivedBases = HiddenDerivedComputedColumns(snapshot, out var excluded)
             .Select(ComputedColumnNaming.Base)
             .ToList();
-        return column => hidden.Contains(column) || derivedBases.Any(b =>
-            string.Equals(column, b, StringComparison.OrdinalIgnoreCase) ||
-            column.StartsWith(b + "__v", StringComparison.OrdinalIgnoreCase));
+        return column => excluded.Contains(column) || derivedBases.Any(b => IsStoredVersionOf(column, b));
+    }
+
+    /// <summary>Whether <paramref name="column"/> is <c>{base}__v{N}</c> with a non-empty, digit-only N.</summary>
+    internal static bool IsStoredVersionOf(string column, string baseName)
+    {
+        var prefix = baseName + "__v";
+        return column.Length > prefix.Length &&
+               column.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+               column.AsSpan(prefix.Length).IndexOfAnyExceptInRange('0', '9') < 0;
     }
 
     /// <summary>Whether a formula names one of <paramref name="columns"/> as a whole identifier.</summary>
