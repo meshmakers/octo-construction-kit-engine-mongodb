@@ -48,6 +48,7 @@ internal static class SharedMongoDbContainer
                     // AB#8511: fixed footprint instead of a cache sized from the Docker host
                     // (see TestContainerLimits). Appended to the --replSet arguments of WithReplicaSet.
                     .WithCommand("--wiredTigerCacheSizeGB", TestContainerLimits.MongoWiredTigerCacheSizeGb)
+                    .WithCommand(TestContainerLimits.MongoFileHandleParameters)
                     .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.MongoMemoryLimitBytes))
                     .Build();
 

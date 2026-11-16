@@ -167,8 +167,10 @@ red suite three times into the job timeout, 51009/51014, and hid a mass failure,
 (no dump) so a single hung test aborts the run and is named in the log. Flaky tests are fixed or
 handled per test, never by retrying the step.
 
-**Container memory caps (AB#8511).** The shared mongod runs with `--wiredTigerCacheSizeGB 1` and a 12 GiB container
-limit (measured peaks 6.4-8.4 GiB, mostly WiredTiger data handles of the fixture databases, not cache), every CrateDB test
+**Container memory caps (AB#8511).** The shared mongod runs with `--wiredTigerCacheSizeGB 3`, closes idle WiredTiger
+data handles after 30 s (`wiredTigerFileHandleCloseIdleTime`) and has a 12 GiB container limit (measured peak 6.7 GiB,
+mostly the data handles of the fixture databases, not data). A 1 GB cache was full during the startup burst and
+WiredTiger rolled transactions back (`transaction rolled back because of cache overflow`, CI 70416/70685); every CrateDB test
 container with a 1 GB heap and a 3 GiB limit (`Fixtures/TestContainerLimits.cs`, pinned by
 `TestContainerLimitsTests`). Without them one suite took memory from the whole CI node and several suites at once
 stalled until MongoDB aborted transactions after 60 s. Never raise `transactionLifetimeLimitSeconds` or a test budget

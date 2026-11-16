@@ -10,7 +10,7 @@ Every Testcontainer of this suite has a fixed memory footprint (`Fixtures/TestCo
 
 | Container | Setting | Container memory limit |
 |---|---|---|
-| shared mongod (`SharedMongoDbContainer`) | `--wiredTigerCacheSizeGB 1` | 12 GiB, no swap (measured peaks 6.4-8.4 GiB) |
+| shared mongod (`SharedMongoDbContainer`) | `--wiredTigerCacheSizeGB 3`, idle data handles closed after 30 s | 12 GiB, no swap (measured peak 6.7 GiB) |
 | CrateDB (`BlueprintArchiveActivationFixture`, `CrateStagingCopyFixture`) | `CRATE_HEAP_SIZE=1g` | 3 GiB, no swap (measured peak 1.9 GiB) |
 
 Without them mongod sized its WiredTiger cache from the Docker host (125 GiB on the CI node). With several suites on
@@ -19,11 +19,28 @@ transactions after its 60 s `transactionLifetimeLimitSeconds` and CrateDB DDL ra
 the transaction lifetime or a test budget to get around a stall; a suite that needs more memory than the caps is a
 finding. `TestContainerLimitsTests` asks the running mongod for its cache size and its memory limit.
 
-The mongod memory is not the cache: every fixture keeps its databases in the shared server (~70,000-106,000 open
-WiredTiger data handles at the end of a run, up to ~800 connections), so the footprint grows with the number of
-fixtures. A 3 GiB limit was OOM-killed mid-run (tests then fail with `Connection refused`). When that happens, measure
-the peak again (`docker exec <container> cat /sys/fs/cgroup/memory.peak` during a full run) and raise the limit, or let
-the fixtures drop their databases.
+The mongod memory is mostly not data: every fixture keeps its databases in the shared server, so a full run opens
+130,000-140,000 WiredTiger data handles (one per collection and index, up to ~1,300 connections). Each open handle costs
+memory outside the cache and pins pages in the cache: about 2 GB of cache is in use although the suite's data is small.
+Two consequences (AB#8511, reopened 2026-11-16):
+
+- **Cache 3 GB, not 1 GB.** With 1 GB the cache was full during the startup burst, when the parallel fixtures import
+  their CK models and create their system tenants, and WiredTiger rolled transactions back under cache pressure
+  (`transaction rolled back because of cache overflow`; CI builds 70416 and 70685, the system tenant was then missing
+  and up to 36 tests failed). At 3 GB the measured cache use stays below 2 GB, under WiredTiger's 80 % eviction target.
+- **Idle data handles are closed after 30 s** (`--setParameter wiredTigerFileHandleCloseIdleTime=30`, scan interval
+  10 s, minimum 250; mongod's default is 600 s). The databases of a fixture whose tests are done stay idle for the rest
+  of the run. Without it the 3 GB cache raised the mongod peak to 9.1 GiB; with it the peak is 6.7 GiB and at most
+  ~91,000 handles are open at once.
+
+Measured 2026-11-16 on a full run (1,454 tests). A 3 GiB limit was OOM-killed mid-run (tests then fail with
+`Connection refused`). When that happens, measure the peak again (`docker exec <container> cat /sys/fs/cgroup/memory.peak`
+during a full run; cache use: `serverStatus().wiredTiger.cache["bytes currently in the cache"]`) and raise the limit,
+or let the fixtures drop their databases.
+
+Locally the Docker VM must hold the mongod peak, the CrateDB containers (up to 3 GiB) and whatever else runs in it. On a
+14 GiB Docker Desktop VM with two kind clusters running, the run without the idle-handle closing swapped and failed
+with `MongoConnectionException` after two-minute stalls.
 
 ## Performance budget tests (`Category=Performance`, AB#8004)
 
