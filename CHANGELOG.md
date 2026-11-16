@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- AB#8897 New: a runtime-entity query that runs too long is stopped by MongoDB (`maxTimeMS`) and ends with
+  `RuntimeQueryTimeoutException` (tenant, CK type, limit, elapsed time) instead of keeping the database and the service
+  busy. **Opt-in per host:** `AddRuntimeQueryTimeLimit()` on the runtime engine builder; the host binds
+  `RuntimeQueryOptions` (section `RuntimeQuery`, `MaxTimeMs`, default 120,000 ms, 0 = off). Without the call nothing
+  changes. Covered: the queries by type, by id, by type with navigation and by CK interface, and their counts
+  (`SingleOriginQuery`, `RtInterfaceQueryExecutor`). Not covered yet: association and deep-graph queries
+  (`MultipleOrigin*`). A query that completes after more than 80 % of its limit is logged as a warning (tenant, CK type,
+  duration, limit). Batch paths override the limit at the call site: `using (RuntimeQueryTimeLimit.Override(TimeSpan))`
+  or `using (RuntimeQueryTimeLimit.Disable())`, an `AsyncLocal` scope that holds across `await` and for the tasks started
+  inside it and falls back to the previous limit on dispose; the CK migrations of `TenantContext` and the blueprint of a
+  new child tenant run inside `Disable()`. Tests: `RuntimeQueryTimeLimitTests` (unit),
+  `RuntimeQueryTimeLimitIntegrationTests` and `InterfaceQueryTimeLimitTests` (real MongoDB, including a query MongoDB
+  stops with `MaxTimeMSExpired`).
 - AB#9342 Fix: two CK types of one collection with an Ascending index on the same attributes share one index. Both
   produce the key spec `{ckTypeId, attr..., _id, rtState}` and MongoDB holds one non-unique index per key spec, so the
   index update of the second type failed with MongoDB 85 ("Index already exists with a different name"), logged a warning

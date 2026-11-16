@@ -9,6 +9,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -234,9 +235,13 @@ internal sealed class RtInterfaceQueryExecutor(
         {
             var filter = plan.Query.BuildMatchFilter() ?? Builders<RtEntity>.Filter.Empty;
             var collection = plan.Query.GetMongoCollection();
-            return handle == null
-                ? await collection.CountDocumentsAsync(filter).ConfigureAwait(false)
-                : await collection.CountDocumentsAsync(handle, filter).ConfigureAwait(false);
+            return await RunLimitedAsync("count", async maxTime =>
+            {
+                var options = RuntimeQueryTimeLimiter.CreateCountOptions(maxTime);
+                return handle == null
+                    ? await collection.CountDocumentsAsync(filter, options).ConfigureAwait(false)
+                    : await collection.CountDocumentsAsync(handle, filter, options).ConfigureAwait(false);
+            }).ConfigureAwait(false);
         }, parallel).ConfigureAwait(false);
         return counts.Sum();
     }
@@ -334,16 +339,30 @@ internal sealed class RtInterfaceQueryExecutor(
     private static IPipelineStageDefinition LimitStage(int limit) =>
         new BsonDocumentPipelineStageDefinition<RtEntity, BsonDocument>(new BsonDocument("$limit", limit));
 
-    private static async Task<List<BsonDocument>> AggregateAsync(SingleOriginRtQuery<RtEntity> query,
+    private Task<List<BsonDocument>> AggregateAsync(SingleOriginRtQuery<RtEntity> query,
         IClientSessionHandle? handle, List<IPipelineStageDefinition> stages)
     {
         var pipeline = PipelineDefinition<RtEntity, BsonDocument>.Create(stages);
         var collection = query.GetMongoCollection();
-        using var cursor = handle == null
-            ? await collection.AggregateAsync(pipeline).ConfigureAwait(false)
-            : await collection.AggregateAsync(handle, pipeline).ConfigureAwait(false);
-        return await cursor.ToListAsync().ConfigureAwait(false);
+        return RunLimitedAsync("page", async maxTime =>
+        {
+            var options = RuntimeQueryTimeLimiter.CreateAggregateOptions(maxTime);
+            using var cursor = handle == null
+                ? await collection.AggregateAsync(pipeline, options).ConfigureAwait(false)
+                : await collection.AggregateAsync(handle, pipeline, options).ConfigureAwait(false);
+            return await cursor.ToListAsync().ConfigureAwait(false);
+        });
     }
+
+    /// <summary>
+    ///     The time limit of the collection queries of this interface query (AB#8897): every count and fetch carries the
+    ///     limit as <c>maxTimeMS</c>, a time-out ends as <see cref="RuntimeQueryTimeoutException" /> naming the interface.
+    ///     Null runs without a limit.
+    /// </summary>
+    internal RuntimeQueryTimeLimiter? TimeLimiter { get; init; }
+
+    private Task<T> RunLimitedAsync<T>(string operation, Func<TimeSpan?, Task<T>> run) =>
+        TimeLimiter == null ? run(null) : TimeLimiter.RunAsync(operation, run);
 
     private static List<InterfaceRow> ToRows(List<BsonDocument> documents,
         IReadOnlyList<(string Path, bool Descending)> sortKeys)

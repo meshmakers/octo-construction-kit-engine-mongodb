@@ -16,6 +16,7 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Secrets;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
@@ -41,12 +42,44 @@ internal class TenantRepository(
     IDataSecurityFilterFactory? dataSecurityFilterFactory = null,
     IDataPermissionResolver? dataPermissionResolver = null,
     IAuditEventSink? auditEventSink = null,
-    ILogger? logger = null)
+    ILogger? logger = null,
+    RuntimeQueryTimeLimitSettings? runtimeQueryTimeLimit = null)
     : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation,
         dataPermissionResolver, auditEventSink, logger), ITenantRepository,
         ISecureSessionFactory
 {
     private readonly ILogger? _importLookupLogger = logger;
+
+    /// <summary>
+    ///     The host's runtime query time limit (AB#8897), or null when the host did not opt in
+    ///     (<c>AddRuntimeQueryTimeLimit</c>). Settable for tests.
+    /// </summary>
+    internal RuntimeQueryTimeLimitSettings? QueryTimeLimitSettings { get; set; } = runtimeQueryTimeLimit;
+
+    /// <summary>
+    ///     Handed to every time limiter this repository creates (<see cref="RuntimeQueryTimeLimiter.MaxTimeObserver" />).
+    ///     Null in production; set by tests (AB#8897) to prove which limit reached the MongoDB options.
+    /// </summary>
+    internal Action<string, TimeSpan?>? RuntimeQueryMaxTimeObserver { get; set; }
+
+    /// <summary>
+    ///     The time limiter of a runtime query on <paramref name="ckTypeId" /> (AB#8897), or null when neither the host
+    ///     configured a limit nor a <see cref="RuntimeQueryTimeLimit" /> scope is active: the query then
+    ///     runs exactly as before.
+    /// </summary>
+    internal RuntimeQueryTimeLimiter? CreateRuntimeQueryTimeLimiter(string ckTypeId)
+    {
+        if (QueryTimeLimitSettings == null && RuntimeQueryTimeLimit.Current == null)
+        {
+            return null;
+        }
+
+        return new RuntimeQueryTimeLimiter(TenantId, ckTypeId, QueryTimeLimitSettings?.MaxTime,
+            _importLookupLogger)
+        {
+            MaxTimeObserver = RuntimeQueryMaxTimeObserver
+        };
+    }
 
     /// <summary>
     ///     Direct access to the Mongo data source for engine-internal maintenance work that needs
@@ -1065,6 +1098,7 @@ internal class TenantRepository(
         query.AddFieldAggregation(queryOptions.FieldAggregation);
         query.AddResultAggregation(queryOptions.ResultAggregation);
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
+        query.TimeLimiter = CreateRuntimeQueryTimeLimiter(ckTypeId.ToString());
         return query;
     }
 
@@ -1094,7 +1128,10 @@ internal class TenantRepository(
             interfaceGraph.ImplementingTypes.Select(t => t.ToRtCkId().SemanticVersionedFullName),
             ckInterfaceId.ToString());
         var executor = new RtInterfaceQueryExecutor(metricsContext, ckCacheService, TenantId,
-            mongoDbRepositoryDataSource);
+            mongoDbRepositoryDataSource)
+        {
+            TimeLimiter = CreateRuntimeQueryTimeLimiter(ckInterfaceId.ToString())
+        };
         var plans = executor.BuildPlans(ckInterfaceId, interfaceGraph, queryOptions, securityFilter);
         return await executor.ExecuteAsync(session, plans, skip, take, includeTotalCount).ConfigureAwait(false);
     }
@@ -1125,6 +1162,7 @@ internal class TenantRepository(
         query.AddFieldAggregation(queryOptions.FieldAggregation);
         query.AddResultAggregation(queryOptions.ResultAggregation);
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
+        query.TimeLimiter = CreateRuntimeQueryTimeLimiter(ckTypeId.ToString());
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -1175,6 +1213,7 @@ internal class TenantRepository(
         query.AddResultAggregation(queryOptions.ResultAggregation);
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
         query.AddNavigationProperties(navigationPairs, queryOptions.NavigationFilterMode);
+        query.TimeLimiter = CreateRuntimeQueryTimeLimiter(ckTypeId.ToString());
         return (query, securityQueryFilter);
     }
 
@@ -1252,6 +1291,7 @@ internal class TenantRepository(
         query.AddResultAggregation(queryOptions.ResultAggregation);
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
         query.AddNavigationProperties(roleIdDirectionPairs);
+        query.TimeLimiter = CreateRuntimeQueryTimeLimiter(ckTypeId.ToString());
 
         return await query.ExecuteQuery(session, skip, take);
     }
