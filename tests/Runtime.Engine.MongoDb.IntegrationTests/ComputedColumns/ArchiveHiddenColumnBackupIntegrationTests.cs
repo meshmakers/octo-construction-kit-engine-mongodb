@@ -310,7 +310,57 @@ public class ArchiveHiddenColumnBackupIntegrationTests(CrateStagingCopyFixture f
         Assert.Equal(3, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"pin\" = 1234.0"));
     }
 
-    private static async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ImportRows(int count)
+    [Fact]
+    public async Task ImportIntoATableThatHasOneHiddenColumnButLacksAnother_KeepsTheOneItHas()
+    {
+        // Pin (NOT NULL) is in the table, Secret became Hidden before the restore and is not: Pin keeps its values.
+        var cache = SensorCacheWithSecret();
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+        var archive = OctoObjectId.GenerateNewId();
+        var store = new MemoryArchiveStore();
+        store.Put(new ArchiveSnapshot(archive, SensorType, CkArchiveStatus.Disabled, "meter",
+            new List<CkArchiveColumnSpec>
+            {
+                new("Value", Indexed: false, Required: false), new("Pin", Indexed: false, Required: true),
+                new("Secret", Indexed: false, Required: false)
+            }));
+        var lane = NewLane(tenant, archive, store, cache);
+        var doubleType = new CrateColumnType.Primitive("DOUBLE PRECISION");
+        await fixture.SqlAsync(ArchiveDdlGenerator.GenerateCreateTable(lane.Table,
+            [new ArchiveColumnDdl("Value", doubleType, false, false), new ArchiveColumnDdl("Pin", doubleType, true, false)],
+            numberOfShards: 2, numberOfReplicas: 0));
+
+        await lane.Repository.ImportRowsAsync(archive, ImportRows(3, withSecret: true), ArchiveImportMode.InsertOnly, Ct);
+        await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
+
+        Assert.Equal(3, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"pin\" = 1234.0"));
+        Assert.DoesNotContain("secret", await ColumnsAsync(lane));
+    }
+
+    /// <summary>Test/Sensor with Value (visible) and the Hidden attributes Pin and Secret.</summary>
+    private static ICkCacheService SensorCacheWithSecret()
+    {
+        var typeId = new CkId<CkTypeId>("Test-1.0.0/Sensor-1");
+        CkTypeAttributeGraph Attribute(string name, CkAttributeAccessDto access) => new(
+            new CkId<CkAttributeId>($"Test-1.0.0/{name}-1"), name, null, AttributeValueTypesDto.Double, null, null, null,
+            null, null, isOptional: true, description: null) { Access = access };
+        CkTypeGraph Graph() => new(typeId, isAbstract: false, isFinal: false, isCollectionRoot: true, [], null, null, [], [],
+            new[]
+            {
+                Attribute("Value", CkAttributeAccessDto.ReadWrite), Attribute("Pin", CkAttributeAccessDto.Hidden),
+                Attribute("Secret", CkAttributeAccessDto.Hidden)
+            }.ToDictionary(a => a.CkAttributeId, a => a),
+            [], new CkGraphDirectedAssociations([]), "sensor", enableChangeStreamPreAndPostImages: false);
+
+        var cache = A.Fake<ICkCacheService>();
+        A.CallTo(() => cache.GetRtCkType(A<string>._, SensorType)).ReturnsLazily(Graph);
+        CkTypeGraph? ignored;
+        A.CallTo(() => cache.TryGetRtCkType(A<string>._, SensorType, out ignored))
+            .ReturnsLazily(() => true).AssignsOutAndRefParameters(Graph());
+        return cache;
+    }
+
+    private static async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ImportRows(int count, bool withSecret = false)
     {
         await Task.CompletedTask;
         for (var i = 0; i < count; i++)
@@ -318,7 +368,8 @@ public class ArchiveHiddenColumnBackupIntegrationTests(CrateStagingCopyFixture f
             yield return new Dictionary<string, object?>
             {
                 ["rtid"] = OctoObjectId.GenerateNewId().ToString(), ["cktypeid"] = SensorType.ToString(),
-                ["timestamp"] = FirstRow.AddHours(i), ["value"] = i * 1.0, ["pin"] = 1234.0
+                ["timestamp"] = FirstRow.AddHours(i), ["value"] = i * 1.0, ["pin"] = 1234.0,
+                ["secret"] = withSecret ? 99.0 : null
             };
         }
     }

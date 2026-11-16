@@ -3986,9 +3986,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// AB#9141: <see cref="WithoutColumnsStillHidden"/> for an import, but only when the table lacks one of the left-out
-    /// ingested columns (a table the restore provisioned without them). A table that has them gets the snapshot unchanged, so a
-    /// NOT NULL column there still receives its values.
+    /// AB#9141: <see cref="WithoutColumnsStillHidden"/> for an import, column by column: a left-out ingested column that the
+    /// table has (provisioned before it became Hidden, maybe NOT NULL) is kept and still receives its values, together with
+    /// its conflict precedence key; only the columns the table lacks (a table the restore provisioned without them) are left
+    /// out. When the table's columns cannot be read, every left-out column stays out.
     /// </summary>
     private async Task<ArchiveSnapshot> WithoutHiddenColumnsTheTableLacksAsync(ArchiveSnapshot snapshot)
     {
@@ -3999,10 +4000,35 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         var existing = await _platformColumns.ReadPhysicalColumnNamesAsync(snapshot.RtId.ToString());
-        var left = snapshot.Columns.Except(stripped.Columns)
-            .Where(c => !c.IsComputed && !string.IsNullOrWhiteSpace(c.Path))
-            .Select(c => ColumnNameMapper.PathToColumnName(c.Path));
-        return existing.Count > 0 && left.All(existing.Contains) ? snapshot : stripped;
+        if (existing.Count == 0)
+        {
+            return stripped;
+        }
+
+        var remaining = new HashSet<CkArchiveColumnSpec>(stripped.Columns, ReferenceEqualityComparer.Instance);
+        var keptBack = new HashSet<string>(
+            snapshot.Columns
+                .Where(c => !remaining.Contains(c) && !c.IsComputed && !string.IsNullOrWhiteSpace(c.Path))
+                .Select(c => ColumnNameMapper.PathToColumnName(c.Path))
+                .Where(existing.Contains),
+            StringComparer.OrdinalIgnoreCase);
+        if (keptBack.Count == 0)
+        {
+            return stripped;
+        }
+
+        var remainingKeys = new HashSet<ArchiveConflictKey>(stripped.ConflictPrecedence, ReferenceEqualityComparer.Instance);
+        return snapshot with
+        {
+            Columns = snapshot.Columns
+                .Where(c => remaining.Contains(c) || (!c.IsComputed && !string.IsNullOrWhiteSpace(c.Path) &&
+                                                      keptBack.Contains(ColumnNameMapper.PathToColumnName(c.Path))))
+                .ToList(),
+            ConflictPrecedence = snapshot.ConflictPrecedence
+                .Where(k => remainingKeys.Contains(k) ||
+                            (!k.IsOrigin && keptBack.Contains(ColumnNameMapper.PathToColumnName(k.Column))))
+                .ToList()
+        };
     }
 
     /// <summary>The physical column names of <see cref="ArchiveSnapshot.HiddenColumns"/> (AB#6247).</summary>
