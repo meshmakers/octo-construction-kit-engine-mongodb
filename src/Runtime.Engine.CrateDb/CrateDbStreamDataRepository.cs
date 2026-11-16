@@ -2286,9 +2286,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // while the archive is Disabled so no live writes race the import).
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
-        // AB#9141: the table of an archive that is not Activated has no column that reaches Hidden (EnsureArchiveCreatedAsync);
-        // a value an imported row carries for one of them is ignored.
-        snapshot = WithoutColumnsStillHidden(snapshot);
+        // AB#9141: a table provisioned for an archive that is not Activated has no column that reaches Hidden
+        // (EnsureArchiveCreatedAsync, the restore path); a value an imported row carries for one of them is ignored. A table
+        // that still has such a column (provisioned before it became Hidden, maybe NOT NULL) keeps receiving it as before.
+        snapshot = await WithoutHiddenColumnsTheTableLacksAsync(snapshot);
 
         // AB#8737: a computed column has no path (it is named by Name and derived by its Formula), so it is no
         // input of the import. The value an exported row carries for it is ignored; the column is evaluated again
@@ -3982,6 +3983,26 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             "Archive {ArchiveRtId} of tenant {TenantId} ({Status}) is used without {Count} column(s) that reach Hidden attributes " +
             "or derive from them", snapshot.RtId, _tenantId, snapshot.Status, exclusion.Columns.Count);
         return exclusion.Apply(snapshot);
+    }
+
+    /// <summary>
+    /// AB#9141: <see cref="WithoutColumnsStillHidden"/> for an import, but only when the table lacks one of the left-out
+    /// ingested columns (a table the restore provisioned without them). A table that has them gets the snapshot unchanged, so a
+    /// NOT NULL column there still receives its values.
+    /// </summary>
+    private async Task<ArchiveSnapshot> WithoutHiddenColumnsTheTableLacksAsync(ArchiveSnapshot snapshot)
+    {
+        var stripped = WithoutColumnsStillHidden(snapshot);
+        if (ReferenceEquals(stripped, snapshot))
+        {
+            return snapshot;
+        }
+
+        var existing = await _platformColumns.ReadPhysicalColumnNamesAsync(snapshot.RtId.ToString());
+        var left = snapshot.Columns.Except(stripped.Columns)
+            .Where(c => !c.IsComputed && !string.IsNullOrWhiteSpace(c.Path))
+            .Select(c => ColumnNameMapper.PathToColumnName(c.Path));
+        return existing.Count > 0 && left.All(existing.Contains) ? snapshot : stripped;
     }
 
     /// <summary>The physical column names of <see cref="ArchiveSnapshot.HiddenColumns"/> (AB#6247).</summary>

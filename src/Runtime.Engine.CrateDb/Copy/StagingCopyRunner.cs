@@ -99,13 +99,17 @@ internal sealed class StagingCopyRunner(
         if (target.ExcludedColumns is { } excluded && description.Columns.Count > 0)
         {
             // AB#9141: the plan - and with it the dump manifest - describes the columns the dump contains.
-            var left = description.Columns.Where(c => excluded(c.Name)).Select(c => c.Name).ToList();
+            // information_schema lists the sub-columns of an object column too (obj['member']); they go with their column.
+            var left = description.Columns.Where(c => excluded(TopLevelColumn(c.Name))).Select(c => c.Name).ToList();
             if (left.Count > 0)
             {
                 logger.LogInformation(
                     "Archive {ArchiveRtId} of tenant {TenantId}: the dump leaves out {Count} column(s) that reach Hidden attributes " +
                     "or derive from them.", target.ArchiveRtId, tenantId, left.Count);
-                description = description with { Columns = description.Columns.Where(c => !excluded(c.Name)).ToList() };
+                description = description with
+                {
+                    Columns = description.Columns.Where(c => !excluded(TopLevelColumn(c.Name))).ToList()
+                };
             }
         }
 
@@ -283,10 +287,19 @@ internal sealed class StagingCopyRunner(
         var data = plan.Tables.FirstOrDefault(t => t.Table == ArchiveCopyTable.Data)
                    ?? throw new InvalidOperationException(
                        $"The plan of archive '{target.ArchiveRtId}' does not describe its data table.");
-        var columns = data.Columns.Select(c => c.Name).Where(c => !excluded(c)).ToList();
+        // Only top-level columns can be named: a sub-column (obj['member']) is copied with its object column.
+        var columns = data.Columns.Select(c => TopLevelColumn(c.Name)).Distinct(StringComparer.Ordinal)
+            .Where(c => !excluded(c)).ToList();
         return columns.Count > 0
             ? columns
             : throw new InvalidOperationException($"The plan of archive '{target.ArchiveRtId}' leaves no column to copy.");
+    }
+
+    /// <summary>The top-level column of an <c>information_schema</c> column name: <c>obj</c> for <c>obj['member']</c>.</summary>
+    internal static string TopLevelColumn(string name)
+    {
+        var bracket = name.IndexOf('[', StringComparison.Ordinal);
+        return bracket < 0 ? name : name[..bracket];
     }
 
     // ---- COPY FROM ---------------------------------------------------------------------------------------

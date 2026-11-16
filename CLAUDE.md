@@ -1128,8 +1128,12 @@ the computed columns derived from them (current or pending formula, transitively
   recorded columns of an archive Failed on Hidden columns;
 - `EnsureArchiveCreatedAsync` and `ImportRowsAsync` for a raw or time-range archive that is not Activated
   (`WithoutColumnsStillHidden`, current model; the recorded columns only when the model cannot be read): the restore provisions
-  and imports such an archive without them and without conflict precedence keys on them. The lifecycle refuses every activation
-  while a column reaches Hidden, so no other path gets there; a column visible again is provisioned as before (`RetryActivation`).
+  and imports such an archive without them and without conflict precedence keys on them. `ImportRowsAsync` leaves them out only
+  when the table lacks them (`WithoutHiddenColumnsTheTableLacksAsync`): a table provisioned before the column became Hidden keeps
+  receiving it, because a required column is `NOT NULL` there. The lifecycle refuses every activation while a column reaches
+  Hidden, so no other path gets there; a column visible again is provisioned as before (`RetryActivation`).
+- The COPY projection names top-level columns only: `information_schema` also lists object sub-columns (`obj['member']`), which
+  are copied with their object column and are kept in the manifest description (`StagingCopyRunner.TopLevelColumn`).
 - When the CK model cannot be read, a backup leaves out the recorded columns only (warning). Failing the dump instead was
   rejected (Odin, 2026-11-16): a tenant with a broken model (ResolveFailed) must stay backupable for its recovery. Residual
   risk: a column made Hidden by a model that cannot be read, and not yet recorded by the re-validation, can end up in the backup.

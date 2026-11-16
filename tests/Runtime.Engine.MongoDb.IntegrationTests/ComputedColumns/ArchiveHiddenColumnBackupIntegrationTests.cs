@@ -265,6 +265,65 @@ public class ArchiveHiddenColumnBackupIntegrationTests(CrateStagingCopyFixture f
     }
 
     [Fact]
+    public async Task AnObjectColumnWithMembers_IsCopiedByItsTopLevelName_WhileAHiddenColumnIsLeftOut()
+    {
+        // information_schema lists meta['a'] next to meta; the COPY projection may only name meta.
+        var cache = SensorCache(() => true);
+        var source = await NewSourceAsync(SensorCache(() => false));
+        source = NewLane(source.Tenant, source.Archive, source.Store, cache);
+        await fixture.SqlAsync($"ALTER TABLE {source.Table} ADD COLUMN \"meta\" OBJECT(STRICT) AS (\"a\" DOUBLE PRECISION)");
+        await fixture.SqlAsync($"UPDATE {source.Table} SET \"meta\" = {{\"a\" = 2.5}}");
+        await fixture.SqlAsync($"REFRESH TABLE {source.Table}");
+
+        var (dump, _, staged) = await DumpAsync(source);
+
+        Assert.All(dump.Slices, s => Assert.True(s.IsSuccess, s.Message));
+        var described = dump.Plan.Tables.Single(t => t.Table == ArchiveCopyTable.Data).Columns.Select(c => c.Name).ToList();
+        Assert.Contains("meta", described);
+        Assert.Contains("meta['a']", described);
+        AssertNoPin(staged);
+        Assert.All(staged.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            l => Assert.Contains("\"meta\":{\"a\":2.5}", l, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ImportIntoATableThatStillHasTheHiddenRequiredColumn_KeepsWritingIt()
+    {
+        // A Disabled archive keeps its table, its required Pin (NOT NULL) became Hidden: the import must not leave Pin out.
+        var cache = SensorCache(() => true);
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+        var archive = OctoObjectId.GenerateNewId();
+        var store = new MemoryArchiveStore();
+        store.Put(new ArchiveSnapshot(archive, SensorType, CkArchiveStatus.Disabled, "meter",
+            new List<CkArchiveColumnSpec> { new("Value", Indexed: false, Required: false), new("Pin", Indexed: false, Required: true) }));
+        var lane = NewLane(tenant, archive, store, cache);
+        var doubleType = new CrateColumnType.Primitive("DOUBLE PRECISION");
+        await fixture.SqlAsync(ArchiveDdlGenerator.GenerateCreateTable(lane.Table,
+            [new ArchiveColumnDdl("Value", doubleType, false, false), new ArchiveColumnDdl("Pin", doubleType, true, false)],
+            numberOfShards: 2, numberOfReplicas: 0));
+        Assert.Contains("NOT NULL", (await fixture.QueryAsync(
+            $"SHOW CREATE TABLE {lane.Table}")).Single().Values.Single()!.ToString()!.Split('\n').Single(l => l.Contains("\"pin\"")));
+
+        await lane.Repository.ImportRowsAsync(archive, ImportRows(3), ArchiveImportMode.InsertOnly, Ct);
+        await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
+
+        Assert.Equal(3, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"pin\" = 1234.0"));
+    }
+
+    private static async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ImportRows(int count)
+    {
+        await Task.CompletedTask;
+        for (var i = 0; i < count; i++)
+        {
+            yield return new Dictionary<string, object?>
+            {
+                ["rtid"] = OctoObjectId.GenerateNewId().ToString(), ["cktypeid"] = SensorType.ToString(),
+                ["timestamp"] = FirstRow.AddHours(i), ["value"] = i * 1.0, ["pin"] = 1234.0
+            };
+        }
+    }
+
+    [Fact]
     public async Task ColumnVisibleAgain_IsProvisionedAndDumpedAsBefore()
     {
         var pinHidden = false;
