@@ -4,7 +4,7 @@
 
 - AB#8993 Test (deferred review finding of #249, applied with AB#9016): `DownsamplingManyIdsPerformanceTests.CreateSeededArchiveAsync`
   drops the archive table when the seed or its `REFRESH TABLE` fails, so a failed seed leaves no partial multi-million-row
-  table in the shared CrateDB container.
+  table in the shared CrateDB container. A failing cleanup is reported and does not replace the seed's error.
 - AB#9016 New: a late stream-data delivery refreshes the rollups only for the series it touched, and in place.
   `CrateDbStreamDataRepository` records the distinct rtIds of the late, in-reach automated rows on the dirty window. Above
   `StreamData:Recompute:MaxScopedRtIds` (**new setting**, default 200) it records none, which means every series.

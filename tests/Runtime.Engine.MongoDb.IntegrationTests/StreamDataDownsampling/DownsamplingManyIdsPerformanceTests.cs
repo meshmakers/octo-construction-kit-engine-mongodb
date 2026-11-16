@@ -185,7 +185,16 @@ public class DownsamplingManyIdsPerformanceTests(CrateStagingCopyFixture fixture
         {
             // AB#8993 review finding (deferred to AB#9016): a failed seed must not leave a partial multi-million-row table in
             // the shared CrateDB container.
-            await fixture.SqlAsync($"DROP TABLE IF EXISTS {table}");
+            try
+            {
+                await fixture.SqlAsync($"DROP TABLE IF EXISTS {table}");
+            }
+            catch (Exception cleanupException)
+            {
+                // Report the cleanup failure but keep the seed failure as the test's error.
+                RunProgress.Report($"AB#8993 cleanup of the partial table {table} failed: {cleanupException.Message}");
+            }
+
             throw;
         }
 

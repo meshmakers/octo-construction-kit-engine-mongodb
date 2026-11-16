@@ -1790,6 +1790,9 @@ to keep:
 - **Vanished buckets.** After the upsert, the rows of the series at the active generation in the range that are older
   than the marker (all of them when nothing was staged) are removed (`BuildStaleInScope`, count first, DELETE only when
   needed). Without this step the refresh would be weaker than the full recompute.
+- **Not atomic across rows.** While a refresh runs, or after it failed part way, readers can see some buckets of the series
+  refreshed and others not yet; every written row holds its final value and the retry completes the rest. The full
+  recompute keeps its all-or-nothing flip.
 - **Serialised by the engine.** The active-job guard keeps every other recompute of the rollup out. The source's pointer
   entries are read unscoped (a superset is correct).
 - Tests: `LateDeliveryScopeTests` (unit), `StreamDataLateDelivery/ScopedRefreshEquivalenceTests` (real CrateDB). Concept:
