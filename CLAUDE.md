@@ -1112,6 +1112,33 @@ error; a discarded connection frees its slot; red without the fix),
 `StreamData.UnitTests/CrateDatabaseClientConnectionPoolTests` (classification, no retry, breaker stays closed, driver
 internals present).
 
+### Backups leave Hidden columns out (AB#9141)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** A tenant backup leaves out the values of every column
+known to reach a Hidden attribute (residual risk below). `CrateDbStreamDataRepository.FindHiddenColumnExclusion(snapshot, includeRecorded)` is the one
+rule: the columns that reach Hidden under the current CK model (`ArchiveHiddenColumnGuard.FindHiddenColumns`, any status), with
+`includeRecorded` also `Archive.HiddenColumns`; for a rollup the aggregate columns of an aggregation over a Hidden attribute; plus
+the computed columns derived from them (current or pending formula, transitively, every stored version). Used by:
+
+- the native copy: `ResolveCopyTargetAsync` sets `ArchiveCopyTarget.ExcludedColumns`, `StagingCopyRunner.PlanAsync` drops them
+  from the data table's description (= the manifest), and a data slice is copied with a column list
+  (`CopyStatement.CopyTo(..., columns)`, `format = 'json_object'` - a column list alone makes CrateDB write `json_array`, which
+  `COPY FROM` cannot load). An archive without such a column is copied with the statement as before;
+- the row export `ExportRowsAsync` (format 1 and the archive data export) - **behaviour change:** it used to leave out only the
+  recorded columns of an archive Failed on Hidden columns;
+- `EnsureArchiveCreatedAsync` and `ImportRowsAsync` for a raw or time-range archive that is not Activated
+  (`WithoutColumnsStillHidden`, current model; the recorded columns only when the model cannot be read): the restore provisions
+  and imports such an archive without them and without conflict precedence keys on them. The lifecycle refuses every activation
+  while a column reaches Hidden, so no other path gets there; a column visible again is provisioned as before (`RetryActivation`).
+- When the CK model cannot be read, a backup leaves out the recorded columns only (warning). Failing the dump instead was
+  rejected (Odin, 2026-11-16): a tenant with a broken model (ResolveFailed) must stay backupable for its recovery. Residual
+  risk: a column made Hidden by a model that cannot be read, and not yet recorded by the re-validation, can end up in the backup.
+  Test: `HiddenColumnExclusionTests.AModelThatCannotBeRead_LeavesTheRecordedColumnsOut`.
+
+Tests: `ComputedColumns/ArchiveHiddenColumnBackupIntegrationTests` (real CrateDB: staged files, manifest, export, restore,
+redaction), `StreamData.UnitTests/Copy/HiddenColumnExclusionTests`, `CopyStatementTests`. Rule and restore: engine
+`docs/archive-hidden-columns.md`, "Backups".
+
 ### Conflict Precedence — the upsert stops being last-write-wins (AB#5247)
 
 Every archive write is an upsert on the row key, and the `DO UPDATE SET` was unconditional: the
