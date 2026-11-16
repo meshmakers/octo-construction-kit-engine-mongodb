@@ -1824,6 +1824,28 @@ is the recompute path's job. Buckets lost before the fix are closed with `octo-c
 range (documentation: *Rollups & recompute*, "Closing buckets a late delivery missed"). Tests:
 `RetroactiveWriteDetectorBucketBoundaryTests` (detector, BSON date conversion, planner alignment; red with the old end).
 
+### Paged Queries Have a Total Order (AB#9110)
+
+Every stream-data query whose result is paged has a total, deterministic row order. CrateDB returns the rows of a
+sharded table in any order per call, so LIMIT/OFFSET (or a caller slicing a re-executed result) without a total order
+repeats some rows and skips others. Rules to keep:
+
+- **Simple query** (`ExecutePaginatedQueryAsync`): `CrateQueryBuilder.EnsureDeterministicOrder` appends the row key
+  (`RowKeyColumns`: raw `timestamp, rtid, cktypeid`; windowed `window_start, window_end, rtid, cktypeid` - the primary key
+  without `generation`, a reader sees one generation per window) after the caller's sort orders, skipping key columns the
+  caller already named. Without a sort order it is the default order. Do not make it conditional on a sort order or a page
+  size: a LIMIT without ORDER BY returns an arbitrary subset too.
+- **Grouped aggregation**: ordered by all group-by columns (query builder path and `TimeWeightedQuerySqlBuilder`); the
+  GraphQL connection runs it again per page and slices the result.
+- **Downsampling**: ordered by bin, then the series columns (`CompileDownsamplingQuery`); the bin axis is filled in that order.
+- **Cost**: the deep pages of an unfiltered large archive pay a sort (2.65 s at offset 2.9 M on the single-node test
+  container, 28 ms before); measured by `StreamDataPaging/StreamDataPagingOrderCostMeasurement`. Accepted for
+  correctness; a keyset cursor would be the next step if it matters.
+
+Tests: `CrateQueryBuilderTests` (`EnsureDeterministicOrder_*`), `TimeWeightedQuerySqlBuilderTests`,
+`StreamDataPaging/StreamDataPagingIntegrationTests` (real CrateDB). The single-node test container returns the shards in a
+stable order, so it cannot show the duplicates of a multi-node cluster; the tests pin the order itself.
+
 ### Query Time Filter — One-sided Ranges (AB#4617)
 
 `StreamDataQueryOptionsBase.From` / `.To` are independently optional. The three read paths

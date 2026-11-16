@@ -1126,6 +1126,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         AddRtIdFilter(q, options.RtIds);
         AddFieldFilters(q, fieldResolver, options.FieldFilters);
 
+        // Deterministic group order (AB#9110): the GraphQL connection pages the returned groups and
+        // runs the query again for every page, so an unordered result put some groups on two pages and
+        // others on none. The group-by columns identify a group, so ordering by all of them is total.
+        foreach (var grouping in q.Groupings.ToList())
+        {
+            q.OrderBy(grouping.Alias ?? grouping.Name, SortOrderDto.Ascending);
+        }
+
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(q);
         _logger.LogDebug("Executing grouped aggregation SQL: {Sql}", sql);
@@ -4172,8 +4180,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Compile count query BEFORE setting LIMIT/OFFSET
         var countSql = compiler.CompileCountQuery(q);
 
-        // Add Timestamp tiebreaker for deterministic pagination
-        q.AddOrderByTiebreaker(Constants.Timestamp, SortOrderDto.Ascending);
+        // Total row order for deterministic pagination (AB#9110): the row key (time axis, rtId,
+        // ckTypeId) is the default order and breaks the ties of a caller's sort order. Before, a query
+        // without sort order ran LIMIT/OFFSET without ORDER BY, and CrateDB returned the rows of the
+        // sharded table in a different order per call: pages repeated some rows and skipped others.
+        q.EnsureDeterministicOrder();
 
         var effectiveOffset = offset.GetValueOrDefault(0);
 

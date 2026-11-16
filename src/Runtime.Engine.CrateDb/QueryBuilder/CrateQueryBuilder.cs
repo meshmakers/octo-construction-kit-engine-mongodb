@@ -262,26 +262,36 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
-    /// Adds a tiebreaker column to the ORDER BY clause if there is already an ORDER BY
-    /// and the specified variable is not yet in it. This ensures deterministic sort order
-    /// for OFFSET-based pagination when the primary sort has many equal values (e.g., NULLs).
+    /// The columns that identify one stored row of the archive table: its primary key without
+    /// <c>generation</c> (a rollup query reads one generation per window, see
+    /// <see cref="WithGenerationRanges"/>). Raw archives: <c>timestamp, rtid, cktypeid</c>; windowed
+    /// archives (rollup, time-range): <c>window_start, window_end, rtid, cktypeid</c>.
     /// </summary>
-    /// <param name="nameOrAlias">The variable name or alias to use as tiebreaker</param>
-    /// <param name="sortOrder">The sort direction for the tiebreaker</param>
-    /// <returns></returns>
-    public CrateQueryBuilder AddOrderByTiebreaker(string nameOrAlias, SortOrderDto sortOrder)
+    internal IReadOnlyList<string> RowKeyColumns => TimeColumn == Constants.WindowEnd
+        ? [Constants.WindowStart, Constants.WindowEnd, Constants.RtId, Constants.CkTypeId]
+        : [Constants.Timestamp, Constants.RtId, Constants.CkTypeId];
+
+    /// <summary>
+    /// Makes the row order total, so LIMIT/OFFSET pages are stable across calls (AB#9110): appends
+    /// every column of <see cref="RowKeyColumns"/> that is not in the ORDER BY yet, ascending. Without
+    /// a sort order this is the default order (time axis, then rtId, then ckTypeId); with one, the key
+    /// breaks its ties. CrateDB returns rows of a distributed table in any order per call, so LIMIT/OFFSET
+    /// without a total order delivers some rows twice and others never.
+    /// </summary>
+    /// <exception cref="QueryBuilderException">A key column is not a variable of the query.</exception>
+    public CrateQueryBuilder EnsureDeterministicOrder()
     {
-        if (OrderByVariables.Count == 0)
+        foreach (var column in RowKeyColumns)
         {
-            return this;
+            if (OrderByVariables.Any(v => v.Name == column || v.Alias == column))
+            {
+                continue;
+            }
+
+            OrderBy(column, SortOrderDto.Ascending);
         }
 
-        if (OrderByVariables.Any(v => v.Name == nameOrAlias || v.Alias == nameOrAlias))
-        {
-            return this;
-        }
-
-        return OrderBy(nameOrAlias, sortOrder);
+        return this;
     }
 
     /// <summary>

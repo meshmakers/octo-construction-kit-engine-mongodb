@@ -56,6 +56,23 @@ public class ArchiveRowOriginQuerySqlTests
     }
 
     [Fact]
+    public void Ordering_OrdersByTheSameExpressionItGroupsBy()
+    {
+        // AB#9110: the grouped aggregation orders by its group columns; a bare "row_origin" could resolve to the
+        // physical column, which the query does not group by.
+        var q = new CrateQueryBuilder(Table);
+        q.AddVariable(Constants.RtId, Constants.RtId);
+        q.AddVariable(Constants.RowOrigin, Constants.RowOrigin);
+        q.AddAggregationVariable("value", AggregationFunctionDto.Count, "count_value");
+        q.OrderBy(Constants.RtId, SortOrderDto.Ascending);
+        q.OrderBy(Constants.RowOrigin, SortOrderDto.Ascending);
+
+        var sql = new CrateQueryCompiler().CompileQuery(q);
+
+        Assert.EndsWith($"GROUP BY \"rtid\", {Origin} ORDER BY \"rtid\" ASC, {Origin} ASC", sql);
+    }
+
+    [Fact]
     public void Downsampling_QualifiesTheOriginWithTheTableAlias()
     {
         var from = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);

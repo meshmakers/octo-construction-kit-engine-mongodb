@@ -235,6 +235,10 @@ internal static class TimeWeightedQuerySqlBuilder
         {
             sb.AppendLine().Append("GROUP BY ")
               .Append(string.Join(", ", groupByColumns.Select(g => $"\"{g}\"")));
+            // Deterministic group order (AB#9110): the groups are paged by the caller, which runs the
+            // statement again per page.
+            sb.AppendLine().Append("ORDER BY ")
+              .Append(string.Join(", ", groupByColumns.Select(g => $"\"{g}\" ASC")));
         }
 
         sb.Append(';');

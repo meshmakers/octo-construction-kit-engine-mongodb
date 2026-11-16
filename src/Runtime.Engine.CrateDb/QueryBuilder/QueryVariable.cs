@@ -121,7 +121,9 @@ internal record QueryVariable : IQueryVariable
     
     public string ToOrderByString()
     {
-        return $"\"{Alias}\" {GetSortOrderString()}";
+        // Same expression as GROUP BY (AB#9110): row_origin / manual_count are selected as COALESCE(...), and
+        // ordering by the bare name could resolve to the physical column, which a grouped query does not group by.
+        return $"{ToGroupByString()} {GetSortOrderString()}";
     }
 
     private string GetSortOrderString()
