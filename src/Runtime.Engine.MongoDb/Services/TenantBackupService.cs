@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
@@ -52,14 +53,19 @@ internal class TenantBackupService(
             }
 
             // Optionally detach tenant before backup
+            string? deleteNotificationWarning = null;
             if (detachTenant)
             {
                 logger.LogInformation("Detaching tenant '{TenantId}' before backup", tenantId);
+                // The tenant-deleted notification is published here, after the commit: the services tear the tenant
+                // down when they receive it, so it must not go out while the detach can still roll back.
                 using var session = await systemContext.GetAdminSessionAsync();
+                using var notification = TenantNotificationScope.Begin(session);
                 session.StartTransaction();
                 await systemContext.DetachChildTenantAsync(session, tenantId);
                 await session.CommitTransactionAsync();
                 logger.LogInformation("Tenant '{TenantId}' detached successfully", tenantId);
+                deleteNotificationWarning = await PublishTenantDeletedAsync(notification, tenantId, "detached");
             }
 
             // Perform the backup
@@ -79,6 +85,7 @@ internal class TenantBackupService(
                 logger.LogError("Backup failed for tenant '{TenantId}': {Error}", tenantId, result.Error);
             }
 
+            AppendWarning(result, deleteNotificationWarning);
             return result;
         }
         catch (Exception ex)
@@ -373,12 +380,26 @@ internal class TenantBackupService(
 
     /// <summary>
     ///     The destructive part of the restore, under the claim of <paramref name="claim" /> (AB#8672): drop the existing
-    ///     tenant if asked, mongorestore, attach.
+    ///     tenant if asked, mongorestore, attach. A tenant-deleted notification of the drop that could not be published
+    ///     is named in the result's <see cref="CommandResult.Output" />, whatever the result.
     /// </summary>
     private async Task<CommandResult> RestoreClaimedTargetAsync(string tenantId, string databaseName,
         string archivePath, string? effectiveSourceDatabaseName, IReadOnlyList<string> detectedDatabases,
         bool dropExistingTenant, bool attachTenant, bool overrideForeignOwnership, RestoreClaim claim,
         TimeSpan? timeout, CancellationToken? cancellationToken)
+    {
+        var deleteNotificationWarning = new StrongBox<string?>();
+        var result = await RestoreClaimedTargetCoreAsync(tenantId, databaseName, archivePath,
+            effectiveSourceDatabaseName, detectedDatabases, dropExistingTenant, attachTenant, overrideForeignOwnership,
+            claim, deleteNotificationWarning, timeout, cancellationToken);
+        AppendWarning(result, deleteNotificationWarning.Value);
+        return result;
+    }
+
+    private async Task<CommandResult> RestoreClaimedTargetCoreAsync(string tenantId, string databaseName,
+        string archivePath, string? effectiveSourceDatabaseName, IReadOnlyList<string> detectedDatabases,
+        bool dropExistingTenant, bool attachTenant, bool overrideForeignOwnership, RestoreClaim claim,
+        StrongBox<string?> deleteNotificationWarning, TimeSpan? timeout, CancellationToken? cancellationToken)
     {
         // Check if tenant exists and optionally drop it
         var existingTenantContext = await systemContext.TryFindTenantContextAsync(tenantId);
@@ -401,14 +422,18 @@ internal class TenantBackupService(
                 TenantDatabaseRegistrationLookup.Normalize(databaseName),
                 StringComparison.Ordinal);
             using (var session = await systemContext.GetAdminSessionAsync())
+            using (var dropNotification = TenantNotificationScope.Begin(session))
             {
                 session.StartTransaction();
                 await systemContext.DropChildTenantAsync(session, tenantId,
                     overrideForeignOwnership: overrideForeignOwnership && existingDatabaseIsTarget);
                 await session.CommitTransactionAsync();
-            }
+                logger.LogInformation("Tenant '{TenantId}' dropped successfully", tenantId);
 
-            logger.LogInformation("Tenant '{TenantId}' dropped successfully", tenantId);
+                // After the commit (see the detach of the backup); a failure does not stop the restore.
+                deleteNotificationWarning.Value =
+                    await PublishTenantDeletedAsync(dropNotification, tenantId, "dropped");
+            }
 
             if (existingDatabaseIsTarget)
             {
@@ -494,7 +519,7 @@ internal class TenantBackupService(
             // when they receive it and must find it registered. A failed publish does not fail the restore (the data is
             // restored and attached); it is reported on the result, so the caller can surface it.
             using var session = await systemContext.GetAdminSessionAsync();
-            using var notification = TenantCreatedNotificationScope.Begin(session);
+            using var notification = TenantNotificationScope.Begin(session);
             session.StartTransaction();
             await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
             await session.CommitTransactionAsync();
@@ -520,6 +545,40 @@ internal class TenantBackupService(
         }
 
         return result;
+    }
+
+    /// <summary>
+    ///     Publishes the tenant-deleted notification collected by <paramref name="notification" /> after the commit of a
+    ///     drop or detach this service ran itself. A failure does not fail the operation (the removal is committed); it
+    ///     is logged and returned as the warning for the result.
+    /// </summary>
+    /// <returns><c>null</c> when it was published, else the warning naming the tenant and the recovery.</returns>
+    private async Task<string?> PublishTenantDeletedAsync(TenantNotificationScope notification, string tenantId,
+        string removal)
+    {
+        try
+        {
+            await notification.PublishAsync();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            var warning =
+                $"Tenant '{tenantId}' was {removal}, but the tenant-deleted notification failed ({ex.Message}). " +
+                "The services may still hold the tenant's cached state: run ClearCache for the tenant.";
+            logger.LogWarning(ex, "Tenant '{TenantId}': {Warning}", tenantId, warning);
+            return warning;
+        }
+    }
+
+    private static void AppendWarning(CommandResult result, string? warning)
+    {
+        if (warning == null)
+        {
+            return;
+        }
+
+        result.Output = string.IsNullOrEmpty(result.Output) ? warning : result.Output + Environment.NewLine + warning;
     }
 
     /// <summary>
