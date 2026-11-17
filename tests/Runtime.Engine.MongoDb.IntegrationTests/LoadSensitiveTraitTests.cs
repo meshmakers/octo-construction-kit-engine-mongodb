@@ -5,11 +5,11 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
 /// <summary>
-///     Every test that measures wall-clock time or puts the machine under load (trait <c>Category=Performance</c> or
-///     <c>Category=Stress</c>) also carries <c>Category=LoadSensitive</c>, so the local full suite
-///     (<c>--filter "Category!=LoadSensitive"</c>, see <c>CLAUDE.md</c>) leaves out exactly those tests and stays
-///     deterministic on a busy machine. Without this check a new budget test with only <c>Category=Performance</c>
-///     would silently join the local full suite again.
+///     Every test of this assembly that measures wall-clock time or puts the machine under load (trait
+///     <c>Category=Performance</c> or <c>Category=Stress</c>) also carries <c>Category=LoadSensitive</c>, so the local
+///     full suite (<c>--filter "Category!=LoadSensitive"</c>, see <c>CLAUDE.md</c>) leaves out exactly those tests and
+///     stays deterministic on a busy machine. Without this check a new budget test with only
+///     <c>Category=Performance</c> would silently join the local full suite again.
 /// </summary>
 public class LoadSensitiveTraitTests
 {
@@ -29,7 +29,8 @@ public class LoadSensitiveTraitTests
         Assert.True(tests.Exists(t => t.Categories.Contains(LoadSensitive)),
             "positive control: the assembly holds load-sensitive tests, so the scan sees the traits");
         Assert.True(missing.Count == 0,
-            $"tests with Category=Performance or Category=Stress need [Trait(\"{Category}\", \"{LoadSensitive}\")] too: " +
+            "tests with Category=Performance or Category=Stress need " +
+            $"[Trait(\"{Category}\", \"{LoadSensitive}\")] too: " +
             string.Join(", ", missing));
     }
 
@@ -38,8 +39,8 @@ public class LoadSensitiveTraitTests
         foreach (var type in typeof(LoadSensitiveTraitTests).Assembly.GetTypes())
         {
             var classCategories = CategoriesOf(type);
-            foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static |
-                                                   BindingFlags.DeclaredOnly))
+            // Inherited test methods included: a derived class with Category=Performance runs its base class's facts.
+            foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
             {
                 if (method.GetCustomAttribute<FactAttribute>(inherit: true) == null)
                 {

@@ -137,9 +137,9 @@ constraint), so a regression is caught by every PR and not only overnight.
 
 ## Load-sensitive tests (`Category=LoadSensitive`)
 
-Every `Performance` and `Stress` test also carries `[Trait("Category", "LoadSensitive")]`. The trait is shared with
-`octo-asset-repo-services` and `octo-identity-services`, so the local full suite is one command in all three repositories and
-does not fail when other builds or test suites run on the same machine (several agent lanes, a second checkout):
+Every `Performance` and `Stress` test also carries `[Trait("Category", "LoadSensitive")]`. `octo-asset-repo-services` uses
+the same trait and filter for its wall-clock tests. The local full suite then does not fail when other builds or test suites
+run on the same machine (several agent lanes, a second checkout):
 
 ```bash
 # local full suite: pre-commit check and recorded verification
@@ -155,7 +155,7 @@ are unchanged; in this repository `Category!=LoadSensitive` selects the same tes
 
 - Put `[Trait("Category", "Performance")]` on the class (or the test) when a slower machine can fail it without a code change:
   p95 / median / throughput ceilings, ratios of two measured timings. Add `[Trait("Category", "LoadSensitive")]` next to it
-  (and next to every `Stress` trait); `LoadSensitiveTraitTests` fails without it.
+  (and next to every `Stress` trait); `LoadSensitiveTraitTests` fails without it for a test of this assembly.
 - Do **not** use the category for timeouts that guard correctness and have a wide margin (a stale lock reclaimed "near-instantly"
   under 5 s, a cancellation that must interrupt a delay under 3 s, a statement timeout that must end a call under 30 s, a
   hosted-service tick awaited for up to 5 s). They stay in the CI; a miss there is a bug, not noise.
