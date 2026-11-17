@@ -137,8 +137,8 @@ constraint), so a regression is caught by every PR and not only overnight.
 
 ## Load-sensitive tests (`Category=LoadSensitive`)
 
-Every `Performance` and `Stress` test also carries `[Trait("Category", "LoadSensitive")]`. `octo-asset-repo-services` uses
-the same trait and filter for its wall-clock tests. The local full suite then does not fail when other builds or test suites
+Every `Performance` and `Stress` test also carries `[Trait("Category", "LoadSensitive")]`. The same trait and filter are
+introduced in `octo-asset-repo-services` for its wall-clock tests. The local full suite then does not fail when other builds or test suites
 run on the same machine (several agent lanes, a second checkout):
 
 ```bash

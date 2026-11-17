@@ -201,9 +201,10 @@ The rules they prove stay in the CI as fast tests that produce the shortfall on 
 
 **Local full suite: leave out `Category=LoadSensitive`.** Every `Performance` and `Stress` test also carries
 `[Trait("Category", "LoadSensitive")]`; `LoadSensitiveTraitTests` fails when a test of the integration test assembly
-lacks it (`StreamData.UnitTests` has no `Performance` or `Stress` test). `octo-asset-repo-services` uses the same trait
-and filter for its wall-clock tests. The local full suite then stays deterministic while other builds or suites run on
-the machine:
+lacks it, and when a test there carries `LoadSensitive` without `Performance` or `Stress`. `StreamData.UnitTests` is not
+scanned: it has no `Performance`, `Stress` or `LoadSensitive` test; keep it that way or extend the guard. The same trait
+and filter are introduced in `octo-asset-repo-services` for its wall-clock tests. The local full suite then stays
+deterministic while other builds or suites run on the machine:
 
 ```bash
 # local full suite (pre-commit check, recorded verification) - same set as the CI Test step
