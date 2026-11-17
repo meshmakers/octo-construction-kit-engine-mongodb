@@ -1,7 +1,17 @@
+using FakeItEasy;
+
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 using Xunit;
 
@@ -319,6 +329,138 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
             DeleteFile(archivePath);
             await DropAsync(tenantId);
         }
+    }
+
+    [Fact]
+    public async Task BackupWithDetach_WhosePublishFails_AndWhoseDumpThrows_NamesTheRecoveryInTheFailure()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = NewTenantId("delbkt");
+        var archivePath = Path.Combine(Path.GetTempPath(), $"notify_{Guid.NewGuid():N}.tar.gz");
+        var ops = RepositoryOpsThatThrow();
+        A.CallTo(() => ops.ExecuteMongoDumpAsync(A<MongoDumpOptions>._, A<TimeSpan?>._, A<CancellationToken?>._))
+            .ThrowsAsync(new InvalidOperationException("mongodump crashed (test)"));
+        try
+        {
+            await CreateAsync(tenantId);
+            fixture.Notifications.FailNextDelete(1);
+
+            var result = await BackupServiceWith(ops).BackupTenantAsync(tenantId, archivePath, detachTenant: true);
+
+            Assert.False(result.Success);
+            Assert.Contains("mongodump crashed (test)", result.Error, StringComparison.Ordinal);
+            Assert.Contains("tenant-deleted", result.Output, StringComparison.Ordinal);
+            Assert.Contains("run ClearCache for the tenant", result.Output, StringComparison.Ordinal);
+            Assert.Contains(tenantId, result.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.False(await systemContext.IsTenantRegisteredAsync(tenantId), "the detach is committed");
+        }
+        finally
+        {
+            fixture.Notifications.FailNextDelete(0);
+            DeleteFile(archivePath);
+            await ReattachAndDropAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task BackupWithDetach_WhoseDumpThrows_AfterAPublishedNotification_HasNoRecoveryLine()
+    {
+        var tenantId = NewTenantId("delbkn");
+        var archivePath = Path.Combine(Path.GetTempPath(), $"notify_{Guid.NewGuid():N}.tar.gz");
+        var ops = RepositoryOpsThatThrow();
+        A.CallTo(() => ops.ExecuteMongoDumpAsync(A<MongoDumpOptions>._, A<TimeSpan?>._, A<CancellationToken?>._))
+            .ThrowsAsync(new InvalidOperationException("mongodump crashed (test)"));
+        try
+        {
+            await CreateAsync(tenantId);
+
+            var result = await BackupServiceWith(ops).BackupTenantAsync(tenantId, archivePath, detachTenant: true);
+
+            Assert.False(result.Success);
+            Assert.DoesNotContain("ClearCache", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteFile(archivePath);
+            await ReattachAndDropAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task RestoreOverAnExistingTenant_WhoseDeletePublishFails_AndWhoseRestoreThrows_NamesTheRecoveryInTheFailure()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = NewTenantId("delrst");
+        var archivePath = Path.Combine(Path.GetTempPath(), $"notify_{Guid.NewGuid():N}.tar.gz");
+        var ops = RepositoryOpsThatThrow();
+        A.CallTo(() => ops.ExecuteMongoRestoreAsync(A<MongoRestoreOptions>._, A<TimeSpan?>._, A<CancellationToken?>._))
+            .ThrowsAsync(new InvalidOperationException("mongorestore crashed (test)"));
+        try
+        {
+            await CreateAsync(tenantId);
+            var backup = await systemContext.BackupTenantAsync(tenantId, archivePath);
+            Assert.True(backup.Success, backup.Error);
+            fixture.Notifications.FailNextDelete(1);
+
+            var result = await BackupServiceWith(ops).RestoreTenantAsync(tenantId, tenantId, archivePath,
+                dropExistingTenant: true, attachTenant: true);
+
+            Assert.False(result.Success);
+            Assert.Contains("Exception during restore: mongorestore crashed (test)", result.Error, StringComparison.Ordinal);
+            Assert.Contains("tenant-deleted", result.Output, StringComparison.Ordinal);
+            Assert.Contains("run ClearCache for the tenant", result.Output, StringComparison.Ordinal);
+            Assert.False(await systemContext.IsTenantRegisteredAsync(tenantId), "the drop is committed");
+        }
+        finally
+        {
+            fixture.Notifications.FailNextDelete(0);
+            DeleteFile(archivePath);
+            await DropAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task RestoreThatThrows_WithoutAFailedNotification_FailsAsBefore_WithoutARecoveryLine()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = NewTenantId("delrsn");
+        var archivePath = Path.Combine(Path.GetTempPath(), $"notify_{Guid.NewGuid():N}.tar.gz");
+        var ops = RepositoryOpsThatThrow();
+        A.CallTo(() => ops.ExecuteMongoRestoreAsync(A<MongoRestoreOptions>._, A<TimeSpan?>._, A<CancellationToken?>._))
+            .ThrowsAsync(new InvalidOperationException("mongorestore crashed (test)"));
+        try
+        {
+            await CreateAsync(tenantId);
+            var backup = await systemContext.BackupTenantAsync(tenantId, archivePath);
+            Assert.True(backup.Success, backup.Error);
+
+            var result = await BackupServiceWith(ops).RestoreTenantAsync(tenantId, tenantId, archivePath,
+                dropExistingTenant: true, attachTenant: true);
+
+            Assert.False(result.Success);
+            Assert.Equal("Exception during restore: mongorestore crashed (test)", result.Error);
+            Assert.DoesNotContain("ClearCache", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteFile(archivePath);
+            await DropAsync(tenantId);
+        }
+    }
+
+    /// <summary>The fixture's mongo tools; a test makes one call of them throw.</summary>
+    private IRepositoryOpsService RepositoryOpsThatThrow() =>
+        A.Fake<IRepositoryOpsService>(o => o.Wrapping(fixture.GetService<IRepositoryOpsService>()));
+
+    /// <summary>The backup service of the fixture's system tenant, with <paramref name="repositoryOps" />.</summary>
+    private TenantBackupService BackupServiceWith(IRepositoryOpsService repositoryOps)
+    {
+        var provider = fixture.Provider!;
+        return new TenantBackupService(fixture.GetSystemContext(), repositoryOps,
+            NullLogger<TenantBackupService>.Instance, provider.GetRequiredService<TenantOwnershipStore>(),
+            provider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
+            provider.GetRequiredService<SystemDatabaseMarkerStore>(), provider.GetService<ITenantLifecycleStore>(),
+            provider.GetService<IOptions<OctoSystemConfiguration>>());
     }
 
     [Fact]

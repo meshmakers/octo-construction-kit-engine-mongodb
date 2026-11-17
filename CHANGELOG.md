@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix: a restore or a backup with detach that throws after its drop or detach was committed and whose tenant-deleted
+  notification failed now keeps the warning ("... run ClearCache for the tenant") in `CommandResult.Output` of its failure
+  result. Before, the failure result of the throw carried only the exception message and only the WARN log named the
+  recovery. A throw without a failed notification gives the same failure result as before.
 - Fix: the tenant-deleted notification (`PosDeleteTenant`) of a child-tenant drop or detach is published only after the
   removal is committed. `DetachChildTenantAsync` and `DropChildTenantAsync` published it inside the caller's transaction,
   so services could tear down a tenant whose removal was later rolled back, or act before the removal was visible. Inside

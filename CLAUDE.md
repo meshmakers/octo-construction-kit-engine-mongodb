@@ -3588,7 +3588,7 @@ above (`NotifyPosTenantAfterCommitAsync`, `TenantNotificationScope`, `PublishWit
 
 | Situation | When it is published | A failed publish |
 |---|---|---|
-| Inside a `TenantNotificationScope` bound to the same session (the backup's detach, `BackupTenantAsync(detachTenant: true)`, and the restore's drop of an existing tenant in `TenantBackupService`) | by the operation, `scope.PublishAsync()` after its commit | reaches the operation; it still succeeds (the removal is committed), and the warning ("... run ClearCache for the tenant") is appended to `CommandResult.Output` and logged as a WARN. `CommandResult.TenantCreatedNotificationFailed` is not touched |
+| Inside a `TenantNotificationScope` bound to the same session (the backup's detach, `BackupTenantAsync(detachTenant: true)`, and the restore's drop of an existing tenant in `TenantBackupService`) | by the operation, `scope.PublishAsync()` after its commit | reaches the operation; it still succeeds (the removal is committed), and the warning ("... run ClearCache for the tenant") is appended to `CommandResult.Output` and logged as a WARN. `CommandResult.TenantCreatedNotificationFailed` is not touched. When a later step of the operation throws (the restore's re-claim, mongorestore or attach; the backup's dump), the failure result (`Exception during restore: ...` / `Exception during backup: ...`) still carries the warning in `Output` |
 | Caller's transaction | after-commit callback of the session; nothing on a rollback or on a dispose without commit | three attempts (`PosTenantCreateRetryDelays`, each bounded by `PosTenantCreateAttemptTimeout`), then a WARN naming the tenant and the recovery |
 | No transaction | at once, from the `finally` as before (a failed drop or detach still announces it) | thrown to the caller |
 | Two-phase delete (`DeleteChildTenantMetadataAsync`, commit, `DropTenantDatabaseAsync`) | `DropTenantDatabaseAsync` publishes at once: the caller committed before | thrown to the caller, as before |
@@ -3610,7 +3610,8 @@ Rules:
   `IsTenantRegisteredAsync` at publish time): detach and drop in a transaction publish after the commit with the tenant
   unregistered, a rolled-back or uncommitted detach publishes nothing, the two-phase delete publishes when the database
   is dropped, the callback retries and then warns, the backup's detach and the restore's drop publish after their commit
-  and name a failed publish in the output, a scope of another session does not hold back a detach. A clear in a
+  and name a failed publish in the output, also in the failure result when a later step throws (a wrapped
+  `IRepositoryOpsService` throws in mongodump / mongorestore), a scope of another session does not hold back a detach. A clear in a
   transaction publishes delete, create, update (`TenantCreatedNotificationOrderTests`).
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
