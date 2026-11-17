@@ -65,7 +65,7 @@ internal class TenantBackupService(
             // Perform the backup
             logger.LogInformation("Executing mongodump for database '{DatabaseName}'",
                 tenantContext.DatabaseName);
-            var dumpOptions = MongoDumpOptions.ForArchive(tenantContext.DatabaseName, archiveFilePath);
+            var dumpOptions = MongoDumpOptions.ForTenantArchive(tenantContext.DatabaseName, archiveFilePath);
             var result = await repositoryOpsService.ExecuteMongoDumpAsync(dumpOptions, timeout, cancellationToken);
 
             if (result.Success)

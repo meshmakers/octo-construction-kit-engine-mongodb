@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- AB#9127 Fix: a tenant dump (`TenantBackupService.BackupTenantAsync`, used by the bot's dump job, the pre-sweep dump and
+  the clone to a temp tenant) leaves out platform-only collections, today `RtEntity_SystemCommunicationSecretDefault`
+  (`MongoDumpOptions.PlatformOnlyTenantCollections`, `ForTenantArchive`, one `--excludeCollection` each). The secret
+  defaults the communication controller projects into a tenant are platform-only and must never reach a file a tenant
+  identity can read; the controller projects them again after a restore (AB#7245). `MongoDumpOptions.ExcludeCollections`
+  is new and empty by default, so `ForArchive` and every other dump are unchanged.
 - AB#9138 Fix: a deep sorted page of a paged runtime-entity query no longer spends its time in MongoDB's plan trial.
   Since AB#8896 the page (`$match`, `$sort`, `$skip`, `$limit`) is planned as a whole; for a deep page none of the
   candidate plans returns results early, so every request ran all candidates through the trial (909,000 entities, skip

@@ -33,6 +33,28 @@ public class MongoToolArgumentsTests
     }
 
     [Fact]
+    public void BuildMongoDumpArguments_WithExcludedCollections_EmitsOneExcludeCollectionPerName()
+    {
+        var options = MongoDumpOptions.ForArchive("wwc26", "/tmp/archive.tar.gz");
+        options.ExcludeCollections = ["RtEntity_SystemCommunicationSecretDefault", "RtEntity_Other"];
+
+        var args = MongoToolArguments.BuildMongoDumpArguments(options, ConnectionString, null, null);
+
+        args.Should().Contain("--excludeCollection=RtEntity_SystemCommunicationSecretDefault");
+        args.Should().Contain("--excludeCollection=RtEntity_Other");
+    }
+
+    [Fact]
+    public void BuildMongoDumpArguments_WithoutExcludedCollections_EmitsNoExcludeCollection()
+    {
+        var options = MongoDumpOptions.ForArchive("wwc26", "/tmp/archive.tar.gz");
+
+        var args = MongoToolArguments.BuildMongoDumpArguments(options, ConnectionString, null, null);
+
+        args.Should().NotContain(argument => argument.StartsWith("--excludeCollection", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void BuildMongoRestoreArguments_WithNamespaceMapping_EmitsIncludeFromAndTo()
     {
         var options = new MongoRestoreOptions
