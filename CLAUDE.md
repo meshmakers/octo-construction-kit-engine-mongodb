@@ -18,8 +18,11 @@ dotnet build -c DebugL
 # Build in Release mode against a published release (version must be passed explicitly)
 dotnet build -c Release -p:OctoVersion=3.5.1
 
-# Run integration tests
-dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL
+# Run integration tests (without the load-sensitive Performance and Stress tests)
+dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Category!=LoadSensitive"
+
+# Local full suite without the load-sensitive tests (see "Local full suite" below)
+dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=LoadSensitive"
 ```
 
 Versions come only from the pipeline (AB#6291): `Directory.Build.props` has no release fallback, so a
@@ -34,7 +37,7 @@ Tests can run against either Testcontainers (default) or a local MongoDB instanc
 
 **Option 1: Environment Variable**
 ```bash
-USE_LOCAL_MONGODB=true dotnet test -c DebugL
+USE_LOCAL_MONGODB=true dotnet test -c DebugL --filter "Category!=LoadSensitive"
 ```
 
 **Option 2: appsettings.test.json**
@@ -195,6 +198,24 @@ integration suite). The CI filter is `Category!=Performance&Category!=Stress`; t
 `dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait "Category=Stress"`.
 The rules they prove stay in the CI as fast tests that produce the shortfall on purpose: `MissingRowRetryTests`,
 `StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests`, `StreamDataWriteLoss/RollupShortfallIntegrationTests`.
+
+**Local full suite: leave out `Category=LoadSensitive`.** Every `Performance` and `Stress` test also carries
+`[Trait("Category", "LoadSensitive")]`; `LoadSensitiveTraitTests` fails when a test of the integration test assembly
+lacks it, and when a test there carries `LoadSensitive` without `Performance` or `Stress`. `StreamData.UnitTests` is not
+scanned: it has no `Performance`, `Stress` or `LoadSensitive` test; keep it that way or extend the guard. The same trait
+and filter are introduced in `octo-asset-repo-services` for its wall-clock tests. The local full suite then stays
+deterministic while other builds or suites run on the machine:
+
+```bash
+# local full suite (pre-commit check, recorded verification) - same set as the CI Test step
+dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=LoadSensitive"
+# the load-sensitive tests on their own, one suite at a time on a quiet machine
+dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Category=LoadSensitive"
+```
+
+A new test that asserts a wall-clock budget or needs sustained load gets `Performance` or `Stress` **and**
+`LoadSensitive`. A correctness timeout with a wide margin (a bounded wait that ends instead of hanging) is not
+load-sensitive and stays in the suite.
 
 ## Tenant Registry vs. Tenant Hierarchy (AB#5025)
 

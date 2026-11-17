@@ -93,8 +93,8 @@ dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Ca
 # opt-in 1M run
 OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000 dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Category=Performance"
 
-# everything except them (what the CI runs)
-dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=Performance&Category!=Stress"
+# everything except them (what the CI runs; also the local full suite, see "Load-sensitive tests" below)
+dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=LoadSensitive"
 
 # the xUnit v3 executable directly
 dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait "Category=Performance"
@@ -135,10 +135,29 @@ A new test belongs in `Stress` when it needs sustained load (parallel writers, a
 effect. Keep a fast test of the same rule in the CI that produces the condition on purpose (an injected client, a SQL
 constraint), so a regression is caught by every PR and not only overnight.
 
+## Load-sensitive tests (`Category=LoadSensitive`)
+
+Every `Performance` and `Stress` test also carries `[Trait("Category", "LoadSensitive")]`. The same trait and filter are
+introduced in `octo-asset-repo-services` for its wall-clock tests. The local full suite then does not fail when other builds or test suites
+run on the same machine (several agent lanes, a second checkout):
+
+```bash
+# local full suite: pre-commit check and recorded verification
+dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=LoadSensitive"
+# the load-sensitive tests on their own, on a quiet machine, one suite at a time
+dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Category=LoadSensitive"
+```
+
+The CI filter (`Category!=Performance&Category!=Stress`) and the performance pipeline (`Category=Performance|Category=Stress`)
+are unchanged; in this repository `Category!=LoadSensitive` selects the same tests as the CI filter.
+
 ### Adding a test that asserts a timing budget
 
 - Put `[Trait("Category", "Performance")]` on the class (or the test) when a slower machine can fail it without a code change:
-  p95 / median / throughput ceilings, ratios of two measured timings.
+  p95 / median / throughput ceilings, ratios of two measured timings. Add `[Trait("Category", "LoadSensitive")]` next to it
+  (and next to every `Stress` trait); `LoadSensitiveTraitTests` fails without it for a test of this assembly, and
+  also when `LoadSensitive` appears on a test that is neither `Performance` nor `Stress` (the local filter and the CI filter
+  would then select different tests).
 - Do **not** use the category for timeouts that guard correctness and have a wide margin (a stale lock reclaimed "near-instantly"
   under 5 s, a cancellation that must interrupt a delay under 3 s, a statement timeout that must end a call under 30 s, a
   hosted-service tick awaited for up to 5 s). They stay in the CI; a miss there is a bug, not noise.

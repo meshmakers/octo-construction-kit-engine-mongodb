@@ -25,6 +25,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StreamDataWrit
 // Stress test (AB#8679/AB#8680): own small-heap CrateDB, minutes of load. Not in the CI integration step
 // (filter Category!=Stress); runs in the octo-construction-kit-engine-mongodb-Performance pipeline.
 [Trait("Category", "Stress")]
+[Trait("Category", "LoadSensitive")]
 [Collection(CrateMemoryPressureCollection.Name)]
 public class ArchiveWriteUnderMemoryPressureIntegrationTests(CrateMemoryPressureFixture fixture)
 {

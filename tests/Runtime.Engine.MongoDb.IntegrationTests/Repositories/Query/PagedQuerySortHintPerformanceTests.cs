@@ -30,6 +30,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Q
 /// </summary>
 [Collection(ImportTestCkModelCollection.Name)]
 [Trait("Category", "Performance")]
+[Trait("Category", "LoadSensitive")]
 public class PagedQuerySortHintPerformanceTests(ImportTestCkModelFixture fixture)
 {
     private const string EntityCountVariable = "OCTO_TEST_PAGE_HINT_ENTITIES";

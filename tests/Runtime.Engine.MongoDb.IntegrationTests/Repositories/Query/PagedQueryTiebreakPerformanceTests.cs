@@ -34,6 +34,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Q
 /// </summary>
 [Collection(ImportTestCkModelCollection.Name)]
 [Trait("Category", "Performance")]
+[Trait("Category", "LoadSensitive")]
 public class PagedQueryTiebreakPerformanceTests(ImportTestCkModelFixture fixture)
 {
     private const string EntityCountVariable = "OCTO_TEST_PAGED_TIEBREAK_ENTITIES";

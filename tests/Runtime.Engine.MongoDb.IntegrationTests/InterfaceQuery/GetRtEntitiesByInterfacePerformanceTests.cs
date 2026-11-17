@@ -30,6 +30,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.InterfaceQuery
 /// </summary>
 [Collection(InterfaceQueryCollection.Name)]
 [Trait("Category", "Performance")]
+[Trait("Category", "LoadSensitive")]
 public class GetRtEntitiesByInterfacePerformanceTests(InterfaceQueryFixture fixture)
 {
     // ---- Budget of the decision AB#6930 (2026-10-19, Gerald, option A), as named constants ---------------------------
