@@ -25,6 +25,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StreamDataDown
 /// </summary>
 [Collection(CrateStagingCopyCollection.Name)]
 [Trait("Category", "Performance")]
+[Trait("Category", "LoadSensitive")]
 public class DownsamplingManyIdsPerformanceTests(CrateStagingCopyFixture fixture)
 {
     /// <summary>The budget of AB#8993 (acceptance criterion "returns in under 5 s"), per call.</summary>

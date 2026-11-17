@@ -268,6 +268,7 @@ public class LocalDayDownsamplingIntegrationTests(CrateStagingCopyFixture fixtur
 
     [Fact]
     [Trait("Category", "Performance")]
+    [Trait("Category", "LoadSensitive")]
     public async Task OneYearOfHourlyDataFor50Series_GasDaysPerRtId_ReturnInAtMostOneSecond()
     {
         var archive = await CreateRawAsync();

@@ -20,6 +20,9 @@ dotnet build -c Release -p:OctoVersion=3.5.1
 
 # Run integration tests
 dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL
+
+# Local full suite without the load-sensitive tests (see "Local full suite" below)
+dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=LoadSensitive"
 ```
 
 Versions come only from the pipeline (AB#6291): `Directory.Build.props` has no release fallback, so a
@@ -195,6 +198,22 @@ integration suite). The CI filter is `Category!=Performance&Category!=Stress`; t
 `dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait "Category=Stress"`.
 The rules they prove stay in the CI as fast tests that produce the shortfall on purpose: `MissingRowRetryTests`,
 `StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests`, `StreamDataWriteLoss/RollupShortfallIntegrationTests`.
+
+**Local full suite: leave out `Category=LoadSensitive`.** Every `Performance` and `Stress` test also carries
+`[Trait("Category", "LoadSensitive")]`; `LoadSensitiveTraitTests` fails when one lacks it. The same trait marks the
+load-sensitive tests in `octo-asset-repo-services` and `octo-identity-services`, so the local full suite is the same
+command in all three repositories and stays deterministic while other builds or suites run on the machine:
+
+```bash
+# local full suite (pre-commit check, recorded verification) - same set as the CI Test step
+dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=LoadSensitive"
+# the load-sensitive tests on their own, one suite at a time on a quiet machine
+dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Category=LoadSensitive"
+```
+
+A new test that asserts a wall-clock budget or needs sustained load gets `Performance` or `Stress` **and**
+`LoadSensitive`. A correctness timeout with a wide margin (a bounded wait that ends instead of hanging) is not
+load-sensitive and stays in the suite.
 
 ## Tenant Registry vs. Tenant Hierarchy (AB#5025)
 
