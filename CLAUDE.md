@@ -931,9 +931,13 @@ as 300 items of which only 35 were distinct. Rules:
   sort. A page sorted by keys whose order an index provides that the tiebreak would break pages without it (the
   order before AB#8960, from that index): a CK Ascending index in the legacy shape that provides the complete caller
   sort (`SortIndexHint.Provides`; with more keys than it provides the page sorts in memory anyway and gets the tiebreak),
-  and a plain Unique index (its first key; measured: IXSCAN without the tiebreak, a SORT over every document with it;
-  the key is unique within the index's types anyway) - `TiebreakIndexShape.LeadingKeyWithoutTiebreak`. A
-  UniqueNotDeleted index (partial filter on `rtState`) never served the page order and does not count. Every other page
+  and a CK Unique index with exactly the engine's type filter when the sort starts with all of its keys, all in its
+  directions or all reversed (measured for a single key: IXSCAN without the tiebreak, a SORT over every document with
+  it; the combination is unique within the index's types anyway) - `TiebreakIndexShape.LeadingKeyWithoutTiebreak` /
+  `UniqueKeysWithoutTiebreak`. A compound unique index sorted by its first key only gets the tiebreak (its first key
+  can repeat). A UniqueNotDeleted index (partial filter on `rtState`; it never served the page order), a unique index
+  with any other partial filter or none (`ClassifyUniquePartialFilter`) and a sparse, hidden or collated unique index
+  (a sparse one leaves out the documents without the key, which tie) do not count. Every other page
   gets the tiebreak right away, also on existing tenants: unsorted pages (the System Entity index
   `{ckTypeId, _id, rtState}` is on every collection) and pages sorted by an attribute no such index leads with (a
   blocking sort before as well). The answer comes from `listIndexes` through `CollectionIndexCache` (AB#9138, cached per
@@ -942,9 +946,8 @@ as 300 items of which only 35 were distinct. Rules:
   `take` 0. Several instances: after another instance upgraded, this one pages the legacy way for at most 5 minutes
   (safe); after a legacy index came back (rollback), this one keeps the tiebreak against it for at most 5 minutes (the
   regression below for that time). A `listIndexes` failure (any exception but a cancellation) means no tiebreak for
-  sorted pages until the next check and never fails the query. Edge cases of the Unique rule: entities of types outside
-  the index's partial filter (a sort over a base type) and a compound unique index sorted by its first key only are not
-  totally ordered - as before AB#8960.
+  sorted pages until the next check and never fails the query. Edge case of the Unique rule: entities of types outside
+  the index's partial filter (a sort over a base type) are not totally ordered - as before AB#8960 (follow-up AB#9215).
 - **Index shape.** CK Ascending indexes are `{ckTypeId, attr..., _id, rtState}` and named `<Type>_<n>_id`
   (`TiebreakIndexShape`, `MongoDbRepositoryDataSource.PrepareAndCreateIndex`): `_id` right after the attribute fields,
   before `rtState` wherever it stands (a `$ne` range; a key after a range cannot provide a sort), also for indexes with
@@ -973,11 +976,14 @@ as 300 items of which only 35 were distinct. Rules:
   (`CkTypeIndexWithName.PartialFilterTypeIds`): after a descendant was added, or the type moved to another model, the
   index is replaced like an index with other keys, so the new types are unique-checked. An index
   with options the engine never sets on a CK index of its type (`CkTypeIndexWithName.HasForeignOptions`: collation,
-  sparse, hidden, TTL, a partial filter on a non-unique index) is never adopted, whatever its keys. If such an index
+  sparse, hidden, TTL, a partial filter on a non-unique index, a unique index without exactly the engine's partial
+  filter `ckTypeId $in` (plus `rtState $in [null, 0]` for UniqueNotDeleted), `TiebreakIndexShape.ClassifyUniquePartialFilter`)
+  is never adopted, whatever its keys. If such an index
   blocks our build (`IndexOptionsConflict`: same keys, other options only), it stays, a warning is logged and ours is
   tracked as failed - an index is only dropped once its replacement is built. Both unique types carry a partial filter
   (their types); `MongoDbDataSourceCollection.GetIndexListAsync` reads an index as UniqueNotDeleted only when its partial
-  filter names `rtState` (before AB#8960 every partial unique index was read as UniqueNotDeleted, so a CK Unique index was
+  filter has a condition on `rtState` (`TiebreakIndexShape.HasStateCondition`, not a text search: a type id such as
+  `Model/StartState` contains the text) (before AB#8960 every partial unique index was read as UniqueNotDeleted, so a CK Unique index was
   dropped and rebuilt on every import). The gate counts an Ascending index as legacy only when its keys start with
   `ckTypeId`, so a hand-made index whose default name (`attributes.code_1`) matches the name pattern gets the tiebreak. An index that
   holds the expected name with another definition (a CK update gave the slot other keys) stays until the cleanup at the
@@ -985,7 +991,8 @@ as 300 items of which only 35 were distinct. Rules:
   SHA-256 of the definition (type, language, key paths and weights, the type set of a unique index), so repeated
   updates find the same name. MongoDB
   can neither rename an index nor hold the same keys under two names, so keeping the expected name would cost a second
-  build. A failed build keeps the old index. Exception: a text index (a collection holds only one) is still dropped
+  build. A failed build keeps the old index - also the slot's index that an earlier update built under its
+  alternate name, when the expected name is free by now. Exception: a text index (a collection holds only one) is still dropped
   before the changed one is built - the existing text index whatever its name (it may be kept under the name of an
   earlier slot). If the expected name is held by an index kept for another slot
   (`IndexOptionsConflict` 85 / `IndexKeySpecsConflict` 86), the build falls back to the alternate name. Index state
@@ -1015,7 +1022,8 @@ as 300 items of which only 35 were distinct. Rules:
   `GetRtEntitiesByInterfaceAsyncTests.PagingThroughTiedSortKeys_ReturnsEveryEntityExactlyOnceInRtIdOrder`,
   `TiebreakIndexUpgradeTests` (shapes per index type, legacy kept by import and update, upgrade replaces gaplessly and is
   idempotent, descending pages from the same index, rollback plan, gate cache across instances, unindexed sort
-  attribute, Unique and UniqueNotDeleted sort attributes), `TiebreakIndexShapeTests` (unit), `PagedQueryTiebreakTests`
+  attribute, Unique and UniqueNotDeleted sort attributes, compound unique, unique index with a further predicate, failed
+  build of a slot under its alternate name), `TiebreakIndexShapeTests` (unit), `PagedQueryTiebreakTests`
   (also the `$geoNear` page).
 
 ## GridFS read preference and read-your-writes (AB#7256)

@@ -317,9 +317,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                                 // Both unique types carry a partial filter (the types of the index); only
                                 // UniqueNotDeleted filters rtState too. Reading every partial unique index as
                                 // UniqueNotDeleted made a Unique index never match its definition (AB#8960).
+                                // A condition named rtState, not the text "rtState" anywhere (a type id such as
+                                // "Model/StartState" contains it).
                                 indexType = hasPartialFilter &&
-                                            partialFilterElement!.ToJson().Contains(
-                                                nameof(RtEntity.RtState).ToCamelCase(), StringComparison.Ordinal)
+                                            TiebreakIndexShape.HasStateCondition(partialFilterElement)
                                     ? IndexTypes.UniqueNotDeleted
                                     : IndexTypes.Unique;
                             }
@@ -356,13 +357,21 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                     var index = new CkTypeIndexWithName
                     {
                         Name = indexName, IndexType = indexType, Fields = fields, Language = language,
-                        // AB#8960: options the engine never sets on a CK index of this type. The partial filter of a
-                        // UniqueNotDeleted / Unique index is the engine's own (type and state filter).
+                        // AB#8960: options the engine never sets on a CK index of this type. A unique index counts as a
+                        // CK index only with exactly the engine's partial filter (types, and for UniqueNotDeleted the
+                        // state): a further predicate narrows what it keeps unique, and the engine never builds one
+                        // without a filter.
                         HasForeignOptions = doc.Contains("collation") ||
                                             (doc.TryGetValue("sparse", out var sparse) && sparse.ToBoolean()) ||
                                             (doc.TryGetValue("hidden", out var hidden) && hidden.ToBoolean()) ||
                                             doc.Contains("expireAfterSeconds") ||
-                                            (hasPartialFilter && !isUnique),
+                                            (hasPartialFilter && !isUnique) ||
+                                            (isUnique && (!hasPartialFilter ||
+                                                          TiebreakIndexShape.ClassifyUniquePartialFilter(
+                                                              partialFilterElement) !=
+                                                          (indexType == IndexTypes.UniqueNotDeleted
+                                                              ? UniquePartialFilter.UniqueNotDeleted
+                                                              : UniquePartialFilter.Unique))),
                         PartialFilterTypeIds = hasPartialFilter && partialFilterElement is BsonDocument partialFilter
                             ? FindTypeIds(partialFilter)
                             : null

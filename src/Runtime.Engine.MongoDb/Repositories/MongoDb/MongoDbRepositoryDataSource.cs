@@ -1043,10 +1043,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     /// <summary>
     ///     The outcome of <see cref="CreateOrUpdateIndex{TKey,TDocument}" /> when it built an index: the name it was built
-    ///     under and, when that is the alternate name (AB#8960), the existing index with the expected name it replaces -
-    ///     dropped by the cleanup at the end of the collection, after the build.
+    ///     under and the existing indexes it replaces (AB#8960: the one with the expected name, the slot's index under its
+    ///     alternate name, a unique index with another type set) - dropped by the cleanup at the end of the collection,
+    ///     after the build.
     /// </summary>
-    private sealed record IndexCreation(string Name, string? Replaces);
+    private sealed record IndexCreation(string Name, IReadOnlyList<string> Replaces);
 
     private const int IndexOptionsConflictCode = 85;
     private const int IndexKeySpecsConflictCode = 86;
@@ -1133,11 +1134,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // The index this definition replaces stays in repositoryIndices until the new one is built; the cleanup at the end
         // of the collection drops it after the build, and a failed build keeps it (AB#8960): the index holding the
-        // expected name, and for a unique index the one with its keys but another type set, whatever its name.
+        // expected name, the index of this slot under its alternate name (built there by an earlier update while the
+        // expected name was taken), and for a unique index the one with its keys but another type set, whatever its name.
         var occupant = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
         var replaced = typeIds == null
             ? null
             : repositoryIndices.FirstOrDefault(i => !i.HasForeignOptions && SameDefinition(i, ckTypeIndex));
+        var previous = occupant != null
+            ? null
+            : repositoryIndices.FirstOrDefault(i => !i.HasForeignOptions && i.IndexType != IndexTypes.Text &&
+                                                    TiebreakIndexShape.IsAlternateNameOf(i.Name, indexName));
         var targetName = indexName;
         if (occupant != null)
         {
@@ -1194,10 +1200,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 repositoryIndices.Remove(replaced);
             }
 
+            if (previous != null)
+            {
+                repositoryIndices.Remove(previous);
+            }
+
             throw;
         }
 
-        return new IndexCreation(targetName, occupant?.Name ?? replaced?.Name);
+        return new IndexCreation(targetName,
+            new[] { occupant, previous, replaced }.OfType<CkTypeIndexWithName>().Select(i => i.Name).Distinct().ToList());
     }
 
     private static async Task CreateIndexAsync<TKey, TDocument>(IMongoDbDataSourceCollection<TKey, TDocument> collection,
@@ -1241,7 +1253,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                              ckTypeIndex.Fields.Select(f => f.Weight + ":" + string.Join(",", f.AttributeNames))) +
                          "|" + string.Join(",", (typeIds ?? new HashSet<string>()).Order(StringComparer.Ordinal));
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(definition));
-        return indexName + "_" + Convert.ToHexStringLower(hash)[..TiebreakIndexShape.AlternateNameHashLength];
+        return TiebreakIndexShape.AlternateName(indexName, Convert.ToHexStringLower(hash));
     }
 
     /// <summary>
@@ -1345,9 +1357,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             {
                 _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, created.Name,
                     collection.CollectionName, IndexState.Applied);
-                if (created.Replaces != null)
+                foreach (var replacedName in created.Replaces)
                 {
-                    _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, created.Replaces,
+                    _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, replacedName,
                         collection.CollectionName);
                 }
             }

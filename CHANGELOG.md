@@ -48,8 +48,8 @@
   unchanged. Existing indexes in the legacy shape `<Type>_<n>` are **kept** by CK imports and `UpdateIndexesAsync`;
   the new `ITenantContext.UpgradeTiebreakIndexesAsync` (default interface method) rebuilds them per tenant - the new
   index is built before the legacy one is dropped, idempotent. `PagingTiebreakGate` leaves out the tiebreak only for a
-  page sorted first by a key whose order a legacy Ascending index or a plain Unique index provides (the tiebreak would
-  read every matching document per page: measured 2 ms to 113 ms for the first page over 100,000 entities); it decides
+  page sorted by keys whose order a legacy Ascending index provides completely, or that start with all keys of a CK
+  Unique index (the tiebreak would read every matching document per page: measured 2 ms to 113 ms for the first page over 100,000 entities); it decides
   from the collection's indexes, read through the `CollectionIndexCache` of AB#9138 (5 minutes, one invalidation); a deep
   sorted page with the tiebreak is hinted only to an index that provides `_id` after the sort keys. Unsorted pages and pages sorted by other attributes
   get the tiebreak right after the deploy, also on existing tenants. Unpaged queries, the association navigations and
@@ -60,17 +60,18 @@
   (MongoDB can neither rename an index nor build one with other keys under a taken name); the new index is built under
   `<expected name>_<6 hex digits>` (the digits from the SHA-256 of the definition, so a repeated update finds the same
   name), and the old one is dropped at the end of the collection, after the build. If the build fails, the old index
-  stays. A text index is still dropped before its replacement is built (a collection holds only one), whatever its
-  name. An index with the right definition under another name is kept as it is (it used to be dropped and rebuilt
+  stays (also when it is the slot's index under its alternate name). A text index is still dropped before its
+  replacement is built (a collection holds only one), whatever its name. An index with the right definition under another name is kept as it is (it used to be dropped and rebuilt
   under the expected name); definitions compare their keys in order (several field groups are one key list), and a
   Unique or UniqueNotDeleted index must name exactly the definition's types in its partial filter - after a descendant
   was added it is replaced like an index with other keys. **Pre-existing:** a text index never matched its definition
   either (the default language `en` was compared with a missing one) and was dropped and rebuilt on every import. A legacy index leaves the tiebreak out only when it provides
   the complete caller sort. An index with options the engine never sets
-  (collation, sparse, hidden, TTL, a partial filter on a non-unique index) is never taken for a CK index; if it blocks
+  (collation, sparse, hidden, TTL, a partial filter on a non-unique index, a unique index without exactly the engine's
+  type and state filter) is never taken for a CK index; if it blocks
   our build, it stays (warning, ours tracked as failed). **Pre-existing bug fixed:** `GetIndexListAsync` read every
   partial unique index as UniqueNotDeleted, so a CK Unique index never matched its definition and was dropped and rebuilt
-  on every CK import; UniqueNotDeleted is now only an index whose partial filter names `rtState`. The paging gate counts
+  on every CK import; UniqueNotDeleted is now only an index whose partial filter has a condition on `rtState`. The paging gate counts
   an Ascending index as legacy only when it starts with `ckTypeId` (an engine-made index), so a hand-made index whose
   default name matches the CK name pattern gets the tiebreak. **Naming rule:** a CK index is `<Type>_<n>` / `<Type>_<n>_id`, or the same with
   `_<6 hex>` after an update of its slot; the name is not a contract, the paging gate and the tiebreak shape are

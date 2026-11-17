@@ -54,6 +54,11 @@ public class TiebreakIndexShapeTests
         // a plain Unique index serves the order of its first key (measured); UniqueNotDeleted (partial on rtState) does not
         { "{ name: 'SimpleModelSimpleType_0', key: { 'attributes.simpleField': 1 }, unique: true, partialFilterExpression: { ckTypeId: { $in: ['SimpleModel/SimpleType'] } } }", "attributes.simpleField" },
         { "{ name: 'SimpleModelSimpleType_0', key: { 'attributes.simpleField': 1 }, unique: true, partialFilterExpression: { rtState: { $in: [null, 0] } } }", null },
+        { "{ name: 'SimpleModelSimpleType_0', key: { 'attributes.simpleField': 1 }, unique: true, partialFilterExpression: { rtState: { $in: [null, 0] }, ckTypeId: { $in: ['SimpleModel/SimpleType'] } } }", null },
+        // a compound unique index is unique only in the combination of its keys: its first key can repeat
+        { "{ name: 'SimpleModelSimpleType_0', key: { 'attributes.simpleField': 1, 'attributes.otherField': 1 }, unique: true, partialFilterExpression: { ckTypeId: { $in: ['SimpleModel/SimpleType'] } } }", null },
+        // a unique index with a further predicate keeps only part of the documents unique
+        { "{ name: 'SimpleModelSimpleType_0', key: { 'attributes.simpleField': 1 }, unique: true, partialFilterExpression: { ckTypeId: { $in: ['SimpleModel/SimpleType'] }, 'attributes.enabled': true } }", null },
         // the same indexes under the alternate name of an update of their slot (AB#8960, AC 8)
         { "{ name: 'SimpleModelSimpleType_0_a1b2c3', key: { 'attributes.simpleField': 1 }, unique: true, partialFilterExpression: { ckTypeId: { $in: ['SimpleModel/SimpleType'] } } }", "attributes.simpleField" },
         { "{ name: 'SimpleModelSimpleType_0_a1b2c3', key: { ckTypeId: 1, 'attributes.simpleField': 1, rtState: 1 } }", "attributes.simpleField" },
@@ -87,9 +92,75 @@ public class TiebreakIndexShapeTests
         Assert.NotEqual(name, MongoDbRepositoryDataSource.AlternateIndexName("T_0_id", Index("ckTypeId", "attributes.b", "_id")));
     }
 
+    public static TheoryData<string, string> UniqueFilters() => new()
+    {
+        // the engine's filters (CreateUniqueIndexAsync, CreateUniqueNotDeletedIndexAsync)
+        { "{ ckTypeId: { $in: ['M/A', 'M/B'] } }", nameof(UniquePartialFilter.Unique) },
+        { "{ rtState: { $in: [null, 0] }, ckTypeId: { $in: ['M/A'] } }", nameof(UniquePartialFilter.UniqueNotDeleted) },
+        { "{ $and: [ { rtState: { $in: [0, null] } }, { ckTypeId: { $in: ['M/A'] } } ] }", nameof(UniquePartialFilter.UniqueNotDeleted) },
+        // anything else
+        { "{ ckTypeId: { $in: ['M/A'] }, 'attributes.enabled': true }", nameof(UniquePartialFilter.Foreign) },
+        { "{ rtState: { $in: [null, 0, 1] }, ckTypeId: { $in: ['M/A'] } }", nameof(UniquePartialFilter.Foreign) },
+        { "{ rtState: 0, ckTypeId: { $in: ['M/A'] } }", nameof(UniquePartialFilter.Foreign) },
+        { "{ rtState: { $in: [null, 0] } }", nameof(UniquePartialFilter.Foreign) },
+        { "{ ckTypeId: 'M/A' }", nameof(UniquePartialFilter.Foreign) },
+        { "{ ckTypeId: { $in: ['M/A'], $exists: true } }", nameof(UniquePartialFilter.Foreign) },
+        { "{ }", nameof(UniquePartialFilter.Foreign) }
+    };
+
+    [Fact]
+    public void UniqueKeysWithoutTiebreak_ForCkUniqueIndexesOnly()
+    {
+        const string filter = "partialFilterExpression: { ckTypeId: { $in: ['M/A'] } }";
+        static IReadOnlyList<(string Path, bool Descending)>? Keys(string index) =>
+            TiebreakIndexShape.UniqueKeysWithoutTiebreak(BsonDocument.Parse(index));
+
+        Assert.Equal([("attributes.a", false), ("attributes.b", false)],
+            Keys($"{{ name: 'MA_0', key: {{ 'attributes.a': 1, 'attributes.b': 1 }}, unique: true, {filter} }}"));
+        // sparse, hidden or collated: documents without the key or with collated ties are not ordered by it
+        Assert.Null(Keys($"{{ name: 'MA_0', key: {{ 'attributes.a': 1 }}, unique: true, sparse: true, {filter} }}"));
+        Assert.Null(Keys($"{{ name: 'MA_0', key: {{ 'attributes.a': 1 }}, unique: true, hidden: true, {filter} }}"));
+        Assert.Null(Keys($"{{ name: 'MA_0', key: {{ 'attributes.a': 1 }}, unique: true, collation: {{ locale: 'de' }}, {filter} }}"));
+        // no partial filter: the engine never builds a unique index without its type filter
+        Assert.Null(Keys("{ name: 'MA_0', key: { 'attributes.a': 1 }, unique: true }"));
+        // not unique, not named like a CK index
+        Assert.Null(Keys($"{{ name: 'MA_0', key: {{ 'attributes.a': 1 }}, {filter} }}"));
+        Assert.Null(Keys($"{{ name: 'manual', key: {{ 'attributes.a': 1 }}, unique: true, {filter} }}"));
+    }
+
+    [Fact]
+    public void HasStateCondition_LooksForTheCondition_NotForTheText()
+    {
+        // A type id containing "rtState" (Model/StartState) is not a state condition.
+        Assert.False(TiebreakIndexShape.HasStateCondition(BsonDocument.Parse("{ ckTypeId: { $in: ['Model/StartState'] } }")));
+        Assert.True(TiebreakIndexShape.HasStateCondition(
+            BsonDocument.Parse("{ rtState: { $in: [null, 0] }, ckTypeId: { $in: ['Model/StartState'] } }")));
+        Assert.True(TiebreakIndexShape.HasStateCondition(
+            BsonDocument.Parse("{ $and: [ { rtState: { $in: [null, 0] } }, { ckTypeId: { $in: ['M/A'] } } ] }")));
+    }
+
+    [Fact]
+    public void IsAlternateNameOf_RecognisesTheNamesAlternateIndexNameBuilds()
+    {
+        var alternate = TiebreakIndexShape.AlternateName("T_0_id", "a1b2c3d4e5");
+
+        Assert.Equal("T_0_id_a1b2c3", alternate);
+        Assert.True(TiebreakIndexShape.IsAlternateNameOf(alternate, "T_0_id"));
+        Assert.False(TiebreakIndexShape.IsAlternateNameOf("T_0_id", "T_0"));
+        Assert.False(TiebreakIndexShape.IsAlternateNameOf("T_0_id_A1B2C3", "T_0_id"));
+        Assert.False(TiebreakIndexShape.IsAlternateNameOf("T_0_id_a1b2c3d", "T_0_id"));
+    }
+
+    [Theory]
+    [MemberData(nameof(UniqueFilters))]
+    public void ClassifyUniquePartialFilter_AcceptsOnlyTheEngineFilters(string filter, string expected)
+    {
+        Assert.Equal(expected, TiebreakIndexShape.ClassifyUniquePartialFilter(BsonDocument.Parse(filter)).ToString());
+    }
+
     [Theory]
     [MemberData(nameof(Indexes))]
-    public void LeadingKeyWithoutTiebreak_ForLegacyAscendingAndPlainUniqueIndexes(string index, string? expected)
+    public void LeadingKeyWithoutTiebreak_ForLegacyAscendingAndSingleKeyUniqueIndexes(string index, string? expected)
     {
         Assert.Equal(expected, TiebreakIndexShape.LeadingKeyWithoutTiebreak(BsonDocument.Parse(index)));
     }

@@ -3,9 +3,10 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 /// <summary>
-///     Decides per collection and sort key whether a page sorts with the <c>_id</c> tiebreak (AB#8960). A page sorted by
-///     a key whose order an index provides that the tiebreak would break - a CK Ascending index in the legacy shape, or a
-///     plain Unique index on that key (<see cref="TiebreakIndexShape.LeadingKeyWithoutTiebreak" />) - pages without it:
+///     Decides per collection and sort whether a page sorts with the <c>_id</c> tiebreak (AB#8960). A page sorted by keys
+///     whose order an index provides that the tiebreak would break - a CK Ascending index in the legacy shape
+///     (<see cref="TiebreakIndexShape.LeadingKeyWithoutTiebreak" />), or a CK Unique index whose keys the sort starts with
+///     (<see cref="TiebreakIndexShape.UniqueKeysWithoutTiebreak" />) - pages without it:
 ///     there the tiebreak would turn an index-backed page into a sort over every matching document (measured 2 ms to
 ///     113 ms for the first page over 100,000 entities). Every other page gets the tiebreak at once: an unsorted page
 ///     (sorted by <c>_id</c>, which the System Entity index <c>{ckTypeId, _id, rtState}</c> provides on every collection)
@@ -29,7 +30,8 @@ internal static class PagingTiebreakGate
     ///     True when a page of <paramref name="collection" /> sorted by <paramref name="sortKeys" /> (empty: no caller
     ///     sort) gets the <c>_id</c> tiebreak. A legacy Ascending index leaves it out only when it provides the complete
     ///     sort (<see cref="SortIndexHint.Provides" />): otherwise the page sorts in memory anyway, and leaving out the
-    ///     tiebreak would only lose the order of the ties. A plain Unique index leaves it out for its first key.
+    ///     tiebreak would only lose the order of the ties. A CK Unique index leaves it out when the sort starts with all
+    ///     of its keys.
     /// </summary>
     internal static async Task<bool> IsEnabledAsync<TDocument>(IMongoCollection<TDocument> collection,
         IReadOnlyList<(string Path, bool Descending)> sortKeys, CancellationToken cancellationToken = default)
@@ -41,9 +43,28 @@ internal static class PagingTiebreakGate
 
         var indexes = await CollectionIndexCache.GetAsync(collection, cancellationToken).ConfigureAwait(false);
         return indexes != null && !indexes.Any(index =>
-            string.Equals(TiebreakIndexShape.LeadingKeyWithoutTiebreak(index), sortKeys[0].Path,
-                StringComparison.Ordinal) &&
-            ((index.TryGetValue("unique", out var unique) && unique.ToBoolean()) ||
-             SortIndexHint.Provides(index, sortKeys)));
+            TiebreakIndexShape.UniqueKeysWithoutTiebreak(index) is { } uniqueKeys
+                ? SortStartsWith(sortKeys, uniqueKeys)
+                : string.Equals(TiebreakIndexShape.LeadingKeyWithoutTiebreak(index), sortKeys[0].Path,
+                      StringComparison.Ordinal) && SortIndexHint.Provides(index, sortKeys));
+    }
+
+    /// <summary>
+    ///     True when the sort starts with every key of a unique index, all in the index's directions or all reversed: the
+    ///     combination is unique, so the page is totally ordered (a compound unique index sorted by its first key only is
+    ///     not, its first key can repeat).
+    /// </summary>
+    private static bool SortStartsWith(IReadOnlyList<(string Path, bool Descending)> sortKeys,
+        IReadOnlyList<(string Path, bool Descending)> uniqueKeys)
+    {
+        if (sortKeys.Count < uniqueKeys.Count)
+        {
+            return false;
+        }
+
+        var reversed = sortKeys[0].Descending != uniqueKeys[0].Descending;
+        return uniqueKeys.Select((key, i) => string.Equals(sortKeys[i].Path, key.Path, StringComparison.Ordinal) &&
+                                             sortKeys[i].Descending == (key.Descending ^ reversed))
+            .All(match => match);
     }
 }

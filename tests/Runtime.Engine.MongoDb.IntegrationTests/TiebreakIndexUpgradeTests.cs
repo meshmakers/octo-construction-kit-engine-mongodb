@@ -576,6 +576,109 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
+    ///     AB#8960 gate: a Unique index makes the combination of its keys unique. A page sorted by its first key only gets
+    ///     the tiebreak when the index is compound (its first key can repeat; CodeRabbit round 2), a page sorted by all of
+    ///     its keys does not.
+    /// </summary>
+    [Fact]
+    public async Task Gate_CompoundUniqueIndexSortedByItsFirstKey_GetsTheTiebreak()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("UniqSingle", "1.0.0", IndexTypeDto.Unique));
+            await tenant.ImportCkModelAsync(Model("UniqCompound", "1.0.0", IndexTypeDto.Unique,
+                [FieldName, OtherFieldName]));
+
+            Assert.False(await PagingTiebreakGate.IsEnabledAsync(Collection(tenant, "UniqSingle"), [(FieldPath, false)]));
+            var compound = Collection(tenant, "UniqCompound");
+            Assert.True(await PagingTiebreakGate.IsEnabledAsync(compound, [(FieldPath, false)]));
+            Assert.False(await PagingTiebreakGate.IsEnabledAsync(compound, [(FieldPath, false), (OtherFieldPath, false)]));
+            Assert.False(await PagingTiebreakGate.IsEnabledAsync(compound, [(FieldPath, true), (OtherFieldPath, true)]));
+            Assert.True(await PagingTiebreakGate.IsEnabledAsync(compound, [(FieldPath, false), (OtherFieldPath, true)]));
+        });
+    }
+
+    /// <summary>
+    ///     A unique index with the keys and the types of the definition but a further predicate in its partial filter keeps
+    ///     only part of the documents unique: it is neither adopted by an index update (ours is built, the other one dropped
+    ///     after the build) nor counted as a Unique index by the gate (CodeRabbit round 2).
+    /// </summary>
+    [Fact]
+    public async Task UniqueIndexWithAFurtherPredicate_IsNotAdopted_NorCountedByTheGate()
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(Model("UniqModel", "1.0.0", IndexTypeDto.Unique));
+            var collection = Collection(tenant, "UniqModel");
+            var unique = Assert.Single(await IndexesAsync(collection), i => i.GetValue("unique", false).ToBoolean());
+            var expectedName = unique["name"].AsString;
+            var engineFilter = unique["partialFilterExpression"].AsBsonDocument;
+            const string foreignName = "unique_with_predicate";
+            await collection.Indexes.DropOneAsync(expectedName);
+            var foreignFilter = engineFilter.DeepClone().AsBsonDocument;
+            foreignFilter.Add(OtherFieldPath, new BsonDocument("$exists", true));
+            await collection.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(unique["key"].AsBsonDocument,
+                new CreateIndexOptions<BsonDocument>
+                {
+                    Name = foreignName, Unique = true, PartialFilterExpression = foreignFilter
+                }));
+            CollectionIndexCache.Invalidate(collection);
+
+            Assert.True(await PagingTiebreakGate.IsEnabledAsync(collection, [(FieldPath, false)]));
+
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpdateIndexesAsync(adminSession);
+            }
+
+            var indexes = await IndexesAsync(collection);
+            Assert.DoesNotContain(indexes, i => i["name"].AsString == foreignName);
+            var ours = Assert.Single(indexes, i => i.GetValue("unique", false).ToBoolean());
+            Assert.Equal(expectedName, ours["name"].AsString);
+            Assert.Equal(engineFilter, ours["partialFilterExpression"].AsBsonDocument);
+        });
+    }
+
+    /// <summary>
+    ///     AC 8: the index of a slot that an earlier update built under its alternate name (the expected name was taken
+    ///     then) is the index a further change of the slot replaces. When that build fails, it stays, also though the
+    ///     expected name is free now (CodeRabbit round 2).
+    /// </summary>
+    [Fact]
+    public async Task AscendingIndexUnderItsAlternateName_StaysWhenItsReplacementFails()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.0", IndexTypeDto.Ascending));
+            var collection = Collection(tenant, "AscModel");
+            var tiebreakName = Assert.Single(await IndexesAsync(collection),
+                i => KeysOf(i).SequenceEqual(TiebreakKeys))["name"].AsString;
+            var alternateName = tiebreakName + "_a1b2c3";
+            await collection.Indexes.DropOneAsync(tiebreakName);
+            await collection.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(
+                new BsonDocument { { "ckTypeId", 1 }, { FieldPath, 1 }, { "_id", 1 }, { "rtState", 1 } },
+                new CreateIndexOptions<BsonDocument> { Name = alternateName }));
+            CollectionIndexCache.Invalidate(collection);
+
+            // Two array fields in one document: MongoDB refuses the compound index over both.
+            await SeedAsync(tenant, "AscModel", 10);
+            var template = await collection.Find(new BsonDocument()).FirstAsync();
+            template["_id"] = ObjectId.GenerateNewId();
+            template["attributes"].AsBsonDocument["simpleField"] = new BsonArray { "a", "b" };
+            template["attributes"].AsBsonDocument["otherField"] = new BsonArray { "c", "d" };
+            await collection.InsertOneAsync(template);
+
+            await tenant.ImportCkModelAsync(Model("AscModel", "1.0.1", IndexTypeDto.Ascending,
+                [FieldName, OtherFieldName]));
+
+            var indexes = await IndexesAsync(collection);
+            var kept = Assert.Single(indexes, i => i["name"].AsString == alternateName);
+            Assert.Equal(TiebreakKeys, KeysOf(kept));
+            Assert.DoesNotContain(indexes, i => i["name"].AsString == tiebreakName);
+        });
+    }
+
+    /// <summary>
     ///     AC 8: when the build of the changed index fails (here: a compound index over two array fields of one document,
     ///     which MongoDB refuses), the old index with the expected name stays, and the update goes on.
     /// </summary>
