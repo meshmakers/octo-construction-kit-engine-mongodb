@@ -3251,7 +3251,7 @@ deadlocks identically.
 | Method | Runs in caller's txn? | Does |
 |---|---|---|
 | `DeleteChildTenantMetadataAsync(session, tenantId)` | yes | Pre-delete notification + delete `RtTenant` from current & system repos. Returns a `TenantDeletionHandle(DatabaseName, CorrelationId)`. |
-| `DropTenantDatabaseAsync(handle, tenantId)` | no (DDL) | Physical `dropDatabase` + post-delete notification (reusing the handle's correlation id). |
+| `DropTenantDatabaseAsync(handle, tenantId)` | no (DDL) | Physical `dropDatabase` + post-delete notification at once (reusing the handle's correlation id; the caller committed the metadata delete before). `DropChildTenantAsync` publishes it after the caller's commit instead, see "Tenant-deleted notification after the commit". |
 
 The tenant delete REST endpoint (`TenantsController.Delete`) now calls
 `DeleteChildTenantMetadataAsync` → `CommitTransactionAsync` → `DropTenantDatabaseAsync`, so the record
@@ -3545,7 +3545,7 @@ publishing it:
 
 | Situation | When it is published | A failed publish |
 |---|---|---|
-| Inside a `TenantCreatedNotificationScope` bound to the same session (engine operations that own their transaction: the restore's attach in `TenantBackupService`) | by the operation, `scope.PublishAsync()` after its commit | reaches the operation; the restore still succeeds (data restored and attached) and sets `CommandResult.TenantCreatedNotificationFailed`, with the warning ("... run ClearCache") in `Output` and a WARN log; the clone (`CloneTenantToTempAsync`) passes the flag on. Nothing is dropped: a drop by id after the commit could hit a tenant that replaced it |
+| Inside a `TenantNotificationScope` bound to the same session (engine operations that own their transaction: the restore's attach in `TenantBackupService`) | by the operation, `scope.PublishAsync()` after its commit | reaches the operation; the restore still succeeds (data restored and attached) and sets `CommandResult.TenantCreatedNotificationFailed`, with the warning ("... run ClearCache") in `Output` and a WARN log; the clone (`CloneTenantToTempAsync`) passes the flag on. Nothing is dropped: a drop by id after the commit could hit a tenant that replaced it |
 | Caller's transaction (`IOctoSessionInternal.IsTransactionActive`) | after-commit callback of the session (`RegisterTransactionCallbacks`); nothing on a rollback, and nothing when the same transaction detached or dropped the tenant after it or created or attached it again (`TenantTransactionNotificationState`, per session, no read; the registry read is a second check) | three attempts (`PosTenantCreateRetryDelays`: 250 ms, 1 s; each bounded by `PosTenantCreateAttemptTimeout`, 5 s), then a WARN naming the tenant and the recovery |
 | No transaction | at once, as before | thrown to the caller (create: rolled back as before) |
 
@@ -3567,8 +3567,8 @@ Rules:
   commit whose outcome is unknown), after the tenant-created notification (callbacks run in registration order), bounded
   to 5 s; a failure is a warning.
 - A commit whose outcome is unknown (the commit call throws although the server may have committed) runs no callback,
-  so no notification goes out; the caller gets the exception. Other post notifications (`PosTenantDelete` of drop and
-  detach) are still published inside the caller's transaction.
+  so no notification goes out; the caller gets the exception. The same holds for the tenant-deleted notification
+  (next section).
 - The system tenant's own create (`SystemContext.CreateSystemTenantAsync`) has no transaction and publishes at once.
 - Tests: `TenantCreatedNotificationOrderTests` (collection `TenantNotification`, fixture `TenantNotificationFixture`: the
   recording notifications check `IsTenantRegisteredAsync` at publish time): create and attach in a transaction publish after
@@ -3576,7 +3576,42 @@ Rules:
   callback retries and then warns, the restore publishes after its commit and flags a failed publish on its successful
   result, a clone passes the flag on, an attach and detach in one transaction publishes no
   tenant-created notification (also with the registry read disabled), attach, detach and attach publish once, a scope of another session does not hold back a create, a clear in a transaction
-  publishes create, then update, after the commit.
+  publishes delete, create, then update, after the commit.
+
+### Tenant-deleted notification after the commit
+
+Services tear a tenant down when they receive `PosDeleteTenant` (for example the bot's operation purge), so a drop or
+detach must not announce a removal that its transaction can still roll back. `DetachChildTenantAsync` and
+`DropChildTenantAsync` remove the registry rows in the caller's session and hand the notification to
+`NotifyPosTenantDeleteAfterCommitAsync` (`TenantContext`). It is the same mechanism as the tenant-created notification
+above (`NotifyPosTenantAfterCommitAsync`, `TenantNotificationScope`, `PublishWithRetryAsync`), with one rule per situation:
+
+| Situation | When it is published | A failed publish |
+|---|---|---|
+| Inside a `TenantNotificationScope` bound to the same session (the backup's detach, `BackupTenantAsync(detachTenant: true)`, and the restore's drop of an existing tenant in `TenantBackupService`) | by the operation, `scope.PublishAsync()` after its commit | reaches the operation; it still succeeds (the removal is committed), and the warning ("... run ClearCache for the tenant") is appended to `CommandResult.Output` and logged as a WARN. `CommandResult.TenantCreatedNotificationFailed` is not touched |
+| Caller's transaction | after-commit callback of the session; nothing on a rollback or on a dispose without commit | three attempts (`PosTenantCreateRetryDelays`, each bounded by `PosTenantCreateAttemptTimeout`), then a WARN naming the tenant and the recovery |
+| No transaction | at once, from the `finally` as before (a failed drop or detach still announces it) | thrown to the caller |
+| Two-phase delete (`DeleteChildTenantMetadataAsync`, commit, `DropTenantDatabaseAsync`) | `DropTenantDatabaseAsync` publishes at once: the caller committed before | thrown to the caller, as before |
+
+Rules:
+
+- **No skip for a delete.** A tenant-created notification is dropped when the same transaction removed the tenant again;
+  a tenant-deleted notification is always published after the commit, also when the same transaction created the tenant
+  again: its database was dropped (DDL, no transaction), so the services must let go of it. Callbacks run in
+  registration order, so a clear in a transaction publishes delete, create, update.
+- **The database drop is not transactional.** `DropChildTenantAsync` inside a transaction that is rolled back has
+  dropped the database, but the registry rows come back and no notification goes out (unchanged: only the registry is
+  transactional; such a tenant was broken before too).
+- **Recovery for a lost notification**: services may keep the tenant's cached state (contexts, caches, open clients)
+  until a ClearCache of the tenant or their next restart. The asset repository's delete endpoint uses the two-phase path
+  and is not affected.
+- `SystemContext.DeleteSystemTenantAsync` runs without a transaction and publishes at once.
+- Tests: `TenantDeletedNotificationOrderTests` (collection `TenantNotification`; the recording notifications check
+  `IsTenantRegisteredAsync` at publish time): detach and drop in a transaction publish after the commit with the tenant
+  unregistered, a rolled-back or uncommitted detach publishes nothing, the two-phase delete publishes when the database
+  is dropped, the callback retries and then warns, the backup's detach and the restore's drop publish after their commit
+  and name a failed publish in the output, a scope of another session does not hold back a detach. A clear in a
+  transaction publishes delete, create, update (`TenantCreatedNotificationOrderTests`).
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 

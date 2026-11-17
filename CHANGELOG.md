@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Fix: the tenant-deleted notification (`PosDeleteTenant`) of a child-tenant drop or detach is published only after the
+  removal is committed. `DetachChildTenantAsync` and `DropChildTenantAsync` published it inside the caller's transaction,
+  so services could tear down a tenant whose removal was later rolled back, or act before the removal was visible. Inside
+  a caller's transaction it now runs as an after-commit callback (nothing on a rollback), with the same three bounded
+  attempts as the tenant-created notification and then a warning naming the tenant and the recovery (ClearCache for the
+  tenant, or a service restart); without a transaction it is published at once as before, and the two-phase delete
+  (`DropTenantDatabaseAsync` after the committed metadata delete) is unchanged. The backup's detach and the restore's
+  drop of an existing tenant publish it themselves after their commit; a failed publish keeps them successful and adds
+  the warning ("... run ClearCache for the tenant") to `CommandResult.Output`. A clear in a transaction now publishes
+  delete, create, update after the commit. The internal `TenantCreatedNotificationScope` is now `TenantNotificationScope`
+  and collects both notifications. Details: `CLAUDE.md`, "Tenant-deleted notification after the commit".
 - AB#9177 Fix: the tenant-created notification (`PosCreateTenant`) of a child-tenant create or attach is published only
   after the registration is committed. `CreateChildTenantAsync` and `AttachChildTenantAsync` published it inside the
   caller's transaction, so every service set the tenant up before it was registered (a restore logged "Setup tenant

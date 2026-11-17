@@ -104,7 +104,7 @@ public class TenantCreatedNotificationOrderTests(TenantNotificationFixture fixtu
     }
 
     [Fact]
-    public async Task ClearInATransaction_PublishesCreateThenUpdate_AfterTheCommit()
+    public async Task ClearInATransaction_PublishesDeleteCreateThenUpdate_AfterTheCommit()
     {
         var systemContext = fixture.GetSystemContext();
         var tenantId = NewTenantId("notecl");
@@ -127,7 +127,7 @@ public class TenantCreatedNotificationOrderTests(TenantNotificationFixture fixtu
                 await session.CommitTransactionAsync();
             }
 
-            Assert.Equal(["Create", "Update"], fixture.Notifications.PublishedFor(tenantId).Skip(before));
+            Assert.Equal(["Delete", "Create", "Update"], fixture.Notifications.PublishedFor(tenantId).Skip(before));
             Assert.True(Assert.Single(fixture.Notifications.PosCreatedFor(tenantId).Skip(createsBefore)).Registered);
         }
         finally
@@ -372,7 +372,7 @@ public class TenantCreatedNotificationOrderTests(TenantNotificationFixture fixtu
         try
         {
             using var scopeSession = await systemContext.GetAdminSessionAsync();
-            using var scope = TenantCreatedNotificationScope.Begin(scopeSession);
+            using var scope = TenantNotificationScope.Begin(scopeSession);
             using (var session = await systemContext.GetAdminSessionAsync())
             {
                 session.StartTransaction();

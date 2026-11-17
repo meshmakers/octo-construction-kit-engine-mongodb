@@ -978,8 +978,9 @@ public class TenantContext : ITenantContext
         }
         finally
         {
-            // Distribute updates (post) to inform other services.
-            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, correlationId);
+            // Distribute updates (post) to inform other services: after the caller's commit, never on a rollback (the
+            // registry rows are still there then); without a transaction at once.
+            await NotifyPosTenantDeleteAfterCommitAsync(adminSession, tenantId, correlationId);
         }
     }
 
@@ -1010,22 +1011,39 @@ public class TenantContext : ITenantContext
     }
 
     /// <summary>
-    ///     Delays between the attempts of a tenant-created notification published after a commit: the first attempt
-    ///     runs at once, each further one after the next delay (three attempts in all). The retries run inside the
-    ///     caller's commit call, so they are kept short.
+    ///     Delays between the attempts of a tenant-created or tenant-deleted notification published after a commit: the
+    ///     first attempt runs at once, each further one after the next delay (three attempts in all). The retries run
+    ///     inside the caller's commit call, so they are kept short.
     /// </summary>
     internal static readonly IReadOnlyList<TimeSpan> PosTenantCreateRetryDelays =
         [TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(1)];
 
-    /// <summary>Time one publish attempt of the after-commit notification may take.</summary>
+    /// <summary>Time one publish attempt of an after-commit notification (created or deleted) may take.</summary>
     internal static readonly TimeSpan PosTenantCreateAttemptTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
     ///     Publishes the tenant-created notification of a create or attach so that no service sees it before the
-    ///     tenant is registered:
+    ///     tenant is registered (rules in <see cref="NotifyPosTenantAfterCommitAsync" />).
+    /// </summary>
+    private Task NotifyPosTenantCreateAfterCommitAsync(IOctoAdminSession adminSession, string tenantId,
+        Guid correlationId) =>
+        NotifyPosTenantAfterCommitAsync(adminSession, TenantPostNotificationKind.Created, tenantId, correlationId);
+
+    /// <summary>
+    ///     Publishes the tenant-deleted notification of a drop or detach so that no service tears the tenant down before
+    ///     its removal is committed, and none at all when the removal is rolled back (rules in
+    ///     <see cref="NotifyPosTenantAfterCommitAsync" />).
+    /// </summary>
+    private Task NotifyPosTenantDeleteAfterCommitAsync(IOctoAdminSession adminSession, string tenantId,
+        Guid correlationId) =>
+        NotifyPosTenantAfterCommitAsync(adminSession, TenantPostNotificationKind.Deleted, tenantId, correlationId);
+
+    /// <summary>
+    ///     Publishes the post notification of a registry change (create, attach, drop, detach) once the change is
+    ///     committed:
     ///     <list type="bullet">
     ///         <item>
-    ///             inside a <see cref="TenantCreatedNotificationScope" /> of this session it is collected, and the engine
+    ///             inside a <see cref="TenantNotificationScope" /> of this session it is collected, and the engine
     ///             operation that owns the transaction publishes it after its commit (a failure reaches that operation);
     ///         </item>
     ///         <item>
@@ -1034,18 +1052,28 @@ public class TenantContext : ITenantContext
     ///         </item>
     ///         <item>without a transaction it is published at once, and a failure reaches the caller.</item>
     ///     </list>
+    ///     A tenant-created notification is also skipped when the same transaction removed the tenant again after it.
+    ///     A tenant-deleted notification is always published after the commit: the removal happened, even when the
+    ///     same transaction created the tenant again (the services then see delete, then create, in that order).
     /// </summary>
-    private async Task NotifyPosTenantCreateAfterCommitAsync(IOctoAdminSession adminSession, string tenantId,
-        Guid correlationId)
+    private async Task NotifyPosTenantAfterCommitAsync(IOctoAdminSession adminSession,
+        TenantPostNotificationKind kind, string tenantId, Guid correlationId)
     {
-        if (TenantCreatedNotificationScope.Current is { } scope &&
-            scope.TryAdd(adminSession, tenantId, correlationId, _tenantNotifications))
+        if (TenantNotificationScope.Current is { } scope &&
+            scope.TryAdd(adminSession, kind, tenantId, correlationId, _tenantNotifications))
         {
             return;
         }
 
         if (adminSession is IOctoSessionInternal { IsTransactionActive: true } transaction)
         {
+            if (kind == TenantPostNotificationKind.Deleted)
+            {
+                transaction.RegisterTransactionCallbacks(() => PublishPosTenantDeleteWithRetryAsync(tenantId,
+                    correlationId));
+                return;
+            }
+
             var version = TenantTransactionNotificationState.RecordCreate(adminSession, tenantId);
             transaction.RegisterTransactionCallbacks(() =>
             {
@@ -1064,7 +1092,14 @@ public class TenantContext : ITenantContext
             return;
         }
 
-        await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
+        if (kind == TenantPostNotificationKind.Deleted)
+        {
+            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, correlationId);
+        }
+        else
+        {
+            await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
+        }
     }
 
     private async Task PublishPosTenantCreateWithRetryAsync(string tenantId, Guid correlationId)
@@ -1079,34 +1114,62 @@ public class TenantContext : ITenantContext
             return;
         }
 
+        if (await PublishWithRetryAsync(() => _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId),
+                "Tenant-created", tenantId) is { } failure)
+        {
+            // The tenant is committed; only the event is missing. Nothing retries it later: the services set the
+            // tenant up after a ClearCache of the tenant or their next restart.
+            _logger.LogWarning(failure.Error,
+                "Tenant '{TenantId}' is registered, but its tenant-created notification failed after {Attempts} " +
+                "attempts (correlation {CorrelationId}); the services have not set it up. Run ClearCache for the " +
+                "tenant (or restart the services) to set it up",
+                tenantId, failure.Attempts, correlationId);
+        }
+    }
+
+    private async Task PublishPosTenantDeleteWithRetryAsync(string tenantId, Guid correlationId)
+    {
+        if (await PublishWithRetryAsync(() => _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, correlationId),
+                "Tenant-deleted", tenantId) is { } failure)
+        {
+            // The removal is committed; only the event is missing. Nothing retries it later: the services keep the
+            // tenant's cached state until a ClearCache of the tenant or their next restart.
+            _logger.LogWarning(failure.Error,
+                "Tenant '{TenantId}' is removed (deleted or detached), but its tenant-deleted notification failed " +
+                "after {Attempts} attempts (correlation {CorrelationId}); the services may still hold the tenant's " +
+                "cached state. Run ClearCache for the tenant (or restart the services) to drop it",
+                tenantId, failure.Attempts, correlationId);
+        }
+    }
+
+    /// <summary>
+    ///     Runs one publish with the after-commit attempts (<see cref="PosTenantCreateRetryDelays" />, each bounded by
+    ///     <see cref="PosTenantCreateAttemptTimeout" />).
+    /// </summary>
+    /// <returns><c>null</c> when an attempt succeeded, else the last error and the number of attempts.</returns>
+    private async Task<(Exception Error, int Attempts)?> PublishWithRetryAsync(Func<Task> publish, string what,
+        string tenantId)
+    {
         var delays = PosTenantCreateRetryDelays;
         for (var attempt = 1;; attempt++)
         {
             try
             {
                 // Bounded: the attempts run inside the caller's commit call. A publish that is still pending when the
-                // time is up is abandoned; if it completes later the services set the tenant up twice (idempotent).
-                await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId)
-                    .WaitAsync(PosTenantCreateAttemptTimeout);
-                return;
+                // time is up is abandoned; if it completes later the services act on the event twice (idempotent).
+                await publish().WaitAsync(PosTenantCreateAttemptTimeout);
+                return null;
             }
             catch (Exception ex) when (attempt <= delays.Count)
             {
                 _logger.LogDebug(ex,
-                    "Tenant-created notification of tenant '{TenantId}' failed (attempt {Attempt}); retrying",
-                    tenantId, attempt);
+                    "{What} notification of tenant '{TenantId}' failed (attempt {Attempt}); retrying",
+                    what, tenantId, attempt);
                 await Task.Delay(delays[attempt - 1]);
             }
             catch (Exception ex)
             {
-                // The tenant is committed; only the event is missing. Nothing retries it later: the services set the
-                // tenant up after a ClearCache of the tenant or their next restart.
-                _logger.LogWarning(ex,
-                    "Tenant '{TenantId}' is registered, but its tenant-created notification failed after {Attempts} " +
-                    "attempts (correlation {CorrelationId}); the services have not set it up. Run ClearCache for the " +
-                    "tenant (or restart the services) to set it up",
-                    tenantId, attempt, correlationId);
-                return;
+                return (ex, attempt);
             }
         }
     }
@@ -1293,7 +1356,10 @@ public class TenantContext : ITenantContext
             overrideForeignOwnership);
         try
         {
-            await DropTenantDatabaseAsync(handle, tenantId);
+            // The registry rows are deleted in the caller's transaction, so the post-delete notification waits for its
+            // commit (never on a rollback); the database itself is dropped at once (DDL, no transaction).
+            await DropTenantDatabaseCoreAsync(handle, tenantId,
+                () => NotifyPosTenantDeleteAfterCommitAsync(adminSession, tenantId, handle.CorrelationId));
         }
         catch (TenantException e) when (e.IsDatabaseDropPending)
         {
@@ -1368,7 +1434,15 @@ public class TenantContext : ITenantContext
     }
 
     /// <inheritdoc />
-    public async Task DropTenantDatabaseAsync(TenantDeletionHandle handle, string tenantId)
+    public Task DropTenantDatabaseAsync(TenantDeletionHandle handle, string tenantId)
+    {
+        // The caller committed the metadata deletion before (two-phase delete): the notification goes out at once.
+        return DropTenantDatabaseCoreAsync(handle, tenantId,
+            () => _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, handle.CorrelationId));
+    }
+
+    private async Task DropTenantDatabaseCoreAsync(TenantDeletionHandle handle, string tenantId,
+        Func<Task> notifyPosTenantDelete)
     {
         ArgumentValidation.Validate(nameof(handle), handle);
         ArgumentValidation.ValidateString(nameof(handle.DatabaseName), handle.DatabaseName);
@@ -1432,7 +1506,7 @@ public class TenantContext : ITenantContext
             // (whole tenant) so a tenant re-created under the same id does not inherit stale answers.
             InvalidateArchiveCoverage(tenantId);
 
-            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, handle.CorrelationId);
+            await notifyPosTenantDelete();
         }
     }
 

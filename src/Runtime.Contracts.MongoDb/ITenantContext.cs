@@ -241,6 +241,13 @@ public interface ITenantContext
 
     Task AttachChildTenantAsync(IOctoAdminSession adminSession, string databaseName, string tenantId);
 
+    /// <summary>
+    ///     Detaches a child tenant: removes its registry rows and releases the ownership of its database, which stays.
+    /// </summary>
+    /// <remarks>
+    ///     The post-delete notification goes out after the commit of the caller's transaction (none on a rollback), or at
+    ///     once without a transaction.
+    /// </remarks>
     Task DetachChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
     /// <summary>
@@ -252,6 +259,8 @@ public interface ITenantContext
     /// <summary>
     ///     Deletes the tenant metadata and drops the tenant database in one go, within the caller's
     ///     transaction (see <see cref="DeleteChildTenantMetadataAsync" /> for when that is safe).
+    ///     The post-delete notification goes out after the commit of that transaction (none on a
+    ///     rollback), or at once without a transaction.
     /// </summary>
     /// <param name="adminSession">Admin session to perform the operation.</param>
     /// <param name="tenantId">The tenant to drop.</param>
