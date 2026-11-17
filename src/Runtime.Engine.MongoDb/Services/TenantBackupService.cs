@@ -30,6 +30,9 @@ internal class TenantBackupService(
     public async Task<CommandResult> BackupTenantAsync(string tenantId, string archiveFilePath,
         bool detachTenant = false, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
+        // Outside the try: a dump that throws after a committed detach whose notification failed must still name the
+        // recovery in its failure result.
+        string? deleteNotificationWarning = null;
         try
         {
             logger.LogInformation("Starting backup for tenant '{TenantId}' to archive '{ArchiveFilePath}'",
@@ -53,7 +56,6 @@ internal class TenantBackupService(
             }
 
             // Optionally detach tenant before backup
-            string? deleteNotificationWarning = null;
             if (detachTenant)
             {
                 logger.LogInformation("Detaching tenant '{TenantId}' before backup", tenantId);
@@ -91,7 +93,9 @@ internal class TenantBackupService(
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during backup of tenant '{TenantId}'", tenantId);
-            return CommandResult.Failure($"Exception during backup: {ex.Message}");
+            var failure = CommandResult.Failure($"Exception during backup: {ex.Message}");
+            AppendWarning(failure, deleteNotificationWarning);
+            return failure;
         }
     }
 
@@ -381,7 +385,8 @@ internal class TenantBackupService(
     /// <summary>
     ///     The destructive part of the restore, under the claim of <paramref name="claim" /> (AB#8672): drop the existing
     ///     tenant if asked, mongorestore, attach. A tenant-deleted notification of the drop that could not be published
-    ///     is named in the result's <see cref="CommandResult.Output" />, whatever the result.
+    ///     is named in the result's <see cref="CommandResult.Output" />, whatever the result: also when a later step
+    ///     throws, the failure result carries it (the same failure the caller's catch would return, plus the warning).
     /// </summary>
     private async Task<CommandResult> RestoreClaimedTargetAsync(string tenantId, string databaseName,
         string archivePath, string? effectiveSourceDatabaseName, IReadOnlyList<string> detectedDatabases,
@@ -389,9 +394,19 @@ internal class TenantBackupService(
         TimeSpan? timeout, CancellationToken? cancellationToken)
     {
         var deleteNotificationWarning = new StrongBox<string?>();
-        var result = await RestoreClaimedTargetCoreAsync(tenantId, databaseName, archivePath,
-            effectiveSourceDatabaseName, detectedDatabases, dropExistingTenant, attachTenant, overrideForeignOwnership,
-            claim, deleteNotificationWarning, timeout, cancellationToken);
+        CommandResult result;
+        try
+        {
+            result = await RestoreClaimedTargetCoreAsync(tenantId, databaseName, archivePath,
+                effectiveSourceDatabaseName, detectedDatabases, dropExistingTenant, attachTenant,
+                overrideForeignOwnership, claim, deleteNotificationWarning, timeout, cancellationToken);
+        }
+        catch (Exception ex) when (deleteNotificationWarning.Value != null)
+        {
+            logger.LogError(ex, "Error during restore of tenant '{TenantId}'", tenantId);
+            result = CommandResult.Failure($"Exception during restore: {ex.Message}");
+        }
+
         AppendWarning(result, deleteNotificationWarning.Value);
         return result;
     }
