@@ -2800,11 +2800,15 @@ the catalog side.
     `Activated`. `DropIngestedColumnStorageAsync` drops the columns (`ALTER TABLE … DROP COLUMN IF EXISTS`; never a
     standard column, never a physical column a kept path also maps to, only plain identifiers) and
     `RemoveIngestedColumnsAsync` removes them from the definition; the engine's
-    `RedactHiddenColumnsAsync` (CK method `Archive.RedactHiddenColumns-1`) runs both and resumes the archive.
+    `RedactHiddenColumnsAsync` (CK method `Archive.RedactHiddenColumns-1`, deprecated) and `RedactConfirmedHiddenColumnsAsync`
+    (`Archive.RedactHiddenColumns-2`, System.StreamData 1.29.0: drops only when the Hidden set equals the caller's
+    `expectedColumns`, otherwise `HiddenColumnRedactionColumnsChangedException` before anything is dropped) run both and resume
+    the archive.
     `ArchiveReconciler` and a failed provisioning record their reason too.
   - Tests: `ArchiveHiddenAccessTests` (reason and columns round-trip through MongoDB, the public re-validation),
     `ComputedColumns/ArchiveHiddenColumnRedactionIntegrationTests` (real CrateDB: readable history, refused writes, drop,
-    resume, idempotence), `StreamData.UnitTests/CrateDbFailedOnHiddenColumnsReadGateTests`.
+    resume, idempotence; the confirmed redaction refuses a changed or unknown column set with table, rows, values and
+    definition untouched and then drops only the confirmed column), `StreamData.UnitTests/CrateDbFailedOnHiddenColumnsReadGateTests`.
 - **Backlog (G3 re-review N6/N7):**
   - **N6 — cost:** the re-check runs after every single model import (also per model of a batch or blueprint): it
     loads the cache, enumerates all archives and loads each active one, between the Pre and Post notification. Skip it

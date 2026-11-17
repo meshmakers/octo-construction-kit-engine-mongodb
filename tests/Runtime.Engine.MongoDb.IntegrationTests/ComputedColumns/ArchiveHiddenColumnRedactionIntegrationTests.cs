@@ -36,8 +36,11 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         string Table, OctoObjectId Archive, MemoryArchiveStore Store, CrateDbStreamDataRepository Repository,
         ArchiveLifecycleService Lifecycle, IArchiveAuditTrail Audit);
 
-    /// <summary>Test/Sensor with the Double attributes Value and Pin; Pin is Hidden when <paramref name="pinHidden" />.</summary>
-    private static ICkCacheService SensorCache(Func<bool> pinHidden)
+    /// <summary>
+    ///     Test/Sensor with the Double attributes Value and Pin; Pin is Hidden when <paramref name="pinHidden" />, Value when
+    ///     <paramref name="valueHidden" />.
+    /// </summary>
+    private static ICkCacheService SensorCache(Func<bool> pinHidden, Func<bool>? valueHidden = null)
     {
         var typeId = new CkId<CkTypeId>("Test-1.0.0/Sensor-1");
         CkTypeAttributeGraph Attribute(string name, CkAttributeAccessDto access) => new(
@@ -46,7 +49,7 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         CkTypeGraph Graph() => new(typeId, isAbstract: false, isFinal: false, isCollectionRoot: true, [], null, null, [], [],
             new[]
             {
-                Attribute("Value", CkAttributeAccessDto.ReadWrite),
+                Attribute("Value", valueHidden?.Invoke() == true ? CkAttributeAccessDto.Hidden : CkAttributeAccessDto.ReadWrite),
                 Attribute("Pin", pinHidden() ? CkAttributeAccessDto.Hidden : CkAttributeAccessDto.ReadWrite)
             }.ToDictionary(a => a.CkAttributeId, a => a),
             [], new CkGraphDirectedAssociations([]), "sensor", enableChangeStreamPreAndPostImages: false);
@@ -59,7 +62,7 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         return cache;
     }
 
-    private async Task<Lane> NewLaneAsync(Func<bool> pinHidden)
+    private async Task<Lane> NewLaneAsync(Func<bool> pinHidden, Func<bool>? valueHidden = null)
     {
         var tenant = CrateStagingCopyFixture.NewTenantId();
         var archive = OctoObjectId.GenerateNewId();
@@ -71,7 +74,7 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         store.Put(new ArchiveSnapshot(archive, SensorType, CkArchiveStatus.Activated, "meter",
             new List<CkArchiveColumnSpec> { new("Value", Indexed: false, Required: false), new("Pin", Indexed: false, Required: false) }));
 
-        var cache = SensorCache(pinHidden);
+        var cache = SensorCache(pinHidden, valueHidden);
         var configuration = Options.Create(new StreamDataConfiguration { ConnectionString = fixture.ConnectionString });
         var repository = new CrateDbStreamDataRepository(NullLogger<CrateDbStreamDataRepository>.Instance, cache,
             fixture.Client, A.Fake<IStreamDataDatabaseManagementClient>(), configuration, tenant, store, Formula);
@@ -163,6 +166,76 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         var again = await lane.Lifecycle.RedactHiddenColumnsAsync(lane.Archive);
         Assert.Empty(again.RemovedColumns);
         Assert.Equal(CkArchiveStatus.Activated, again.Status);
+    }
+
+    /// <summary>
+    ///     The confirmed redaction: the administrator confirmed Pin; a later model change makes Value Hidden as well. The call
+    ///     is refused with both sets, and table, rows, values, definition, status and audit stay untouched. Once the set is
+    ///     Pin again, the confirmed call drops Pin and only Pin.
+    /// </summary>
+    [Fact]
+    public async Task ConfirmedRedaction_DropsOnlyTheConfirmedColumns_AndRefusesAChangedSetWithoutAnyDataLoss()
+    {
+        var pinHidden = false;
+        var valueHidden = false;
+        var lane = await NewLaneAsync(() => pinHidden, () => valueHidden);
+
+        pinHidden = true;
+        Assert.False(await lane.Lifecycle.RevalidateAccessAsync(lane.Archive));
+        Assert.Equal(["Pin"], (await lane.Store.GetAsync(lane.Archive))!.HiddenColumns);
+
+        // Between the administrator's read and the call, Value becomes Hidden too.
+        valueHidden = true;
+        var refused = await Assert.ThrowsAsync<HiddenColumnRedactionColumnsChangedException>(() =>
+            lane.Lifecycle.RedactConfirmedHiddenColumnsAsync(lane.Archive, ["Pin"]));
+        Assert.Equal(["Pin"], refused.ExpectedColumns);
+        Assert.Equal(["Value", "Pin"], refused.CurrentColumns);
+
+        // An unknown column is refused the same way.
+        await Assert.ThrowsAsync<HiddenColumnRedactionColumnsChangedException>(() =>
+            lane.Lifecycle.RedactConfirmedHiddenColumnsAsync(lane.Archive, ["Pin", "Value", "NoSuchColumn"]));
+
+        await AssertNothingWasDroppedAsync(lane);
+
+        // The set is Pin again: the confirmed call (case-insensitive) drops Pin, keeps Value with every value, and resumes.
+        valueHidden = false;
+        var result = await lane.Lifecycle.RedactConfirmedHiddenColumnsAsync(lane.Archive, ["pin"]);
+
+        Assert.Equal(CkArchiveStatus.Activated, result.Status);
+        Assert.Equal(["Pin"], result.RemovedColumns);
+        Assert.Null(await ColumnTypeAsync(lane, "pin"));
+        Assert.NotNull(await ColumnTypeAsync(lane, "value"));
+        Assert.Equal(["Value"], (await lane.Store.GetAsync(lane.Archive))!.Columns.Select(c => c.Path));
+        await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
+        Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"value\" IS NOT NULL"));
+        A.CallTo(() => lane.Audit.RecordTransitionAsync(A<string>._, lane.Archive, CkArchiveStatus.Failed,
+            CkArchiveStatus.Failed, A<string>.That.Contains("RedactHiddenColumns drops"))).MustHaveHappenedOnceExactly();
+
+        // A repeat of the same confirmation finds no Hidden column any more and is refused; nothing else changes.
+        var repeated = await Assert.ThrowsAsync<HiddenColumnRedactionColumnsChangedException>(() =>
+            lane.Lifecycle.RedactConfirmedHiddenColumnsAsync(lane.Archive, ["Pin"]));
+        Assert.Empty(repeated.CurrentColumns);
+        Assert.Equal(CkArchiveStatus.Activated, (await lane.Store.GetAsync(lane.Archive))!.Status);
+    }
+
+    /// <summary>
+    ///     Both columns, every row and every stored value, the definition, the Failed status; no redaction audit entry (the
+    ///     re-validation's Failed transition is audited before).
+    /// </summary>
+    private async Task AssertNothingWasDroppedAsync(Lane lane)
+    {
+        Assert.NotNull(await ColumnTypeAsync(lane, "pin"));
+        Assert.NotNull(await ColumnTypeAsync(lane, "value"));
+        await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
+        Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table}"));
+        Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"pin\" = 1234.0"));
+        Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"value\" IS NOT NULL"));
+        var snapshot = (await lane.Store.GetAsync(lane.Archive))!;
+        Assert.Equal(["Value", "Pin"], snapshot.Columns.Select(c => c.Path));
+        Assert.Equal(CkArchiveStatus.Failed, snapshot.Status);
+        Assert.Equal(["Pin"], snapshot.HiddenColumns);
+        A.CallTo(() => lane.Audit.RecordTransitionAsync(A<string>._, A<OctoObjectId>._, A<CkArchiveStatus>._,
+            A<CkArchiveStatus>._, A<string>.That.Contains("RedactHiddenColumns"))).MustNotHaveHappened();
     }
 
     [Fact]
