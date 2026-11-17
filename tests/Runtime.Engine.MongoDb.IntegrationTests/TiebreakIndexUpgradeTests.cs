@@ -601,7 +601,7 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
     /// <summary>
     ///     A unique index with the keys and the types of the definition but a further predicate in its partial filter keeps
     ///     only part of the documents unique: it is neither adopted by an index update (ours is built, the other one dropped
-    ///     after the build) nor counted as a Unique index by the gate (CodeRabbit round 2).
+    ///     after the build) nor counted as a Unique index by the gate (CodeRabbit rounds 2 and 3).
     /// </summary>
     [Fact]
     public async Task UniqueIndexWithAFurtherPredicate_IsNotAdopted_NorCountedByTheGate()
@@ -613,7 +613,9 @@ public class TiebreakIndexUpgradeTests(ImportTestCkModelFixture fixture)
             var unique = Assert.Single(await IndexesAsync(collection), i => i.GetValue("unique", false).ToBoolean());
             var expectedName = unique["name"].AsString;
             var engineFilter = unique["partialFilterExpression"].AsBsonDocument;
-            const string foreignName = "unique_with_predicate";
+            // Named like a CK index (the alternate name of its slot), so neither the gate nor the index update can tell it
+            // from ours by its name: only the further predicate in its partial filter excludes it.
+            var foreignName = TiebreakIndexShape.AlternateName(expectedName, "a1b2c3");
             await collection.Indexes.DropOneAsync(expectedName);
             var foreignFilter = engineFilter.DeepClone().AsBsonDocument;
             foreignFilter.Add(OtherFieldPath, new BsonDocument("$exists", true));
