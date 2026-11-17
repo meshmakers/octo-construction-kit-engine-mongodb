@@ -49,6 +49,8 @@ public class ArchiveReconcilerTests
         await NewSut().ReconcileTenantAsync(Tenant, TestContext.Current.CancellationToken);
 
         A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._)).MustNotHaveHappened();
+        A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._, A<string>._,
+            A<IReadOnlyList<string>>._)).MustNotHaveHappened();
         A.CallTo(() => _audit.RecordTransitionAsync(A<string>._, A<OctoObjectId>._, A<CkArchiveStatus>._, A<CkArchiveStatus>._, A<string?>._))
             .MustNotHaveHappened();
     }
@@ -63,6 +65,8 @@ public class ArchiveReconcilerTests
         await NewSut().ReconcileTenantAsync(Tenant, TestContext.Current.CancellationToken);
 
         A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._)).MustNotHaveHappened();
+        A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._, A<string>._,
+            A<IReadOnlyList<string>>._)).MustNotHaveHappened();
         A.CallTo(() => _audit.RecordTransitionAsync(A<string>._, A<OctoObjectId>._, A<CkArchiveStatus>._, A<CkArchiveStatus>._, A<string?>._))
             .MustNotHaveHappened();
     }
@@ -76,7 +80,8 @@ public class ArchiveReconcilerTests
 
         await NewSut().ReconcileTenantAsync(Tenant, TestContext.Current.CancellationToken);
 
-        A.CallTo(() => _store.SetStatusAsync(rt, CkArchiveStatus.Failed)).MustHaveHappenedOnceExactly();
+        A.CallTo(() => _store.SetStatusAsync(rt, CkArchiveStatus.Failed, "reconciliation: backing CrateDB table missing",
+            A<IReadOnlyList<string>>.That.IsEmpty())).MustHaveHappenedOnceExactly();
         A.CallTo(() => _audit.RecordTransitionAsync(
             Tenant, rt, CkArchiveStatus.Activated, CkArchiveStatus.Failed,
             A<string?>.That.Matches(s => s != null && s.Contains("missing", StringComparison.OrdinalIgnoreCase))))
@@ -93,6 +98,8 @@ public class ArchiveReconcilerTests
         await NewSut().ReconcileTenantAsync(Tenant, TestContext.Current.CancellationToken);
 
         A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._)).MustNotHaveHappened();
+        A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._, A<string>._,
+            A<IReadOnlyList<string>>._)).MustNotHaveHappened();
     }
 
     [Fact]
@@ -105,6 +112,8 @@ public class ArchiveReconcilerTests
 
         // No state changes; no entity touched.
         A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._)).MustNotHaveHappened();
+        A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._, A<string>._,
+            A<IReadOnlyList<string>>._)).MustNotHaveHappened();
         // No drop call exists on the management client either; orphans are just logged.
     }
 
@@ -121,6 +130,8 @@ public class ArchiveReconcilerTests
         // Both archives map to the legacy table; with it present neither is flipped. This case
         // changes once per-archive table routing replaces the shared LegacyStreamDataTable.
         A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._)).MustNotHaveHappened();
+        A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._, A<string>._,
+            A<IReadOnlyList<string>>._)).MustNotHaveHappened();
     }
 
     private static async IAsyncEnumerable<ArchiveSnapshot> ToAsync(ArchiveSnapshot[] items)

@@ -83,9 +83,11 @@ internal sealed class ArchiveReconciler : IArchiveReconciler
                 "Reconciliation for tenant '{TenantId}': archive {ArchiveRtId} is Activated in Mongo but its CrateDB table is missing — flipping to Failed.",
                 tenantId, snapshot.RtId);
 
-            await _store.SetStatusAsync(snapshot.RtId, CkArchiveStatus.Failed);
+            // AB#6247: the reason is kept on the archive (Archive.StatusReason) as well as in the audit trail.
+            const string reason = "reconciliation: backing CrateDB table missing";
+            await _store.SetStatusAsync(snapshot.RtId, CkArchiveStatus.Failed, reason, []);
             await _audit.RecordTransitionAsync(tenantId, snapshot.RtId, CkArchiveStatus.Activated, CkArchiveStatus.Failed,
-                "reconciliation: backing CrateDB table missing");
+                reason);
             driftCount++;
         }
 

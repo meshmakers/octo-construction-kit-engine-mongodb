@@ -8,7 +8,20 @@
   defaults the communication controller projects into a tenant are platform-only and must never reach a file a tenant
   identity can read; the controller projects them again after a restore (AB#7245). `MongoDumpOptions.ExcludeCollections`
   is new and empty by default, so `ForArchive` and every other dump are unchanged.
-
+- AB#9138 Fix: a deep sorted page of a paged runtime-entity query no longer spends its time in MongoDB's plan trial.
+  Since AB#8896 the page (`$match`, `$sort`, `$skip`, `$limit`) is planned as a whole; for a deep page none of the
+  candidate plans returns results early, so every request ran all candidates through the trial (909,000 entities, skip
+  50,000: 56-67 s, execution ~90 ms) and the plan cache never kept the winner. The page read is now hinted to the index
+  that provides its sort (`SortIndexHint`: `ckTypeId` followed by the sort keys, same or reversed directions; never a
+  partial, sparse, hidden, collated, text, hashed or 2dsphere index), from skip `PagingIndexHintMinSkip` on (**new
+  setting**, default 1000). When the filter has an index of its own the page is hinted only with at least
+  `PagingIndexHintMinMatches` (**new setting**, default 50,000) matches, counted exactly when the total is asked for (the
+  count then runs before the page and is not repeated) or with a capped count. No hint inside a transaction, for
+  unsorted pages, for pipelines with stages around the match (`$geoNear`, association filters) and when no index
+  provides the sort. The indexes come from `CollectionIndexCache` (one `listIndexes` per collection and process every 5
+  minutes, invalidated by this process's index updates); a hint naming a dropped index is retried once without it. New
+  `IMongoDbDataSourceCollection.Aggregate` overload with `AggregateOptions`. Measurements: `CLAUDE.md`, "Deep sorted
+  pages: the index hint".
 - AB#9110 Fix: paged stream-data queries return every row exactly once, also without a sort order. The simple query
   (`ExecuteQueryAsync`, transient and persistent `rows`) ran LIMIT/OFFSET without ORDER BY when no sort order was given
   (`AddOrderByTiebreaker` did nothing without an existing ORDER BY), and with a sort order only `timestamp` broke ties.

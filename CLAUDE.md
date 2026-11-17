@@ -167,8 +167,10 @@ red suite three times into the job timeout, 51009/51014, and hid a mass failure,
 (no dump) so a single hung test aborts the run and is named in the log. Flaky tests are fixed or
 handled per test, never by retrying the step.
 
-**Container memory caps (AB#8511).** The shared mongod runs with `--wiredTigerCacheSizeGB 1` and a 12 GiB container
-limit (measured peaks 6.4-8.4 GiB, mostly WiredTiger data handles of the fixture databases, not cache), every CrateDB test
+**Container memory caps (AB#8511).** The shared mongod runs with `--wiredTigerCacheSizeGB 3`, closes idle WiredTiger
+data handles after 30 s (`wiredTigerFileHandleCloseIdleTime`) and has a 12 GiB container limit (measured peak 6.7 GiB,
+mostly the data handles of the fixture databases, not data). A 1 GB cache was full during the startup burst and
+WiredTiger rolled transactions back (`transaction rolled back because of cache overflow`, CI 70416/70685); every CrateDB test
 container with a 1 GB heap and a 3 GiB limit (`Fixtures/TestContainerLimits.cs`, pinned by
 `TestContainerLimitsTests`). Without them one suite took memory from the whole CI node and several suites at once
 stalled until MongoDB aborted transactions after 60 s. Never raise `transactionLifetimeLimitSeconds` or a test budget
@@ -855,6 +857,62 @@ Implementation in `SingleOriginRtQuery.CreateAssociationCountNavigation`:
 - Triggered when `NavigationPair.AssociationCountFilter` is set
 - Runs pre-pagination in `_associationStageDefinitions`, then enriches post-pagination via `CreateInnerNavigation`
 
+## Deep sorted pages: the index hint (AB#9138)
+
+Since AB#8896 a page (`$match`, `$sort`, `$skip`, `$limit`) is planned by MongoDB as a whole. For a deep page no
+candidate plan returns results early, so the multi-planner ran every candidate through its trial on every request, and
+the plan cache never kept the winner (the cached works value comes from page 1). On sbeg (909,000 `EdaMessage`, skip
+50,000) that took 56-67 s; the execution itself took ~90 ms, and with a hint 52 ms. Rules:
+
+- **Hint the index that provides the sort.** `SingleOriginQuery.ChoosePageHintAsync` hints the page read
+  (`AggregateOptions.Hint`) to the first index `SortIndexHint.Choose` finds: keys `ckTypeId` followed by the sort keys,
+  further keys allowed, all directions equal or all reversed. Never a partial, sparse, hidden or collated index, never
+  text/hashed/2dsphere keys: a hint must not return fewer documents or force an index the query cannot use. Both CK
+  shapes qualify (legacy `{ckTypeId, attr, rtState}`, AB#8960 `{ckTypeId, attr, _id, rtState}`), and the System Entity
+  index `{ckTypeId, _id, rtState}` serves a sort by rtId.
+- **Only deep pages** (`OctoSystemConfiguration.PagingIndexHintMinSkip`, default 1000; 0 always, negative never): below
+  it the trial ends early (skip 1,000: 14 ms without, 1 ms with the hint).
+- **A filter with an index of its own** (`SortIndexHint.HasFilterIndex`: an index leading, after `ckTypeId`, with a
+  filtered field other than `ckTypeId`, `rtState` and the first sort key) is a real alternative for the planner: few
+  matches read through it and sorted are faster than the walk along the sort index (2,000 matches: 32 ms planner,
+  406 ms hinted). The page is then hinted only with at least `PagingIndexHintMinMatches` matches (default 50,000):
+  counted exactly when the caller asked for the total - that count then runs **before** the page and is reused (the
+  asset repository's `TotalCoveringThePage` keeps the total at least `offset + items`, in both orders) - otherwise with a
+  capped count (`ExecuteCappedCount`, `$limit` before `$count`, 2-21 ms over 900,000 entities).
+- **No hint** without a sort, inside a transaction (a hint naming an index dropped meanwhile fails the command, which
+  aborts the transaction - no retry possible; GraphQL queries run without a transaction), and for pipelines with stages
+  around the match (`$geoNear`, text search, association filters: `PageSortFollowsMatch`).
+- **Index list** from `CollectionIndexCache` (`listIndexes` per database + collection, cached 5 minutes per process;
+  every index create/drop of `MongoDbDataSourceCollection` invalidates it: an entry carries the invalidation generation it
+  was read in and is used only while that generation is current, so a list read across an invalidation is never reused,
+  even when it was stored after it; a failure means no hint and is remembered for 10 s only). The page is hinted by the index's **key pattern**, so
+  an index dropped or rebuilt under its name with other keys by another process fails the hint (codes 2/27): the entry is
+  invalidated and the page is read once more without a hint. An index whose key pattern another index shares (a collated
+  or partial twin) is never chosen: the server refuses a key-pattern hint that matches several indexes. AB#8960 (PR 253) is to reuse the cache for its tiebreak
+  gate.
+- **Settings are process-wide**: `TenantContext` hands `PagingIndexHintMinSkip` / `PagingIndexHintMinMatches` to
+  `SortIndexHint` (one system configuration per process, like the schema instance prefix); a value of 0 or less for the
+  matches hints without counting.
+
+Measured with `PagedQuerySortHintPerformanceTests` (`Category=Performance`; 900,000 entities, page 10, 8 candidate plans,
+median of 3, local Testcontainer; planner -> hint):
+
+| Case | Skip | Planner | Hint | Engine (decision included) |
+|---|---|---|---|---|
+| sort rtId | 0 / 100 / 1,000 / 10,000 | 2 / 3 / 14 / 158 ms | 1 / 1 / 1 / 7 ms | |
+| sort rtId | 50,000 | 616 ms | 21 ms | 17 ms (with total 141 ms) |
+| sort CK attribute asc / desc | 50,000 | 742 / 666 ms | 22 / 20 ms | |
+| filter without index (half), sort rtId | 50,000 | 3,350 ms | 487 ms | |
+| indexed range filter, 2,000 matches | 1,000 | 32 ms | 406 ms | 8 ms, planner kept (capped count 2 ms) |
+| indexed range filter, 20,000 matches | 10,000 | 20 ms | 405 ms | 30 ms, planner kept (capped count 9 ms) |
+| indexed range filter, 100,000 matches | 50,000 | 1,781 ms | 426 ms | 433 ms, hinted (capped count 21 ms) |
+
+Tests: `SortIndexHintTests` (unit: index shapes, exclusions, filter fields, competing indexes),
+`CollectionIndexCacheTests` (unit: reuse until invalidated, a list read across an invalidation is not reused),
+`PagedQuerySortHintTests` (explain: deep page hinted without SORT - neither in the winning plan nor as an aggregation-level
+`$sort` -, ascending/descending, rtId; shallow, unsorted and unprovided sorts without hint; transaction; stale hint
+retried; indexed selective filter keeps the planner and counts once).
+
 ## GridFS read preference and read-your-writes (AB#7256)
 
 `MongoRepository.GetGridFsBucket()` reads with `SecondaryPreferred`, writes with `w:majority`. A secondary can lag behind
@@ -1109,6 +1167,37 @@ missing table, then a read and `DROP TABLE IF EXISTS` succeed; a held pool of 1 
 error; a discarded connection frees its slot; red without the fix),
 `StreamData.UnitTests/CrateDatabaseClientConnectionPoolTests` (classification, no retry, breaker stays closed, driver
 internals present).
+
+### Backups leave Hidden columns out (AB#9141)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** A tenant backup leaves out the values of every column
+known to reach a Hidden attribute (residual risk below). `CrateDbStreamDataRepository.FindHiddenColumnExclusion(snapshot, includeRecorded)` is the one
+rule: the columns that reach Hidden under the current CK model (`ArchiveHiddenColumnGuard.FindHiddenColumns`, any status), with
+`includeRecorded` also `Archive.HiddenColumns`; for a rollup the aggregate columns of an aggregation over a Hidden attribute; plus
+the computed columns derived from them (current or pending formula, transitively, every stored version). Used by:
+
+- the native copy: `ResolveCopyTargetAsync` sets `ArchiveCopyTarget.ExcludedColumns`, `StagingCopyRunner.PlanAsync` drops them
+  from the data table's description (= the manifest), and a data slice is copied with a column list
+  (`CopyStatement.CopyTo(..., columns)`, `format = 'json_object'` - a column list alone makes CrateDB write `json_array`, which
+  `COPY FROM` cannot load). An archive without such a column is copied with the statement as before;
+- the row export `ExportRowsAsync` (format 1 and the archive data export) - **behaviour change:** it used to leave out only the
+  recorded columns of an archive Failed on Hidden columns;
+- `EnsureArchiveCreatedAsync` and `ImportRowsAsync` for a raw or time-range archive that is not Activated
+  (`WithoutColumnsStillHidden`, current model; the recorded columns only when the model cannot be read): the restore provisions
+  and imports such an archive without them and without conflict precedence keys on them. `ImportRowsAsync` decides per column and leaves
+  out only the ones the table lacks (`WithoutHiddenColumnsTheTableLacksAsync`): a column of a table provisioned before it became
+  Hidden keeps receiving its values (with its precedence key), because a required column is `NOT NULL` there. The lifecycle refuses every activation while a column reaches
+  Hidden, so no other path gets there; a column visible again is provisioned as before (`RetryActivation`).
+- The COPY projection names top-level columns only: `information_schema` also lists object sub-columns (`obj['member']`), which
+  are copied with their object column and are kept in the manifest description (`StagingCopyRunner.TopLevelColumn`).
+- When the CK model cannot be read, a backup leaves out the recorded columns only (warning). Failing the dump instead was
+  rejected (Odin, 2026-11-16): a tenant with a broken model (ResolveFailed) must stay backupable for its recovery. Residual
+  risk: a column made Hidden by a model that cannot be read, and not yet recorded by the re-validation, can end up in the backup.
+  Test: `HiddenColumnExclusionTests.AModelThatCannotBeRead_LeavesTheRecordedColumnsOut`.
+
+Tests: `ComputedColumns/ArchiveHiddenColumnBackupIntegrationTests` (real CrateDB: staged files, manifest, export, restore,
+redaction), `StreamData.UnitTests/Copy/HiddenColumnExclusionTests`, `CopyStatementTests`. Rule and restore: engine
+`docs/archive-hidden-columns.md`, "Backups".
 
 ### Conflict Precedence — the upsert stops being last-write-wins (AB#5247)
 
@@ -2695,18 +2784,27 @@ the catalog side.
   column builder (`ArchivePathTypeResolver`) refuses a Hidden column and a whole-record column whose record contains a
   Hidden sub-attribute, and `BuildRecordObject` leaves Hidden sub-attributes out like Secret ones (defence in depth).
   Pinned by `ArchiveHiddenAccessTests` (mutation-checked).
-- **Known limitations of the archive re-check (G3 re-review; Phase 4 prerequisites, User Story AB#6247 under F4.3
-  AB#5697, Epic AB#5584):**
-  - **N2 — services without stream data never re-check.** `RevalidateArchiveAccessAsync` needs the archive lifecycle
-    service, which only exists where a stream-data repository is registered. Identity, comm-controller and
-    platform-services own System.Identity, System.Communication and System.UI but register none, and the services that
-    do have stream data take the `AlreadyInstalled` branch for those models. An attribute made Hidden by one of those
-    models keeps being archived until a stream-data service re-checks (e.g. on its next own import).
-  - **N3 — `Failed` blocks the whole archive.** A `Failed` archive refuses every insert and every query (visible columns
-    included), pipeline writes throw `ArchiveNotActivatedException`, new data is lost until it is fixed. The transition
-    records no reason (one WARN line). Recovery: remove or change the offending column, then retry the activation; there
-    is no "drop column" operation yet.
-  - No production model uses Hidden on an archived attribute before Phase 4, so neither applies today.
+- **N2/N3 closed (AB#6247, F4.3 AB#5697, Epic AB#5584; engine `docs/archive-hidden-columns.md`):**
+  - **N2 — every service's import reaches the archives.** `RevalidateArchiveAccessAsync` is public
+    (`ITenantContext.RevalidateArchiveAccessAsync`, default implementation does nothing). It still needs the archive
+    lifecycle service, so in identity, comm-controller and platform-services it returns at once; the stream-data services
+    run it from `PosCreatePosUpdateTenantConsumer` (octo-common-services) on every `PosUpdateTenant` of scope `Full`, i.e.
+    after a model import in any service.
+  - **N3 — `Failed` on Hidden columns is readable and recoverable.** `MongoArchiveRuntimeStore` persists
+    `Archive.StatusReason` and `Archive.HiddenColumns` (System.StreamData 1.27.0) with the status in one write
+    (`SetStatusAsync(rtId, status, reason, hiddenColumns)`; the two-argument write clears both). The query paths of
+    `CrateDbStreamDataRepository` use `EnsureArchiveQueryableAsync`: an archive with `IsFailedOnHiddenColumns` answers
+    queries with a snapshot without the Hidden columns and without computed columns whose formula reads one (projection
+    and names refused, current and pending formulas); the row export (`ExportRowsAsync`) leaves the Hidden columns and
+    every stored version of such computed columns (transitively, `{base}__v{N}` with a numeric N) out too; every write still requires
+    `Activated`. `DropIngestedColumnStorageAsync` drops the columns (`ALTER TABLE … DROP COLUMN IF EXISTS`; never a
+    standard column, never a physical column a kept path also maps to, only plain identifiers) and
+    `RemoveIngestedColumnsAsync` removes them from the definition; the engine's
+    `RedactHiddenColumnsAsync` (CK method `Archive.RedactHiddenColumns-1`) runs both and resumes the archive.
+    `ArchiveReconciler` and a failed provisioning record their reason too.
+  - Tests: `ArchiveHiddenAccessTests` (reason and columns round-trip through MongoDB, the public re-validation),
+    `ComputedColumns/ArchiveHiddenColumnRedactionIntegrationTests` (real CrateDB: readable history, refused writes, drop,
+    resume, idempotence), `StreamData.UnitTests/CrateDbFailedOnHiddenColumnsReadGateTests`.
 - **Backlog (G3 re-review N6/N7):**
   - **N6 — cost:** the re-check runs after every single model import (also per model of a batch or blueprint): it
     loads the cache, enumerates all archives and loads each active one, between the Pre and Post notification. Skip it

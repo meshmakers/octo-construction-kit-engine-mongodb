@@ -60,6 +60,26 @@ public class CopyStatementTests
     }
 
     [Fact]
+    public void CopyTo_WithColumns_NamesThemAndKeepsJsonObjects_AndTheCredentialStaysOutOfTheRedactedText()
+    {
+        // AB#9141: a dump that leaves Hidden columns out names the others; json_object keeps the files loadable.
+        var statement = CopyStatement.CopyTo(Table, "timestamp", From, To, S3(), ["rtid", "timestamp", "va\"lue"]);
+
+        var sql = statement.Reveal();
+        Assert.StartsWith($"COPY {Table} (\"rtid\", \"timestamp\", \"va\"\"lue\") WHERE \"timestamp\" >= '2026-01-01 00:00:00.000'", sql);
+        Assert.EndsWith("WITH (compression = 'gzip', format = 'json_object', protocol = 'http')", sql);
+        AssertNoCanary(statement.Redacted);
+        Assert.Contains("(\"rtid\", \"timestamp\", \"va\"\"lue\")", statement.Redacted);
+        Assert.Contains("format = 'json_object'", statement.Redacted);
+    }
+
+    [Fact]
+    public void CopyTo_WithAnEmptyColumnList_IsRefused()
+    {
+        Assert.Throws<ArgumentException>(() => CopyStatement.CopyTo(Table, "timestamp", From, To, S3(), []));
+    }
+
+    [Fact]
     public void CopyTo_Az_PutsSasTokenAndKeyInWith_AndRedactedTextMasksBoth()
     {
         var statement = CopyStatement.CopyTo(Table, "window_start", From, To, Az());

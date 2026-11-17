@@ -205,6 +205,17 @@ public interface ITenantContext
     /// </summary>
     Task<bool> IsStreamDataEnabledAsync();
 
+    /// <summary>
+    /// CK v2 (AB#6247, N2): re-checks every activated archive of the tenant against Hidden attributes with the CK model
+    /// set the tenant holds now. An archive whose column reaches a Hidden attribute goes <c>Failed</c> with its reason and
+    /// Hidden columns recorded. The import of the service that imported the model runs it already; services that own
+    /// stream data call it when another service announces a model change (<c>PosUpdateTenant</c>, octo-common-services),
+    /// because the importing service (identity, communication controller, platform services) has no stream-data
+    /// repository. Does nothing without a stream-data repository, with stream data disabled or without System.StreamData;
+    /// best-effort (a failure is logged, not thrown). The default implementation does nothing.
+    /// </summary>
+    Task RevalidateArchiveAccessAsync() => Task.CompletedTask;
+
     #endregion Access Management
 
     #region Tenant Management

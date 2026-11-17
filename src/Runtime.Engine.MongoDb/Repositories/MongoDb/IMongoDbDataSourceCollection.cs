@@ -51,6 +51,9 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
     IAsyncCursor<TOutput> Aggregate<TOutput>(IOctoSession session,
         PipelineDefinition<TDocument, TOutput> pipelineDefinition);
 
+    IAsyncCursor<TOutput> Aggregate<TOutput>(IOctoSession session,
+        PipelineDefinition<TDocument, TOutput> pipelineDefinition, AggregateOptions? options);
+
     Task<long> GetTotalCountAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition);
 
     /// <summary>
