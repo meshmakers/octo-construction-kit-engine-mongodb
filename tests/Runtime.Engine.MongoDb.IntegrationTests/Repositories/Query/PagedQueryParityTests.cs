@@ -21,7 +21,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Q
 ///     window holds exactly the items of the same window of the unpaged query, in the same order. Without one the order
 ///     of <c>$skip</c>/<c>$limit</c> is not defined (no tiebreak, old and new alike), so only what does not depend on
 ///     the order is checked: the total count, the page size and that every page item is an entity of the unpaged
-///     query. Written and green before the change; it stays unchanged.
+///     query. Written and green before the change; it stays unchanged. Since AB#8960 every page ends its sort with
+///     the rtId, which <see cref="PagedQuery_Unsorted_PagesFollowTheRtIdOrder" /> checks on top.
 /// </summary>
 [Collection(SampleRtModelDataCollection.Name)]
 public class PagedQueryParityTests(SampleRtModelDataFixture fixture)
@@ -74,6 +75,33 @@ public class PagedQueryParityTests(SampleRtModelDataFixture fixture)
             Assert.Equal(Math.Clamp(unpaged.Ids.Count - skip, 0, take), page.Ids.Count);
             Assert.Equal(page.Ids.Count, page.Ids.Distinct().Count());
             Assert.All(page.Ids, id => Assert.Contains(id, unpagedIds));
+        }
+
+        await session.CommitTransactionAsync();
+    }
+
+    /// <summary>
+    ///     AB#8960: without a sort order a page is ordered by rtId (the tiebreak of every page), so every window holds
+    ///     exactly the items of the same window of the unpaged query sorted by rtId - for every shape of
+    ///     <see cref="CountParityCases" /> (navigation filters, permission filters, attribute search ...).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(CountParityCases.Names), MemberType = typeof(CountParityCases))]
+    public async Task PagedQuery_Unsorted_PagesFollowTheRtIdOrder(string caseName)
+    {
+        var c = CountParityCases.Get(caseName);
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        var sortedByRtId = await QueryAsync(repository, session, c, sortByRtId: true);
+        foreach (var (skip, take) in Windows)
+        {
+            var page = await QueryAsync(repository, session, c, sortByRtId: false, skip, take);
+
+            Assert.Equal(sortedByRtId.TotalCount, page.TotalCount);
+            Assert.Equal(sortedByRtId.Ids.Skip(skip).Take(take).ToList(), page.Ids);
         }
 
         await session.CommitTransactionAsync();

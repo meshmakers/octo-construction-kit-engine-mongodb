@@ -579,6 +579,46 @@ public class GetRtEntitiesByInterfaceAsyncTests(InterfaceQueryFixture fixture)
         Assert.Equal(InterfaceQueryReasons.UnknownMember, exception.Reason);
     }
 
+    /// <summary>
+    ///     AB#8960: paging through an interface over entities whose sort key ties everywhere (and without a sort)
+    ///     returns every entity exactly once, in rtId order inside the tie, across the merged collections; numbers are
+    ///     assigned round-robin so that consecutive rtIds lie in different collections.
+    /// </summary>
+    [Theory]
+    [InlineData(true, 3)]
+    [InlineData(true, 4)]
+    [InlineData(false, 3)]
+    [InlineData(false, 5)]
+    public async Task PagingThroughTiedSortKeys_ReturnsEveryEntityExactlyOnceInRtIdOrder(bool sortByName, int pageSize)
+    {
+        await fixture.ResetAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        string[] types = ["Asset", "Pump", "Sensor", "Gauge", "Valve", "Vault"];
+        const int count = 24;
+        for (var number = 1; number <= count; number++)
+        {
+            await InterfaceQuerySeed.InsertAsync(repository, types[number % types.Length], number, "tied", 1);
+        }
+
+        var options = sortByName
+            ? RtEntityQueryOptions.Create().SortOrder("Name", SortOrders.Ascending)
+            : RtEntityQueryOptions.Create();
+        var paged = new List<int>();
+        for (var skip = 0; ; skip += pageSize)
+        {
+            var page = await QueryAsync(repository, Named, options, skip, pageSize, false, false);
+            var numbers = InterfaceQuerySeed.Numbers(page.Items);
+            if (numbers.Length == 0)
+            {
+                break;
+            }
+
+            paged.AddRange(numbers);
+        }
+
+        Assert.Equal(Enumerable.Range(1, count), paged);
+    }
+
     [Fact]
     public async Task MoreCollectionRootsThanTheCap_IsRefused_ExactlyTheCapWorks()
     {

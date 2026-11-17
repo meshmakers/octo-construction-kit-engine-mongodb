@@ -58,8 +58,9 @@ public class PagedQueryPipelineTests(SampleRtModelDataFixture fixture)
                 query.CreateCountPipelineStageDefinitions());
         }
 
-        // Only the "Sorted" shape configures a sort order; the runtime text search filters in the $match.
-        AssertPagePipeline(stages, enrichmentStages, countStages, expectSort: caseName == "Sorted");
+        // Every page sorts (AB#8960: the caller's keys, then _id - or _id alone without a sort order); the runtime
+        // text search filters in the $match.
+        AssertPagePipeline(stages, enrichmentStages, countStages);
     }
 
     [Fact]
@@ -149,13 +150,13 @@ public class PagedQueryPipelineTests(SampleRtModelDataFixture fixture)
     }
 
     /// <summary>
-    ///     A page pipeline: no <c>$facet</c>, no <c>$count</c>; it ends with <c>$skip</c> → <c>$limit</c>, preceded by
-    ///     the only <c>$sort</c> of the pipeline when a sort order is configured and by no sort otherwise; none of the
-    ///     enrichment lookups is in it, and the stages before the sort narrow the result set exactly as the count
-    ///     pipeline does (the association lookups in it are the filters, not the enrichment).
+    ///     A page pipeline: no <c>$facet</c>, no <c>$count</c>; it ends with <c>$sort</c> → <c>$skip</c> → <c>$limit</c>,
+    ///     and that <c>$sort</c> is the only one of the pipeline and ends with <c>_id</c> (AB#8960: also without a sort
+    ///     order); none of the enrichment lookups is in it, and the stages before the sort narrow the result set exactly
+    ///     as the count pipeline does (the association lookups in it are the filters, not the enrichment).
     /// </summary>
     internal static void AssertPagePipeline(IReadOnlyList<BsonDocument> stages,
-        IReadOnlyList<BsonDocument> enrichmentStages, IReadOnlyList<BsonDocument> countStages, bool expectSort)
+        IReadOnlyList<BsonDocument> enrichmentStages, IReadOnlyList<BsonDocument> countStages)
     {
         var names = stages.Select(s => s.GetElement(0).Name).ToList();
 
@@ -168,17 +169,10 @@ public class PagedQueryPipelineTests(SampleRtModelDataFixture fixture)
             Assert.DoesNotContain(enrichmentStage, stages);
         }
 
-        var filterStages = stages.Take(stages.Count - 2).ToList();
-        if (expectSort)
-        {
-            Assert.Single(names, "$sort");
-            Assert.Equal("$sort", names[^3]);
-            filterStages = stages.Take(stages.Count - 3).ToList();
-        }
-        else
-        {
-            Assert.DoesNotContain("$sort", names);
-        }
+        Assert.Single(names, "$sort");
+        Assert.Equal("$sort", names[^3]);
+        Assert.Equal("_id", stages[^3]["$sort"].AsBsonDocument.Names.Last());
+        var filterStages = stages.Take(stages.Count - 3).ToList();
 
         // Without sort and paging the page pipeline narrows exactly like the count pipeline (minus its $count).
         Assert.Equal(countStages.Take(countStages.Count - 1).ToList(), filterStages);

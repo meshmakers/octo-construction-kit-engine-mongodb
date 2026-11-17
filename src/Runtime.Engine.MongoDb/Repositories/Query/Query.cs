@@ -111,10 +111,82 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
     }
 
     /// <summary>
+    ///     True when the caller's sort orders by <c>_id</c> (rtId) on one of its keys: every key after it can never
+    ///     decide, so the order is total and needs no tiebreak.
+    /// </summary>
+    internal bool IsSortUnique => _sortKeys.Any(k => k.Path == Constants.IdField);
+
+    /// <summary>The path of the caller's first sort key, or null without a caller sort.</summary>
+    internal string? FirstSortKeyPath => _sortKeys.Count > 0 ? _sortKeys[0].Path : null;
+
+    /// <summary>
+    ///     True when the stages before the page sort already order the result and there is no caller sort: a
+    ///     <c>$geoNear</c> (nearest first) or the text-score sort of a text search (best match first). A page then keeps
+    ///     that order instead of the <c>_id</c> tiebreak, which would replace it.
+    /// </summary>
+    protected virtual bool PreStagesDefineOrder => _textFilter != null;
+
+    /// <summary>
+    ///     The sort of a paged read (AB#8960): the caller's sort keys, then <c>_id</c> in the direction of the last
+    ///     caller key - so that one index <c>{…, attr, _id}</c> serves the page forwards and backwards - unless the sort
+    ///     is already unique (<see cref="IsSortUnique" />); without a caller sort <c>_id</c> ascending alone, or null
+    ///     (no sort) when <see cref="PreStagesDefineOrder" />. Only a total order makes <c>$skip</c>/<c>$limit</c>
+    ///     deterministic: over equal sort keys (or no sort) MongoDB returns the ties in an order that can change from
+    ///     one page to the next, so pages would repeat or miss entities. Unpaged reads keep the caller's sort as it is
+    ///     (<see cref="AddPostStagesToPipeline(IList{IPipelineStageDefinition})" />), and so do the association
+    ///     navigations, whose entity-driven path (AB#4369) depends on an index-backed sort with a <c>$lookup</c>
+    ///     between <c>$sort</c> and <c>$limit</c>.
+    /// </summary>
+    protected SortDefinition<TEntity>? CreatePagingSortDefinition()
+    {
+        if (_sortKeys.Count == 0)
+        {
+            return PreStagesDefineOrder ? null : Builders<TEntity>.Sort.Ascending(Constants.IdField);
+        }
+
+        var keys = new List<SortDefinition<TEntity>>(_sortDefinitions);
+        if (!IsSortUnique)
+        {
+            keys.Add(_sortKeys[^1].Descending
+                ? Builders<TEntity>.Sort.Descending(Constants.IdField)
+                : Builders<TEntity>.Sort.Ascending(Constants.IdField));
+        }
+
+        return Builders<TEntity>.Sort.Combine(keys);
+    }
+
+    /// <summary>
+    ///     The sort stages of a page: with <paramref name="idTiebreak" /> the <c>$sort</c> of
+    ///     <see cref="CreatePagingSortDefinition" /> (none when it is null), otherwise the caller's sort as it is (none
+    ///     without one).
+    /// </summary>
+    protected IReadOnlyList<IPipelineStageDefinition> CreatePageSortStageDefinitions(bool idTiebreak)
+    {
+        if (!idTiebreak)
+        {
+            return CreateSortStageDefinitions();
+        }
+
+        var sort = CreatePagingSortDefinition();
+        return sort == null ? [] : [PipelineStageDefinitionBuilder.Sort(sort)];
+    }
+
+    /// <summary>
     /// The configured sort keys as resolved MongoDB field paths with their direction, in sort order
     /// (AB#7019: the application-side merge of an interface query compares rows on exactly these keys).
     /// </summary>
     internal IReadOnlyList<(string Path, bool Descending)> SortKeys => _sortKeys;
+
+    /// <summary>
+    ///     The keys a page really sorts by (AB#8960): with <paramref name="idTiebreak" /> the caller's keys and then
+    ///     <c>_id</c> in the direction of the last one, as <see cref="CreatePagingSortDefinition" /> builds them (unless the
+    ///     sort is unique already); without it the caller's keys. Empty without a caller sort. An index hint (AB#9138)
+    ///     must provide all of them, or the hinted page would sort every document the index returns.
+    /// </summary>
+    internal IReadOnlyList<(string Path, bool Descending)> PageSortKeys(bool idTiebreak) =>
+        !idTiebreak || _sortKeys.Count == 0 || IsSortUnique
+            ? _sortKeys
+            : [.. _sortKeys, (Constants.IdField, _sortKeys[^1].Descending)];
 
     /// <summary>
     /// The configured sort definitions combined, or null when no sort order is configured.

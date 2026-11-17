@@ -441,10 +441,32 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
     }
 
-    public async Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting,
-        CkModelId? scopeToModelId = null, CancellationToken cancellationToken = default)
+    public Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting,
+        CkModelId? scopeToModelId = null, CancellationToken cancellationToken = default) =>
+        UpdateIndexCoreAsync(session, includeModelsInStateImporting, scopeToModelId, upgradeTiebreakIndexes: false,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task UpgradeTiebreakIndexesAsync(IOctoSession session, CancellationToken cancellationToken = default) =>
+        UpdateIndexCoreAsync(session, false, null, upgradeTiebreakIndexes: true, cancellationToken);
+
+    /// <summary>
+    ///     The index update of every collection root (or of those of one model). With
+    ///     <paramref name="upgradeTiebreakIndexes" /> a CK Ascending index in the legacy shape is rebuilt in the
+    ///     tiebreak shape (AB#8960, <see cref="TiebreakIndexShape" />): the new index is built first, the legacy one is
+    ///     dropped after it, collection by collection. Without it (CK import, <c>UpdateIndexesAsync</c>) a legacy index
+    ///     is kept as it is - a model import must not rebuild the indexes of large collections while a tenant is
+    ///     resolved - and only indexes that do not exist yet are created, in the tiebreak shape.
+    /// </summary>
+    private async Task UpdateIndexCoreAsync(IOctoSession session, bool includeModelsInStateImporting,
+        CkModelId? scopeToModelId, bool upgradeTiebreakIndexes, CancellationToken cancellationToken)
     {
-        if (scopeToModelId != null)
+        if (upgradeTiebreakIndexes)
+        {
+            _logger.LogInformation("Upgrading the indexes of tenant '{TenantId}' to the paging tiebreak shape (AB#8960)",
+                TenantId);
+        }
+        else if (scopeToModelId != null)
         {
             _logger.LogInformation(
                 "Updating indexes of tenant '{TenantId}' scoped to model '{ModelId}'", TenantId, scopeToModelId);
@@ -505,7 +527,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         {
             effectiveToken.ThrowIfCancellationRequested();
             var baseTypes = baseTypesMap.TryGetValue(ckTypeInfo.CkTypeId, out var types) ? types : [];
-            await UpdateIndexesForCollectionRoot(ckTypeInfo, baseTypes, allCkAttributes, allCkRecords);
+            await UpdateIndexesForCollectionRoot(ckTypeInfo, baseTypes, allCkAttributes, allCkRecords,
+                upgradeTiebreakIndexes);
         }
 
         // Create indexes for RtAssociations collection (model-independent, only needed for full updates)
@@ -646,7 +669,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     private async Task UpdateIndexesForCollectionRoot(CkTypeInfo collectionRootType, List<CkType> baseTypes,
         IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute> allCkAttributes,
-        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord> allCkRecords)
+        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord> allCkRecords, bool upgradeTiebreakIndexes)
     {
         var name = collectionRootType.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
@@ -723,7 +746,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 foreach (CkTypeIndex ckTypeIndex in keyValuePair.Value)
                 {
                     await PrepareAndCreateIndex(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
-                        uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes);
+                        uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes,
+                        upgradeTiebreakIndexes);
                     uniqueIndexNumber++;
                 }
 
@@ -733,7 +757,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     if (textIndex != null)
                     {
                         await PrepareAndCreateIndex(keyValuePair.Key, textIndex, repositoryIndices, collection,
-                            uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes);
+                            uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes,
+                            upgradeTiebreakIndexes);
                     }
                     else
                     {
@@ -787,7 +812,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             await CreateOrUpdateIndex(collection.CollectionName, rtCreatedByIndex, repositoryIndices, collection,
                 uniqueIndexNumber: 9001);
 
-            // Drop any remaining indexes that are no longer needed
+            // Drop any remaining indexes that are no longer needed. A legacy index replaced by its tiebreak-shape
+            // successor (AB#8960) is among them: it is dropped only now, after the successor was built.
             foreach (var repositoryIndex in repositoryIndices)
             {
                 _logger.LogInformation("Dropping obsolete index '{IndexName}' for '{CollectionName}'",
@@ -797,6 +823,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
         finally
         {
+            // The paging gate and the index hint of this process re-read the indexes of the collection on the next
+            // query (AB#8960, AB#9138).
+            CollectionIndexCache.Invalidate(collection.GetMongoCollection());
+
             // Always save tracked index states before ending tracking
             try
             {
@@ -833,7 +863,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         int uniqueIndexNumber, CkTypeInfo? collectionRootType = null,
         IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute>? allCkAttributes = null,
         IReadOnlyDictionary<CkId<CkRecordId>, CkRecord>? allCkRecords = null,
-        IReadOnlyCollection<CkType>? collectionTypes = null)
+        IReadOnlyCollection<CkType>? collectionTypes = null, bool upgradeTiebreakIndexes = false)
     {
         if (ckTypeIndex.IndexType == IndexTypes.None)
         {
@@ -975,6 +1005,30 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 lastFieldGroup.AttributeNames = lastFieldGroup.AttributeNames
                     .Append(rtStateFieldName).ToList();
             }
+
+            // AB#8960: _id right after the attribute fields (before rtState, wherever it stands), so that the index
+            // provides the order of a page (the caller's keys, then _id). The index is named <Type>_<n>_id; the
+            // legacy shape without _id (<Type>_<n>) is kept until UpgradeTiebreakIndexesAsync replaces it. An index
+            // that holds _id already keeps its shape and name.
+            if (!localIndex.Fields.Any(g => g.AttributeNames.Contains(Constants.IdField)))
+            {
+                var legacyIndex = new CkTypeIndex
+                {
+                    IndexType = localIndex.IndexType,
+                    Language = localIndex.Language,
+                    Fields = localIndex.Fields
+                        .Select(g => new CkIndexFields { Weight = g.Weight, AttributeNames = g.AttributeNames.ToList() })
+                        .ToList()
+                };
+                var group = localIndex.Fields.FirstOrDefault(g => g.AttributeNames.Any(a =>
+                                string.Equals(a, rtStateFieldName, StringComparison.OrdinalIgnoreCase)))
+                            ?? localIndex.Fields.Last();
+                group.AttributeNames = TiebreakIndexShape.WithIdTiebreak(group.AttributeNames)!;
+                await CreateOrUpdateIndexWithTracking(collection.CollectionName, localIndex, repositoryIndices,
+                    collection, uniqueIndexNumber, collectionRootType, indexDefiningType,
+                    new LegacyIndexRule(legacyIndex, upgradeTiebreakIndexes));
+                return;
+            }
         }
 
         await CreateOrUpdateIndexWithTracking(collection.CollectionName, localIndex, repositoryIndices,
@@ -982,9 +1036,31 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     }
 
     /// <summary>
-    /// Creates or updates an index in MongoDB. Compares with existing indexes to determine if creation
-    /// is needed, handles name conflicts by dropping and recreating, and actually performs the index
-    /// creation in the database.
+    ///     The legacy shape of a CK Ascending index that the tiebreak shape replaces (AB#8960), and whether this update
+    ///     replaces it (<see cref="Upgrade" />) or keeps it.
+    /// </summary>
+    private sealed record LegacyIndexRule(CkTypeIndex LegacyIndex, bool Upgrade);
+
+    /// <summary>
+    ///     The outcome of <see cref="CreateOrUpdateIndex{TKey,TDocument}" /> when it built an index: the name it was built
+    ///     under and the existing indexes it replaces (AB#8960: the one with the expected name, the slot's index under its
+    ///     alternate name, a unique index with another type set) - dropped by the cleanup at the end of the collection,
+    ///     after the build.
+    /// </summary>
+    private sealed record IndexCreation(string Name, IReadOnlyList<string> Replaces);
+
+    private const int IndexOptionsConflictCode = 85;
+    private const int IndexKeySpecsConflictCode = 86;
+
+    /// <summary>
+    /// Creates or updates an index in MongoDB without leaving the collection without it (AB#8960, AC 8):
+    /// <list type="bullet">
+    ///     <item>an existing index with the definition is kept, also under another name (adopted: no drop, no rebuild;
+    ///     MongoDB can neither rename an index nor hold the same keys under two names);</item>
+    ///     <item>an existing index with the expected name but another definition stays until the end of the collection:
+    ///     the new index is built next to it under <see cref="AlternateIndexName" />, the cleanup drops the old one
+    ///     after the build. If the build fails, the old index stays.</item>
+    /// </list>
     /// </summary>
     /// <param name="collectionName">Name of the MongoDB collection</param>
     /// <param name="ckTypeIndex">The index configuration to create</param>
@@ -993,18 +1069,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <param name="uniqueIndexNumber">Unique number for index naming</param>
     /// <param name="collectionRootType">Optional collection root type info (required for Unique/UniqueNotDeleted)</param>
     /// <param name="indexDefiningType">Optional type that defines this index (required for Unique/UniqueNotDeleted)</param>
-    private async Task<bool> CreateOrUpdateIndex<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
-        ICollection<CkTypeIndexWithName> repositoryIndices,
+    /// <param name="nameSuffix">Appended to the index name (AB#8960: <see cref="TiebreakIndexShape.NameSuffix" />)</param>
+    /// <returns>The index built, or null when an existing index has the definition.</returns>
+    private async Task<IndexCreation?> CreateOrUpdateIndex<TKey, TDocument>(string collectionName,
+        CkTypeIndex ckTypeIndex, ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber,
-        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
+        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null, string nameSuffix = "")
         where TDocument : class, new()
         where TKey : notnull
     {
-        // For system indexes (like RtAssociation indexes) where no defining type exists,
-        // fall back to collection name. Otherwise, use the type name for backward compatibility.
-        var indexName = indexDefiningType != null
-            ? indexDefiningType.CkTypeId.ToRtCkId().GetCkTypeCollectionName() + "_" + uniqueIndexNumber
-            : collectionName + "_" + uniqueIndexNumber;
+        var indexName = IndexBaseName(collectionName, uniqueIndexNumber, indexDefiningType) + nameSuffix;
 
         // We check if the index already exists in the repository,
         // by comparing type, the fields' weight and the attribute paths
@@ -1013,48 +1087,136 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // index differ only in their name and their type filter, e.g. after a type moved to another model.
         // The one carrying the expected name is ours; a differently named one is taken over only when it is
         // the single candidate, otherwise it belongs to another type or is obsolete and dropped at the end.
-        var matchingIndices = repositoryIndices.Where(i => i.CompareToInSequence(ckTypeIndex)).ToList();
-        var repositoryIndex = matchingIndices.FirstOrDefault(i => i.Name == indexName)
-                              ?? (matchingIndices.Count == 1 ? matchingIndices[0] : null);
-
-        // If found, check if the name matches what we expect
+        // A unique index filters its types (the defining type and its descendants): an index with the keys but another
+        // type set (a descendant was added, the type moved to another model) is not ours and is replaced (AB#8960).
+        var uniqueTypes = ckTypeIndex.IndexType is IndexTypes.Unique or IndexTypes.UniqueNotDeleted
+            ? CollectTypeIdsForIndex(collectionRootType, indexDefiningType, ckTypeIndex.IndexType.ToString())
+            : null;
+        var typeIds = uniqueTypes?.Select(t => t.ToString()).ToHashSet(StringComparer.Ordinal);
+        var repositoryIndex = FindMatchingIndex(repositoryIndices, ckTypeIndex, indexName, typeIds);
         if (repositoryIndex != null)
         {
             // Remove the matching index from the list so it won't be dropped later
             repositoryIndices.Remove(repositoryIndex);
 
-            // If the name doesn't match, we need to drop the old one and create with the correct name
             if (repositoryIndex.Name != indexName)
             {
+                // AB#8960: kept under its name. Dropping it to rebuild it under the expected name would leave the
+                // collection without the index for the time of the build.
                 _logger.LogInformation(
-                    "Index with correct definition but wrong name: '{ActualName}' should be '{ExpectedName}'. Recreating with correct name",
-                    repositoryIndex.Name, indexName);
-
-                // Drop the incorrectly named index
-                await collection.DropIndexAsync(repositoryIndex.Name);
-
-                // Fall through to create the index with the correct name
+                    "Index '{ActualName}' of '{CollectionName}' has the definition of '{ExpectedName}' and is kept under its name",
+                    repositoryIndex.Name, collectionName, indexName);
             }
             else
             {
                 _logger.LogDebug("Index '{IndexName}' already exists for '{CollectionName}', skipping creation",
                     indexName, collectionName);
-                return false; // Index already exists with correct name, not created
+            }
+
+            return null;
+        }
+
+        // A collection holds at most one text index: a changed text index replaces the existing one (whatever its name -
+        // it may be kept under the name of an earlier slot), which has to go before the new one can be built. A text
+        // index with options the engine never sets is not ours and stays; ours is then refused.
+        if (ckTypeIndex.IndexType == IndexTypes.Text)
+        {
+            var oldText = repositoryIndices.FirstOrDefault(i => i.IndexType == IndexTypes.Text && !i.HasForeignOptions);
+            if (oldText != null)
+            {
+                repositoryIndices.Remove(oldText);
+                _logger.LogInformation(
+                    "Text index '{OldName}' of '{CollectionName}' exists with another definition, recreating as " +
+                    "'{IndexName}' (a collection holds only one text index)", oldText.Name, collectionName, indexName);
+                await collection.DropIndexAsync(oldText.Name);
             }
         }
 
-        // Check if there's an existing index with this name (regardless of configuration)
-        var existingIndexWithSameName = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
-        if (existingIndexWithSameName != null)
+        // The index this definition replaces stays in repositoryIndices until the new one is built; the cleanup at the end
+        // of the collection drops it after the build, and a failed build keeps it (AB#8960): the index holding the
+        // expected name, the index of this slot under its alternate name (built there by an earlier update while the
+        // expected name was taken), and for a unique index the one with its keys but another type set, whatever its name.
+        var occupant = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
+        var replaced = typeIds == null
+            ? null
+            : repositoryIndices.FirstOrDefault(i => !i.HasForeignOptions && SameDefinition(i, ckTypeIndex));
+        var previous = occupant != null
+            ? null
+            : repositoryIndices.FirstOrDefault(i => !i.HasForeignOptions && i.IndexType != IndexTypes.Text &&
+                                                    TiebreakIndexShape.IsAlternateNameOf(i.Name, indexName));
+        var targetName = indexName;
+        if (occupant != null)
         {
-            repositoryIndices.Remove(existingIndexWithSameName);
-
-            _logger.LogInformation("Index '{IndexName}' exists with different configuration, recreating",
-                indexName);
-            // Index exists but has wrong configuration - drop it first
-            await collection.DropIndexAsync(indexName);
+            targetName = AlternateIndexName(indexName, ckTypeIndex, typeIds);
+            _logger.LogInformation(
+                "Index '{IndexName}' of '{CollectionName}' exists with another definition; building the new one as " +
+                "'{TargetName}' before the old one is dropped",
+                indexName, collectionName, targetName);
         }
 
+        try
+        {
+            try
+            {
+                await CreateIndexAsync(collection, targetName, ckTypeIndex, uniqueTypes);
+            }
+            catch (MongoCommandException ex) when (occupant == null &&
+                                                   ex.Code is IndexOptionsConflictCode or IndexKeySpecsConflictCode)
+            {
+                // An index with the same keys but options the engine never sets (e.g. sparse or hidden) blocks ours:
+                // MongoDB refuses a second index on the same keys that differs only in such options. It stays - an index
+                // is dropped only once its replacement is built (AB#8960, decided in the design review) - and ours is
+                // not applied (tracked as failed by the caller).
+                var twin = repositoryIndices.FirstOrDefault(i => i.HasForeignOptions && SameDefinition(i, ckTypeIndex));
+                if (ex.Code == IndexOptionsConflictCode && twin != null)
+                {
+                    repositoryIndices.Remove(twin);
+                    _logger.LogWarning(
+                        "Index '{IndexName}' of '{CollectionName}' was not built: index '{OtherName}' has the same keys " +
+                        "with other options and is kept",
+                        indexName, collectionName, twin.Name);
+                    throw;
+                }
+
+                // The expected name belongs to an index that is no longer in repositoryIndices because it was kept for
+                // another definition of this collection: build under the alternate name.
+                targetName = AlternateIndexName(indexName, ckTypeIndex, typeIds);
+                _logger.LogInformation(
+                    "Index name '{IndexName}' of '{CollectionName}' is taken by a kept index; building as '{TargetName}'",
+                    indexName, collectionName, targetName);
+                await CreateIndexAsync(collection, targetName, ckTypeIndex, uniqueTypes);
+            }
+        }
+        catch (MongoCommandException)
+        {
+            // The new index was not built: the index it replaces stays.
+            if (occupant != null)
+            {
+                repositoryIndices.Remove(occupant);
+            }
+
+            if (replaced != null)
+            {
+                repositoryIndices.Remove(replaced);
+            }
+
+            if (previous != null)
+            {
+                repositoryIndices.Remove(previous);
+            }
+
+            throw;
+        }
+
+        return new IndexCreation(targetName,
+            new[] { occupant, previous, replaced }.OfType<CkTypeIndexWithName>().Select(i => i.Name).Distinct().ToList());
+    }
+
+    private static async Task CreateIndexAsync<TKey, TDocument>(IMongoDbDataSourceCollection<TKey, TDocument> collection,
+        string indexName, CkTypeIndex ckTypeIndex, List<RtCkId<CkTypeId>>? uniqueTypes)
+        where TDocument : class, new()
+        where TKey : notnull
+    {
         switch (ckTypeIndex.IndexType)
         {
             case IndexTypes.Ascending:
@@ -1066,56 +1228,163 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     ckTypeIndex.Fields);
                 break;
             case IndexTypes.Unique:
-                var uniqueTypeIds = CollectTypeIdsForIndex(collectionRootType, indexDefiningType, "Unique");
-
                 await collection.CreateUniqueIndexAsync(indexName,
-                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames),
-                    uniqueTypeIds);
+                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames), uniqueTypes!);
                 break;
             case IndexTypes.UniqueNotDeleted:
-                var typeIds = CollectTypeIdsForIndex(collectionRootType, indexDefiningType, "UniqueNotDeleted");
-
                 await collection.CreateUniqueNotDeletedIndexAsync(indexName,
-                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames),
-                    typeIds);
+                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames), uniqueTypes!);
                 break;
             default:
                 throw OperationFailedException.IndexTypeNotSupported(ckTypeIndex.IndexType);
         }
-
-        return true; // Index was created
     }
+
+    /// <summary>
+    ///     The name an index is built under while an index with another definition holds its expected name (AB#8960):
+    ///     <c>&lt;expected name&gt;_&lt;6 hex digits&gt;</c>, the digits from the SHA-256 of the definition (type, language,
+    ///     the key paths with their weights and, for a unique index, its type set). Deterministic, so a repeated update
+    ///     finds the same name.
+    /// </summary>
+    internal static string AlternateIndexName(string indexName, CkTypeIndex ckTypeIndex,
+        IReadOnlySet<string>? typeIds = null)
+    {
+        var definition = ckTypeIndex.IndexType + "|" + ckTypeIndex.Language + "|" + string.Join(";",
+                             ckTypeIndex.Fields.Select(f => f.Weight + ":" + string.Join(",", f.AttributeNames))) +
+                         "|" + string.Join(",", (typeIds ?? new HashSet<string>()).Order(StringComparer.Ordinal));
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(definition));
+        return TiebreakIndexShape.AlternateName(indexName, Convert.ToHexStringLower(hash));
+    }
+
+    /// <summary>
+    ///     The existing index with <paramref name="definition" />: the one named <paramref name="expectedName" />,
+    ///     otherwise the only one with that definition (several types of one collection can declare the same index),
+    ///     otherwise null. With <paramref name="typeIds" /> (a unique index) its partial filter must name exactly these
+    ///     types.
+    /// </summary>
+    private static CkTypeIndexWithName? FindMatchingIndex(IEnumerable<CkTypeIndexWithName> repositoryIndices,
+        CkTypeIndex definition, string expectedName, IReadOnlySet<string>? typeIds = null)
+    {
+        // An index with options the engine never sets is not ours, whatever its keys (AB#8960: it is never adopted).
+        var matching = repositoryIndices.Where(i => !i.HasForeignOptions && SameDefinition(i, definition) &&
+                                                    (typeIds == null || (i.PartialFilterTypeIds != null &&
+                                                                         i.PartialFilterTypeIds.SetEquals(typeIds))))
+            .ToList();
+        return matching.FirstOrDefault(i => i.Name == expectedName) ?? (matching.Count == 1 ? matching[0] : null);
+    }
+
+    /// <summary>
+    ///     True when an existing index has <paramref name="definition" />. A text index compares its field groups
+    ///     (weights); every other index its keys in order: the engine builds a definition with several field groups as
+    ///     one key list, and <c>listIndexes</c> reads it back as one group (AB#8960).
+    /// </summary>
+    private static bool SameDefinition(CkTypeIndexWithName index, CkTypeIndex definition)
+    {
+        if (index.IndexType != definition.IndexType)
+        {
+            return false;
+        }
+
+        if (definition.IndexType == IndexTypes.Text)
+        {
+            // The language defaults to "en" when the index is built (CreateTextIndexAsync) and listIndexes reports it;
+            // the paths and their weights are a set - listIndexes groups them by weight, not by the CK field groups.
+            static HashSet<string> Weighted(CkTypeIndex i) => i.Fields
+                .SelectMany(f => f.AttributeNames.Select(a => a.ToLowerInvariant() + ":" + (f.Weight ?? 1)))
+                .ToHashSet(StringComparer.Ordinal);
+            return string.Equals(index.Language ?? "en", definition.Language ?? "en", StringComparison.Ordinal) &&
+                   Weighted(index).SetEquals(Weighted(definition));
+        }
+
+        return index.Fields.SelectMany(f => f.AttributeNames)
+            .SequenceEqual(definition.Fields.SelectMany(f => f.AttributeNames), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    ///     The index name without suffix: the type's collection name and the number for an index a type defines, the
+    ///     collection name and the number for a system index (like the RtAssociation indexes).
+    /// </summary>
+    private static string IndexBaseName(string collectionName, int uniqueIndexNumber, CkType? indexDefiningType) =>
+        indexDefiningType != null
+            ? indexDefiningType.CkTypeId.ToRtCkId().GetCkTypeCollectionName() + "_" + uniqueIndexNumber
+            : collectionName + "_" + uniqueIndexNumber;
 
     /// <summary>
     /// Wrapper for CreateOrUpdateIndex that adds index state tracking
     /// </summary>
+    /// <param name="legacyRule">
+    ///     AB#8960: <paramref name="ckTypeIndex" /> is in the tiebreak shape and replaces this legacy shape. When the
+    ///     tiebreak shape does not exist yet but the legacy one does, the legacy index is kept (no upgrade) or the
+    ///     tiebreak index is built next to it and the legacy one is left in <paramref name="repositoryIndices" />, so
+    ///     that the cleanup at the end of the collection drops it after the build (upgrade). If the build fails, the
+    ///     legacy index stays.
+    /// </param>
     private async Task CreateOrUpdateIndexWithTracking<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber,
-        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
+        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null, LegacyIndexRule? legacyRule = null)
         where TDocument : class, new()
         where TKey : notnull
     {
-        // Generate index name using the same logic as CreateOrUpdateIndex for consistency
-        var indexName = indexDefiningType != null
-            ? indexDefiningType.CkTypeId.ToRtCkId().GetCkTypeCollectionName() + "_" + uniqueIndexNumber
-            : collectionName + "_" + uniqueIndexNumber;
+        var baseName = IndexBaseName(collectionName, uniqueIndexNumber, indexDefiningType);
+        var nameSuffix = legacyRule != null ? TiebreakIndexShape.NameSuffix : "";
+        var indexName = baseName + nameSuffix;
+
+        CkTypeIndexWithName? legacy = null;
+        if (legacyRule != null &&
+            !repositoryIndices.Any(i => !i.HasForeignOptions && SameDefinition(i, ckTypeIndex)))
+        {
+            legacy = FindMatchingIndex(repositoryIndices, legacyRule.LegacyIndex, baseName);
+            if (legacy != null && !legacyRule.Upgrade)
+            {
+                _logger.LogDebug(
+                    "Keeping legacy index '{IndexName}' of '{CollectionName}' until the tiebreak index upgrade (AB#8960)",
+                    legacy.Name, collection.CollectionName);
+                repositoryIndices.Remove(legacy);
+                return;
+            }
+        }
 
         try
         {
             // Call the original method and check if index was actually created
-            var wasCreated = await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection,
-                uniqueIndexNumber, collectionRootType, indexDefiningType);
+            var created = await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection,
+                uniqueIndexNumber, collectionRootType, indexDefiningType, nameSuffix);
 
-            // Only track if the index was actually created (not if it already existed)
-            if (wasCreated && indexDefiningType != null)
+            // Only track if the index was actually created (not if it already existed), under the name it was built
+            // under; an index it replaces is dropped by the cleanup after the build (AB#8960).
+            if (created != null && indexDefiningType != null)
             {
-                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, indexName, collection.CollectionName,
-                    IndexState.Applied);
+                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, created.Name,
+                    collection.CollectionName, IndexState.Applied);
+                foreach (var replacedName in created.Replaces)
+                {
+                    _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, replacedName,
+                        collection.CollectionName);
+                }
+            }
+
+            if (legacy != null)
+            {
+                _logger.LogInformation(
+                    "Built index '{IndexName}' of '{CollectionName}' in the tiebreak shape; the legacy index '{LegacyName}' " +
+                    "is dropped after the collection's other indexes (AB#8960)",
+                    indexName, collection.CollectionName, legacy.Name);
+                if (indexDefiningType != null)
+                {
+                    _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, legacy.Name,
+                        collection.CollectionName);
+                }
             }
         }
         catch (MongoCommandException ex)
         {
+            if (legacy != null)
+            {
+                // The tiebreak index was not built: the collection keeps its legacy index.
+                repositoryIndices.Remove(legacy);
+            }
+
             // Track failed index creation
             // ReSharper disable once ConditionIsAlwaysTrueOrFalse
             if (indexDefiningType != null && indexName != null)

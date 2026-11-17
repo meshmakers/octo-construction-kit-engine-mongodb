@@ -822,6 +822,10 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
     }
 
+    /// <inheritdoc />
+    /// <remarks>A <c>$geoNear</c> returns the entities nearest first (AB#8960: an unsorted page keeps that order).</remarks>
+    protected override bool PreStagesDefineOrder => _geospatialFilters.Count > 0;
+
     protected override void AddPostStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
     {
         _associationStageDefinitions.ForEach(pipelineStageDefinitions.Add);

@@ -31,7 +31,9 @@ public class PagedQuerySortHintTests(ImportTestCkModelFixture fixture)
 {
     private const int EntityCount = 3_000;
     private const int DeepSkip = 1_500;
-    private const string NameIndex = "test_name_legacy";
+    // Named like an engine-made CK index in the legacy shape (<Type>_<n>): the AB#8960 gate recognises a legacy index by
+    // that name and its keys and leaves the _id tiebreak out of pages sorted by its key, so they keep this hint.
+    private const string NameIndex = "TestContinent_7";
 
     [Fact]
     public async Task DeepPage_SortedByAnIndexedAttribute_IsHintedToThatIndex_AndReadsItInOrder()
@@ -51,6 +53,42 @@ public class PagedQuerySortHintTests(ImportTestCkModelFixture fixture)
                 RtEntityQueryOptions.Create().SortOrder("Name", SortOrders.Descending), DeepSkip, 10);
             Assert.Equal(NameIndex, executedDesc.Hint);
             Assert.Equal(names.AsEnumerable().Reverse().Skip(DeepSkip).Take(10), descending.Select(c => c.Name));
+        });
+    }
+
+    /// <summary>
+    ///     AB#8960: with the _id tiebreak the page sorts by the attribute and then <c>_id</c>; the hint goes to the index in
+    ///     the tiebreak shape <c>{ckTypeId, attr, _id, rtState}</c> - found by its keys, also under the alternate name an
+    ///     index gets after a change of its slot - and the page reads it without a SORT, forwards and backwards.
+    /// </summary>
+    [Fact]
+    public async Task DeepPage_WithTheIdTiebreak_IsHintedToTheTiebreakIndex_AlsoUnderAHashedName()
+    {
+        await WithSeededContinentsAsync(async (repository, raw, names) =>
+        {
+            // After the upgrade the legacy index is gone and the attribute's index is in the tiebreak shape.
+            const string tiebreakIndex = "TestContinent_7_id_a1b2c3";
+            await raw.Indexes.DropOneAsync(NameIndex, TestContext.Current.CancellationToken);
+            await raw.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(
+                new BsonDocument { { "ckTypeId", 1 }, { "attributes.name", 1 }, { "_id", 1 }, { "rtState", 1 } },
+                new CreateIndexOptions { Name = tiebreakIndex }), cancellationToken: TestContext.Current.CancellationToken);
+            CollectionIndexCache.Invalidate(raw);
+
+            var (page, executed) = await PageAsync(repository, SortByName(), DeepSkip, 10);
+
+            var sort = executed.Stages.Single(s => s.GetElement(0).Name == "$sort")["$sort"].AsBsonDocument;
+            Assert.Equal(new BsonDocument { { "attributes.name", 1 }, { "_id", 1 } }, sort);
+            Assert.Equal(tiebreakIndex, executed.Hint);
+            Assert.Equal(names.Skip(DeepSkip).Take(10), page.Select(c => c.Name));
+            var plan = await ExplainAsync(raw, executed);
+            Assert.Equal(tiebreakIndex, plan.Index);
+            Assert.False(plan.HasSort);
+
+            var (descending, executedDesc) = await PageAsync(repository,
+                RtEntityQueryOptions.Create().SortOrder("Name", SortOrders.Descending), DeepSkip, 10);
+            Assert.Equal(tiebreakIndex, executedDesc.Hint);
+            Assert.Equal(names.AsEnumerable().Reverse().Skip(DeepSkip).Take(10), descending.Select(c => c.Name));
+            Assert.False((await ExplainAsync(raw, executedDesc)).HasSort);
         });
     }
 

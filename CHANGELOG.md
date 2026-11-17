@@ -55,6 +55,46 @@
   pages of 50 three times: raw and time-range, without sort order and with a sort on an all-ties column, full key order
   checked over all pages; grouped aggregation on both, and the LOCF path with TimeWeightedAverage on the raw archive),
   measurement `StreamDataPaging/StreamDataPagingOrderCostMeasurement` (`OCTO_PAGING_COST_DAYS`).
+- AB#8960 Fix: paging through runtime entities returns every entity exactly once, also without a sort or with a
+  sort key that is not unique. Before, `$skip`/`$limit` ran over an undefined order of the ties: 300 entities with the
+  same `Name`, paged by 7, came back as 300 items of which only 35 were distinct. The page pipeline of
+  `SingleOriginQuery` (and the enrichment read of the page) ends its `$sort` with `_id` in the direction of the last
+  sort key unless the caller's sort already contains `rtId`; without a caller sort it sorts by `_id` ascending (a
+  `$geoNear` or a text search without a caller sort keeps its own order). **Behaviour change:** an unsorted paged query
+  is ordered by rtId, ties of a sorted paged query by rtId.
+  **Index shape (new):** CK Ascending indexes are created as `{ckTypeId, attributes..., _id, rtState}` under the name
+  `<Type>_<n>_id`, so that they provide the order of a page; unique, UniqueNotDeleted, text and system-level indexes are
+  unchanged. Existing indexes in the legacy shape `<Type>_<n>` are **kept** by CK imports and `UpdateIndexesAsync`;
+  the new `ITenantContext.UpgradeTiebreakIndexesAsync` (default interface method) rebuilds them per tenant - the new
+  index is built before the legacy one is dropped, idempotent. `PagingTiebreakGate` leaves out the tiebreak only for a
+  page sorted by keys whose order a legacy Ascending index provides completely, or that start with all keys of a CK
+  Unique index (the tiebreak would read every matching document per page: measured 2 ms to 113 ms for the first page over 100,000 entities); it decides
+  from the collection's indexes, read through the `CollectionIndexCache` of AB#9138 (5 minutes, one invalidation); a deep
+  sorted page with the tiebreak is hinted only to an index that provides `_id` after the sort keys. Unsorted pages and pages sorted by other attributes
+  get the tiebreak right after the deploy, also on existing tenants. Unpaged queries, the association navigations and
+  the cached navigation path are unchanged; interface queries already broke ties by rtId (AB#7019). Rules and
+  measurements: `CLAUDE.md`, "Page order of runtime queries".
+  **Index updates without a gap (AC 8, AC 13):** an index whose definition changed is no longer dropped before the new
+  one is built. When a CK update gives an index slot other keys, its expected name is still held by the old index
+  (MongoDB can neither rename an index nor build one with other keys under a taken name); the new index is built under
+  `<expected name>_<6 hex digits>` (the digits from the SHA-256 of the definition, so a repeated update finds the same
+  name), and the old one is dropped at the end of the collection, after the build. If the build fails, the old index
+  stays (also when it is the slot's index under its alternate name). A text index is still dropped before its
+  replacement is built (a collection holds only one), whatever its name. An index with the right definition under another name is kept as it is (it used to be dropped and rebuilt
+  under the expected name); definitions compare their keys in order (several field groups are one key list), and a
+  Unique or UniqueNotDeleted index must name exactly the definition's types in its partial filter - after a descendant
+  was added it is replaced like an index with other keys. **Pre-existing:** a text index never matched its definition
+  either (the default language `en` was compared with a missing one) and was dropped and rebuilt on every import. A legacy index leaves the tiebreak out only when it provides
+  the complete caller sort. An index with options the engine never sets
+  (collation, sparse, hidden, TTL, a partial filter on a non-unique index, a unique index without exactly the engine's
+  type and state filter) is never taken for a CK index; if it blocks
+  our build, it stays (warning, ours tracked as failed). **Pre-existing bug fixed:** `GetIndexListAsync` read every
+  partial unique index as UniqueNotDeleted, so a CK Unique index never matched its definition and was dropped and rebuilt
+  on every CK import; UniqueNotDeleted is now only an index whose partial filter has a condition on `rtState`. The paging gate counts
+  an Ascending index as legacy only when it starts with `ckTypeId` (an engine-made index), so a hand-made index whose
+  default name matches the CK name pattern gets the tiebreak. **Naming rule:** a CK index is `<Type>_<n>` / `<Type>_<n>_id`, or the same with
+  `_<6 hex>` after an update of its slot; the name is not a contract, the paging gate and the tiebreak shape are
+  decided from the keys (the gate only recognises CK indexes by the name pattern `..._<n>` with the optional hash).
 - AB#8896 New: a paged runtime-entity query loads at most one page of documents. `SingleOriginQuery.ExecuteQuery`
   no longer puts count and page into one `$facet`, which pushed every matching document through the server and sorted
   the whole set in memory. A paged query now runs a page pipeline (`$match`, the association stages that navigation

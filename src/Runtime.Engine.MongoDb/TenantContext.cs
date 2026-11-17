@@ -147,6 +147,20 @@ public class TenantContext : ITenantContext
             DatabaseName);
     }
 
+    /// <inheritdoc />
+    public async Task UpgradeTiebreakIndexesAsync(IOctoAdminSession adminSession,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Upgrading indexes to the paging tiebreak shape for tenant {TenantId} in database " +
+                               "{DatabaseName}", TenantId, DatabaseName);
+
+        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
+        await repositoryDataSource.UpgradeTiebreakIndexesAsync(adminSession, cancellationToken);
+
+        _logger.LogInformation("Indexes upgraded to the paging tiebreak shape for tenant {TenantId} in database " +
+                               "{DatabaseName}", TenantId, DatabaseName);
+    }
+
     public async Task CreateChildTenantAsync(IOctoAdminSession adminSession, string databaseName, string tenantId)
     {
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);

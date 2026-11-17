@@ -448,6 +448,19 @@ public interface ITenantContext
     /// <returns></returns>
     Task UpdateIndexesAsync(IOctoAdminSession adminSession);
 
+    /// <summary>
+    ///     Rebuilds the CK Ascending indexes of the tenant that are still in the legacy shape in the paging tiebreak
+    ///     shape <c>{ckTypeId, attributes…, _id, rtState}</c> (AB#8960), collection by collection: each new index is
+    ///     built next to the legacy one, the legacy one is dropped after it, so the collection never lacks the index.
+    ///     Idempotent. Until a collection is upgraded its pages sort without the <c>_id</c> tiebreak; afterwards with
+    ///     it. A CK import and <see cref="UpdateIndexesAsync" /> keep legacy indexes; this is the only way to replace
+    ///     them. Building an index reads the whole collection: on large tenants run it in a maintenance window.
+    /// </summary>
+    /// <param name="adminSession">An admin session to perform the operation</param>
+    /// <param name="cancellationToken">Stops before the next collection; an index build already started finishes.</param>
+    Task UpgradeTiebreakIndexesAsync(IOctoAdminSession adminSession, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This tenant context does not support the tiebreak index upgrade.");
+
     #endregion Database Maintenance
 
     #region Construction Kits

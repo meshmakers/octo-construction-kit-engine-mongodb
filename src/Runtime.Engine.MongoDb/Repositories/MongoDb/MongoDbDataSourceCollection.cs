@@ -223,6 +223,33 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
     }
 
+    /// <summary>The values of the <c>ckTypeId: {$in: [...]}</c> condition of a partial filter, or null without one.</summary>
+    private static IReadOnlySet<string>? FindTypeIds(BsonDocument filter)
+    {
+        foreach (var element in filter)
+        {
+            if (element.Name == nameof(RtEntity.CkTypeId).ToCamelCase() && element.Value is BsonDocument condition &&
+                condition.TryGetValue("$in", out var values) && values is BsonArray array)
+            {
+                return array.Select(v => v.ToString()!).ToHashSet(StringComparer.Ordinal);
+            }
+
+            var nested = element.Value switch
+            {
+                BsonDocument document => FindTypeIds(document),
+                BsonArray conditions => conditions.OfType<BsonDocument>().Select(FindTypeIds)
+                    .FirstOrDefault(found => found != null),
+                _ => null
+            };
+            if (nested != null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
     public async Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string? prefix = null)
     {
         try
@@ -287,7 +314,15 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                             // Determine if it's a unique index
                             if (isUnique)
                             {
-                                indexType = hasPartialFilter ? IndexTypes.UniqueNotDeleted : IndexTypes.Unique;
+                                // Both unique types carry a partial filter (the types of the index); only
+                                // UniqueNotDeleted filters rtState too. Reading every partial unique index as
+                                // UniqueNotDeleted made a Unique index never match its definition (AB#8960).
+                                // A condition named rtState, not the text "rtState" anywhere (a type id such as
+                                // "Model/StartState" contains it).
+                                indexType = hasPartialFilter &&
+                                            TiebreakIndexShape.HasStateCondition(partialFilterElement)
+                                    ? IndexTypes.UniqueNotDeleted
+                                    : IndexTypes.Unique;
                             }
 
                             foreach (var elem in keyDoc.Elements)
@@ -321,7 +356,25 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
                     var index = new CkTypeIndexWithName
                     {
-                        Name = indexName, IndexType = indexType, Fields = fields, Language = language
+                        Name = indexName, IndexType = indexType, Fields = fields, Language = language,
+                        // AB#8960: options the engine never sets on a CK index of this type. A unique index counts as a
+                        // CK index only with exactly the engine's partial filter (types, and for UniqueNotDeleted the
+                        // state): a further predicate narrows what it keeps unique, and the engine never builds one
+                        // without a filter.
+                        HasForeignOptions = doc.Contains("collation") ||
+                                            (doc.TryGetValue("sparse", out var sparse) && sparse.ToBoolean()) ||
+                                            (doc.TryGetValue("hidden", out var hidden) && hidden.ToBoolean()) ||
+                                            doc.Contains("expireAfterSeconds") ||
+                                            (hasPartialFilter && !isUnique) ||
+                                            (isUnique && (!hasPartialFilter ||
+                                                          TiebreakIndexShape.ClassifyUniquePartialFilter(
+                                                              partialFilterElement) !=
+                                                          (indexType == IndexTypes.UniqueNotDeleted
+                                                              ? UniquePartialFilter.UniqueNotDeleted
+                                                              : UniquePartialFilter.Unique))),
+                        PartialFilterTypeIds = hasPartialFilter && partialFilterElement is BsonDocument partialFilter
+                            ? FindTypeIds(partialFilter)
+                            : null
                     };
                     indexes.Add(index);
                 }

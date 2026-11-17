@@ -204,8 +204,13 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     ///     filters need), then <c>$sort</c>, <c>$skip</c> and <c>$limit</c>. It returns at most
     ///     <paramref name="take" /> documents; the enrichment lookups of <see cref="GetEnrichmentStageDefinitions" />
     ///     are not part of it - they run afterwards on the page only. It has no <c>$facet</c> and no count.
+    ///     With <paramref name="idTiebreak" /> the <c>$sort</c> is always there and total (AB#8960,
+    ///     <see cref="Query{TEntity}.CreatePagingSortDefinition" />): the caller's keys, then <c>_id</c>. Without it the
+    ///     page sorts by the caller's keys only, and not at all without a caller sort - the order before AB#8960, kept
+    ///     for a sort whose order a legacy-shape index provides (<see cref="PagingTiebreakGate" />).
     /// </summary>
-    internal IReadOnlyList<IPipelineStageDefinition> CreatePagePipelineStageDefinitions(int? skip, int? take)
+    internal IReadOnlyList<IPipelineStageDefinition> CreatePagePipelineStageDefinitions(int? skip, int? take,
+        bool idTiebreak = true)
     {
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>();
 
@@ -216,8 +221,9 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
         }
 
-        // Association existence and count filters, then the sort.
-        AddPostStagesToPipeline(pipelineStageDefinitions);
+        // Association existence and count filters, then the sort of the page.
+        AddPrePaginationPostStagesToPipeline(pipelineStageDefinitions);
+        pipelineStageDefinitions.AddRange(CreatePageSortStageDefinitions(idTiebreak));
 
         if (skip is > 0)
         {
@@ -305,7 +311,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     ///     </para>
     /// </summary>
     internal async Task<((string Name, BsonDocument Key)? Hint, long? ExactTotal)> ChoosePageHintAsync(IOctoSession octoSession, int? skip,
-        IReadOnlyList<IPipelineStageDefinition> pageStages, bool includeTotalCount)
+        IReadOnlyList<IPipelineStageDefinition> pageStages, bool includeTotalCount, bool idTiebreak = false)
     {
         if (!SortIndexHint.IsDeep(skip) || !HasSortDefinitions ||
             octoSession is IOctoSessionInternal { IsTransactionActive: true } || !PageSortFollowsMatch())
@@ -314,7 +320,8 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         }
 
         var indexes = await CollectionIndexCache.GetAsync(_mongoDbDataSourceCollection.GetMongoCollection());
-        var hint = SortIndexHint.Choose(indexes, SortKeys);
+        // AB#8960: with the _id tiebreak the index must provide _id after the caller's keys too.
+        var hint = SortIndexHint.Choose(indexes, PageSortKeys(idTiebreak));
         if (hint == null || !SortIndexHint.HasFilterIndex(indexes!, SortIndexHint.FilterFields(RenderMatch(pageStages)),
                 FirstSortKeyPath))
         {
@@ -335,9 +342,6 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         var capped = await ExecuteCappedCount(octoSession, SortIndexHint.MinMatches);
         return (capped >= SortIndexHint.MinMatches ? hint : null, null);
     }
-
-    /// <summary>The path of the caller's first sort key, or null without a sort.</summary>
-    private string? FirstSortKeyPath => SortKeys.Count > 0 ? SortKeys[0].Path : null;
 
     /// <summary>The filter of the page's leading <c>$match</c>, rendered; empty when the page has none.</summary>
     private BsonDocument RenderMatch(IReadOnlyList<IPipelineStageDefinition> pageStages)
@@ -458,12 +462,17 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
         var pageEntities = new List<TEntity>();
         long? exactTotal = null;
+        var idTiebreak = false;
         if (take is not 0)
         {
-            var pageStages = CreatePagePipelineStageDefinitions(skip, take);
+            // AB#8960: the _id tiebreak unless a legacy index provides the order of this sort.
+            idTiebreak = await PagingTiebreakGate.IsEnabledAsync(_mongoDbDataSourceCollection.GetMongoCollection(),
+                SortKeys);
+            var pageStages = CreatePagePipelineStageDefinitions(skip, take, idTiebreak);
             // AB#9138: a deep sorted page spent its time in the planner's trial, not in the read - hint the index that
             // provides the sort.
-            (var hint, exactTotal) = await ChoosePageHintAsync(octoSession, skip, pageStages, includeTotalCount);
+            (var hint, exactTotal) =
+                await ChoosePageHintAsync(octoSession, skip, pageStages, includeTotalCount, idTiebreak);
             (pageEntities, var usedHint, var refusedHint) = await ReadPageAsync(octoSession, pageStages, hint);
             Observe<TEntity>("page", pageStages, pageEntities.Count, usedHint, refusedHint);
 
@@ -472,12 +481,13 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
         if (enrichmentStages.Count > 0 && pageEntities.Count > 0)
         {
-            // Enrichment (navigation lookups) on the entities of the page only, in page order.
+            // Enrichment (navigation lookups) on the entities of the page only, in page order: the same total sort
+            // as the page pipeline, so that ties keep their page order.
             var enrichmentPipelineStages = new List<IPipelineStageDefinition>
             {
                 PipelineStageDefinitionBuilder.Match(CreateIdInFilter(pageEntities))
             };
-            enrichmentPipelineStages.AddRange(CreateSortStageDefinitions());
+            enrichmentPipelineStages.AddRange(CreatePageSortStageDefinitions(idTiebreak));
             enrichmentPipelineStages.AddRange(enrichmentStages);
 
             pageEntities = await _mongoDbDataSourceCollection
