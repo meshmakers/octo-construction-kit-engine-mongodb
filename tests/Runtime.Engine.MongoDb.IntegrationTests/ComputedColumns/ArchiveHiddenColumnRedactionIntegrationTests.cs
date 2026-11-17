@@ -206,8 +206,7 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         Assert.Null(await ColumnTypeAsync(lane, "pin"));
         Assert.NotNull(await ColumnTypeAsync(lane, "value"));
         Assert.Equal(["Value"], (await lane.Store.GetAsync(lane.Archive))!.Columns.Select(c => c.Path));
-        await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
-        Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"value\" IS NOT NULL"));
+        await AssertOriginalValuesAsync(lane);
         A.CallTo(() => lane.Audit.RecordTransitionAsync(A<string>._, lane.Archive, CkArchiveStatus.Failed,
             CkArchiveStatus.Failed, A<string>.That.Contains("RedactHiddenColumns drops"))).MustHaveHappenedOnceExactly();
 
@@ -216,6 +215,18 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
             lane.Lifecycle.RedactConfirmedHiddenColumnsAsync(lane.Archive, ["Pin"]));
         Assert.Empty(repeated.CurrentColumns);
         Assert.Equal(CkArchiveStatus.Activated, (await lane.Store.GetAsync(lane.Archive))!.Status);
+    }
+
+    /// <summary>Every row still carries the Value it was written with: hour i of the setup holds i * 1.5.</summary>
+    private async Task AssertOriginalValuesAsync(Lane lane)
+    {
+        await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
+        var rows = await fixture.QueryAsync($"SELECT \"timestamp\", \"value\" FROM {lane.Table} ORDER BY \"timestamp\"");
+        Assert.Equal(48, rows.Count);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            Assert.Equal(i * 1.5, Convert.ToDouble(rows[i]["value"], System.Globalization.CultureInfo.InvariantCulture));
+        }
     }
 
     /// <summary>
@@ -229,7 +240,7 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
         Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table}"));
         Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"pin\" = 1234.0"));
-        Assert.Equal(48, await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"value\" IS NOT NULL"));
+        await AssertOriginalValuesAsync(lane);
         var snapshot = (await lane.Store.GetAsync(lane.Archive))!;
         Assert.Equal(["Value", "Pin"], snapshot.Columns.Select(c => c.Path));
         Assert.Equal(CkArchiveStatus.Failed, snapshot.Status);
