@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- AB#9177 Fix: the tenant-created notification (`PosCreateTenant`) of a child-tenant create or attach is published only
+  after the registration is committed. `CreateChildTenantAsync` and `AttachChildTenantAsync` published it inside the
+  caller's transaction, so every service set the tenant up before it was registered (a restore logged "Setup tenant
+  failed" on every service, recovered later by the setup retry). Inside a caller's transaction the notification now runs
+  as an after-commit callback (nothing on a rollback), with three attempts (250 ms, 1 s apart) and then a warning naming
+  the tenant and the recovery (ClearCache for the tenant, or a service restart); without a transaction it is published at
+  once as before. `ClearChildTenantAsync` inside a transaction publishes its `PosUpdateTenant` when the transaction ends,
+  after the tenant-created notification. The restore (`RestoreTenantAsync` with attach) publishes it itself after its commit
+  (`TenantCreatedNotificationScope`); a failed publish keeps the restore successful (the data is restored and attached) and
+  is reported on the result: new `CommandResult.TenantCreatedNotificationFailed`, the warning ("... run ClearCache") in
+  `Output`, a WARN log; `CloneTenantToTempAsync` passes the flag on. Every publish attempt after a commit, the restore's
+  included, is bounded to 5 s. A tenant the same transaction detached or dropped again gets no tenant-created
+  notification. Details: `CLAUDE.md`, "Tenant-created notification after the commit".
 - AB#9127 Fix: a tenant dump (`TenantBackupService.BackupTenantAsync`, used by the bot's dump job, the pre-sweep dump and
   the clone to a temp tenant) leaves out platform-only collections, today `RtEntity_SystemCommunicationSecretDefault`
   (`MongoDumpOptions.PlatformOnlyTenantCollections`, `ForTenantArchive`, one `--excludeCollection` each). The secret

@@ -3398,6 +3398,48 @@ instances on one server, `TwoInstanceCollection`: different prefixes create the 
 without prefixes the second is refused) and `StreamData.UnitTests/TenantDatabaseNamesTests` (naming, validation,
 exemption scope).
 
+### Tenant-created notification after the commit (AB#9177)
+
+Every service sets a tenant up when it receives `PosCreateTenant` (`PosCreatePosUpdateTenantConsumer`, octo-common-services)
+and must find the tenant registered. `CreateChildTenantAsync` and `AttachChildTenantAsync` write the registry rows in the
+caller's session, so they hand the notification to `NotifyPosTenantCreateAfterCommitAsync` (`TenantContext`) instead of
+publishing it:
+
+| Situation | When it is published | A failed publish |
+|---|---|---|
+| Inside a `TenantCreatedNotificationScope` bound to the same session (engine operations that own their transaction: the restore's attach in `TenantBackupService`) | by the operation, `scope.PublishAsync()` after its commit | reaches the operation; the restore still succeeds (data restored and attached) and sets `CommandResult.TenantCreatedNotificationFailed`, with the warning ("... run ClearCache") in `Output` and a WARN log; the clone (`CloneTenantToTempAsync`) passes the flag on. Nothing is dropped: a drop by id after the commit could hit a tenant that replaced it |
+| Caller's transaction (`IOctoSessionInternal.IsTransactionActive`) | after-commit callback of the session (`RegisterTransactionCallbacks`); nothing on a rollback, and nothing when the tenant is no longer registered (the same transaction detached or dropped it) | three attempts (`PosTenantCreateRetryDelays`: 250 ms, 1 s; each bounded by `PosTenantCreateAttemptTimeout`, 5 s), then a WARN naming the tenant and the recovery |
+| No transaction | at once, as before | thrown to the caller (create: rolled back as before) |
+
+Rules:
+
+- **Nothing re-sends a lost notification.** The setup retry store is keyed per service, so the engine cannot queue a setup
+  for every service. A tenant whose notification failed for good is set up by a ClearCache of the tenant (it publishes a
+  full `PosUpdateTenant`), the tenant's next CK import or a service restart. That is why the restore flags it on its result
+  and the callback path warns with the recovery.
+- The callback runs inside the caller's `CommitTransactionAsync`, so its retries delay that call (at most ~16 s when every
+  attempt times out); keep the delays short. An attempt that times out is abandoned; if it completes later, the services
+  set the tenant up twice (setup is idempotent).
+- A scope collects only the creates and attaches of the session it was opened with; any other session in the same async
+  flow publishes as without a scope. `PublishAsync` bounds each publish to `PosTenantCreateAttemptTimeout` too.
+- A caller's transaction gets a WARN, not an error, on a lost notification (the asset repository's create and attach
+  answer success then). Surfacing it to that caller would need a change of the asset repository, not of the engine.
+- `ClearChildTenantAsync` (drop + create in the caller's session) follows the same rule for its create, and inside a
+  transaction its `PosUpdateTenant` is published when the transaction ends (commit or rollback, as before; not after a
+  commit whose outcome is unknown), after the tenant-created notification (callbacks run in registration order), bounded
+  to 5 s; a failure is a warning.
+- A commit whose outcome is unknown (the commit call throws although the server may have committed) runs no callback,
+  so no notification goes out; the caller gets the exception. Other post notifications (`PosTenantDelete` of drop and
+  detach) are still published inside the caller's transaction.
+- The system tenant's own create (`SystemContext.CreateSystemTenantAsync`) has no transaction and publishes at once.
+- Tests: `TenantCreatedNotificationOrderTests` (collection `TenantNotification`, fixture `TenantNotificationFixture`: the
+  recording notifications check `IsTenantRegisteredAsync` at publish time): create and attach in a transaction publish after
+  the commit with the tenant registered, a rolled-back attach publishes nothing, no transaction publishes at once, the
+  callback retries and then warns, the restore publishes after its commit and flags a failed publish on its successful
+  result, a clone passes the flag on, an attach and detach in one transaction publishes no
+  tenant-created notification, a scope of another session does not hold back a create, a clear in a transaction
+  publishes create, then update, after the commit.
+
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 
 `TenantLifecycleStore` (`Repositories/TenantLifecycle/`, non-CK collection `tenant_lifecycle` in the
