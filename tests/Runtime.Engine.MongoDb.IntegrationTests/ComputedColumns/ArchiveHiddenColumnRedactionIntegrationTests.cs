@@ -225,7 +225,10 @@ public class ArchiveHiddenColumnRedactionIntegrationTests(CrateStagingCopyFixtur
         Assert.Equal(48, rows.Count);
         for (var i = 0; i < rows.Count; i++)
         {
-            Assert.Equal(i * 1.5, Convert.ToDouble(rows[i]["value"], System.Globalization.CultureInfo.InvariantCulture));
+            // Convert.ToDouble(null) is 0, the value of hour 0: a lost value must fail as NULL, not pass as 0.
+            var value = rows[i]["value"];
+            Assert.NotNull(value);
+            Assert.Equal(i * 1.5, Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture));
         }
     }
 
