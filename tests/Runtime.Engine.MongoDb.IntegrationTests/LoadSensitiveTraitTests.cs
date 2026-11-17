@@ -34,6 +34,24 @@ public class LoadSensitiveTraitTests
             string.Join(", ", missing));
     }
 
+    /// <summary>
+    ///     The other direction: <c>LoadSensitive</c> only on <c>Performance</c> or <c>Stress</c> tests, so the local
+    ///     filter <c>Category!=LoadSensitive</c> keeps selecting the same tests as the CI filter
+    ///     <c>Category!=Performance&amp;Category!=Stress</c>.
+    /// </summary>
+    [Fact]
+    public void EveryLoadSensitiveTest_IsAPerformanceOrStressTest()
+    {
+        var extra = TestMethods()
+            .Where(t => t.Categories.Contains(LoadSensitive) && !t.Categories.Overlaps(LoadCategories))
+            .Select(t => t.Name)
+            .ToList();
+
+        Assert.True(extra.Count == 0,
+            "tests with Category=LoadSensitive but neither Performance nor Stress run in the CI but not in the " +
+            "local full suite: " + string.Join(", ", extra));
+    }
+
     private static IEnumerable<(string Name, HashSet<string> Categories)> TestMethods()
     {
         foreach (var type in typeof(LoadSensitiveTraitTests).Assembly.GetTypes())

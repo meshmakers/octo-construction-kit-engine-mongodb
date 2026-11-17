@@ -155,7 +155,9 @@ are unchanged; in this repository `Category!=LoadSensitive` selects the same tes
 
 - Put `[Trait("Category", "Performance")]` on the class (or the test) when a slower machine can fail it without a code change:
   p95 / median / throughput ceilings, ratios of two measured timings. Add `[Trait("Category", "LoadSensitive")]` next to it
-  (and next to every `Stress` trait); `LoadSensitiveTraitTests` fails without it for a test of this assembly.
+  (and next to every `Stress` trait); `LoadSensitiveTraitTests` fails without it for a test of this assembly, and
+  also when `LoadSensitive` appears on a test that is neither `Performance` nor `Stress` (the local filter and the CI filter
+  would then select different tests).
 - Do **not** use the category for timeouts that guard correctness and have a wide margin (a stale lock reclaimed "near-instantly"
   under 5 s, a cancellation that must interrupt a delay under 3 s, a statement timeout that must end a call under 30 s, a
   hosted-service tick awaited for up to 5 s). They stay in the CI; a miss there is a bug, not noise.

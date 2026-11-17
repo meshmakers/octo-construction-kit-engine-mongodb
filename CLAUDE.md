@@ -18,8 +18,8 @@ dotnet build -c DebugL
 # Build in Release mode against a published release (version must be passed explicitly)
 dotnet build -c Release -p:OctoVersion=3.5.1
 
-# Run integration tests
-dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL
+# Run integration tests (without the load-sensitive Performance and Stress tests)
+dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Category!=LoadSensitive"
 
 # Local full suite without the load-sensitive tests (see "Local full suite" below)
 dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=LoadSensitive"
@@ -37,7 +37,7 @@ Tests can run against either Testcontainers (default) or a local MongoDB instanc
 
 **Option 1: Environment Variable**
 ```bash
-USE_LOCAL_MONGODB=true dotnet test -c DebugL
+USE_LOCAL_MONGODB=true dotnet test -c DebugL --filter "Category!=LoadSensitive"
 ```
 
 **Option 2: appsettings.test.json**
