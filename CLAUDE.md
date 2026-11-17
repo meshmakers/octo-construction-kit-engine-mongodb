@@ -3408,7 +3408,7 @@ publishing it:
 | Situation | When it is published | A failed publish |
 |---|---|---|
 | Inside a `TenantCreatedNotificationScope` bound to the same session (engine operations that own their transaction: the restore's attach in `TenantBackupService`) | by the operation, `scope.PublishAsync()` after its commit | reaches the operation; the restore still succeeds (data restored and attached) and sets `CommandResult.TenantCreatedNotificationFailed`, with the warning ("... run ClearCache") in `Output` and a WARN log; the clone (`CloneTenantToTempAsync`) passes the flag on. Nothing is dropped: a drop by id after the commit could hit a tenant that replaced it |
-| Caller's transaction (`IOctoSessionInternal.IsTransactionActive`) | after-commit callback of the session (`RegisterTransactionCallbacks`); nothing on a rollback, and nothing when the tenant is no longer registered (the same transaction detached or dropped it) | three attempts (`PosTenantCreateRetryDelays`: 250 ms, 1 s; each bounded by `PosTenantCreateAttemptTimeout`, 5 s), then a WARN naming the tenant and the recovery |
+| Caller's transaction (`IOctoSessionInternal.IsTransactionActive`) | after-commit callback of the session (`RegisterTransactionCallbacks`); nothing on a rollback, and nothing when the same transaction detached or dropped the tenant after it or created or attached it again (`TenantTransactionNotificationState`, per session, no read; the registry read is a second check) | three attempts (`PosTenantCreateRetryDelays`: 250 ms, 1 s; each bounded by `PosTenantCreateAttemptTimeout`, 5 s), then a WARN naming the tenant and the recovery |
 | No transaction | at once, as before | thrown to the caller (create: rolled back as before) |
 
 Rules:
@@ -3437,7 +3437,7 @@ Rules:
   the commit with the tenant registered, a rolled-back attach publishes nothing, no transaction publishes at once, the
   callback retries and then warns, the restore publishes after its commit and flags a failed publish on its successful
   result, a clone passes the flag on, an attach and detach in one transaction publishes no
-  tenant-created notification, a scope of another session does not hold back a create, a clear in a transaction
+  tenant-created notification (also with the registry read disabled), attach, detach and attach publish once, a scope of another session does not hold back a create, a clear in a transaction
   publishes create, then update, after the commit.
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)

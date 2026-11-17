@@ -337,6 +337,34 @@ public class TenantCreatedNotificationOrderTests(TenantNotificationFixture fixtu
     }
 
     [Fact]
+    public async Task AttachDetachAttachInOneTransaction_PublishesOnce_ForTheLastAttach()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = NewTenantId("notead");
+        try
+        {
+            await CreateAndDetachAsync(tenantId);
+            var before = fixture.Notifications.PosCreatedFor(tenantId).Count;
+
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.AttachChildTenantAsync(session, tenantId, tenantId);
+                await systemContext.DetachChildTenantAsync(session, tenantId);
+                await systemContext.AttachChildTenantAsync(session, tenantId, tenantId);
+                await session.CommitTransactionAsync();
+            }
+
+            var published = fixture.Notifications.PosCreatedFor(tenantId).Skip(before).ToList();
+            Assert.True(Assert.Single(published).Registered);
+        }
+        finally
+        {
+            await DropAsync(tenantId);
+        }
+    }
+
+    [Fact]
     public async Task ScopeOfAnotherSession_DoesNotHoldBackACreate()
     {
         var systemContext = fixture.GetSystemContext();

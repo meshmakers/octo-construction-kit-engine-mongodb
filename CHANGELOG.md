@@ -14,7 +14,7 @@
   is reported on the result: new `CommandResult.TenantCreatedNotificationFailed`, the warning ("... run ClearCache") in
   `Output`, a WARN log; `CloneTenantToTempAsync` passes the flag on. Every publish attempt after a commit, the restore's
   included, is bounded to 5 s. A tenant the same transaction detached or dropped again gets no tenant-created
-  notification. Details: `CLAUDE.md`, "Tenant-created notification after the commit".
+  notification (recorded per session, no registry read needed). Details: `CLAUDE.md`, "Tenant-created notification after the commit".
 - AB#9127 Fix: a tenant dump (`TenantBackupService.BackupTenantAsync`, used by the bot's dump job, the pre-sweep dump and
   the clone to a temp tenant) leaves out platform-only collections, today `RtEntity_SystemCommunicationSecretDefault`
   (`MongoDumpOptions.PlatformOnlyTenantCollections`, `ForTenantArchive`, one `--excludeCollection` each). The secret

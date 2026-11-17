@@ -918,6 +918,10 @@ public class TenantContext : ITenantContext
         // marker of that other tenant. Refuse before any side effect; RemoveStaleChildTenantEntryAsync cleans it.
         await EnsureLiveChildRowAsync(adminSession, octoTenant, "detach");
 
+        // A tenant-created notification of this transaction must not follow the removal (see
+        // NotifyPosTenantCreateAfterCommitAsync). Recorded before the side effects: a failure aborts the transaction.
+        RecordRemovalInTransaction(adminSession, tenantId);
+
         Guid correlationId = Guid.NewGuid();
 
         try
@@ -1028,8 +1032,21 @@ public class TenantContext : ITenantContext
 
         if (adminSession is IOctoSessionInternal { IsTransactionActive: true } transaction)
         {
-            transaction.RegisterTransactionCallbacks(() => PublishPosTenantCreateWithRetryAsync(tenantId,
-                correlationId));
+            var version = TenantTransactionNotificationState.RecordCreate(adminSession, tenantId);
+            transaction.RegisterTransactionCallbacks(() =>
+            {
+                // A detach or drop (or another create or attach) of the tenant later in the same transaction decides
+                // without a read; the registry read below stays as the second check.
+                if (!TenantTransactionNotificationState.IsCurrentCreate(adminSession, tenantId, version))
+                {
+                    _logger.LogDebug(
+                        "Tenant-created notification of tenant '{TenantId}' skipped: changed again in the same transaction",
+                        tenantId);
+                    return Task.CompletedTask;
+                }
+
+                return PublishPosTenantCreateWithRetryAsync(tenantId, correlationId);
+            });
             return;
         }
 
@@ -1119,6 +1136,14 @@ public class TenantContext : ITenantContext
             {
                 await _tenantNotifications.NotifyPosTenantUpdateAsync(tenantId, correlationId);
             }
+        }
+    }
+
+    private static void RecordRemovalInTransaction(IOctoAdminSession adminSession, string tenantId)
+    {
+        if (adminSession is IOctoSessionInternal { IsTransactionActive: true })
+        {
+            TenantTransactionNotificationState.RecordRemoval(adminSession, tenantId);
         }
     }
 
@@ -1269,6 +1294,7 @@ public class TenantContext : ITenantContext
         string tenantId, bool dropStreamData = false, bool overrideForeignOwnership = false)
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+        RecordRemovalInTransaction(adminSession, tenantId);
 
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
