@@ -211,8 +211,9 @@ public class TenantContext : ITenantContext
 
             // Distribute updates (post) only on success. Signalling "tenant created" while we are
             // about to roll the tenant back leaves other services provisioning orphaned resources
-            // for a tenant that never came to exist (AB#1958).
-            await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
+            // for a tenant that never came to exist (AB#1958). Inside a transaction only after its commit:
+            // the services set the tenant up on this event and must find it registered.
+            await NotifyPosTenantCreateAfterCommitAsync(adminSession, tenantId, correlationId);
         }
         catch (Exception ex)
         {
@@ -806,8 +807,9 @@ public class TenantContext : ITenantContext
             var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.InsertOneRtEntityAsync(adminSession, rtSystemTenant);
 
-            // Distribute updates (post) only on success - see CreateChildTenantAsync (AB#1958).
-            await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
+            // Distribute updates (post) only on success - see CreateChildTenantAsync (AB#1958); inside a
+            // transaction only after its commit.
+            await NotifyPosTenantCreateAfterCommitAsync(adminSession, tenantId, correlationId);
         }
         catch (Exception ex)
         {
@@ -916,6 +918,10 @@ public class TenantContext : ITenantContext
         // marker of that other tenant. Refuse before any side effect; RemoveStaleChildTenantEntryAsync cleans it.
         await EnsureLiveChildRowAsync(adminSession, octoTenant, "detach");
 
+        // A tenant-created notification of this transaction must not follow the removal (see
+        // NotifyPosTenantCreateAfterCommitAsync). Recorded before the side effects: a failure aborts the transaction.
+        RecordRemovalInTransaction(adminSession, tenantId);
+
         Guid correlationId = Guid.NewGuid();
 
         try
@@ -989,6 +995,108 @@ public class TenantContext : ITenantContext
             .FieldEquals(nameof(RtTenant.DatabaseName), databaseNameAsStored);
     }
 
+    /// <summary>
+    ///     Delays between the attempts of a tenant-created notification published after a commit: the first attempt
+    ///     runs at once, each further one after the next delay (three attempts in all). The retries run inside the
+    ///     caller's commit call, so they are kept short.
+    /// </summary>
+    internal static readonly IReadOnlyList<TimeSpan> PosTenantCreateRetryDelays =
+        [TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(1)];
+
+    /// <summary>Time one publish attempt of the after-commit notification may take.</summary>
+    internal static readonly TimeSpan PosTenantCreateAttemptTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    ///     Publishes the tenant-created notification of a create or attach so that no service sees it before the
+    ///     tenant is registered:
+    ///     <list type="bullet">
+    ///         <item>
+    ///             inside a <see cref="TenantCreatedNotificationScope" /> of this session it is collected, and the engine
+    ///             operation that owns the transaction publishes it after its commit (a failure reaches that operation);
+    ///         </item>
+    ///         <item>
+    ///             inside a transaction the caller owns it is published after the commit (never on a rollback), with
+    ///             a few attempts; a final failure is a warning naming the tenant and the recovery;
+    ///         </item>
+    ///         <item>without a transaction it is published at once, and a failure reaches the caller.</item>
+    ///     </list>
+    /// </summary>
+    private async Task NotifyPosTenantCreateAfterCommitAsync(IOctoAdminSession adminSession, string tenantId,
+        Guid correlationId)
+    {
+        if (TenantCreatedNotificationScope.Current is { } scope &&
+            scope.TryAdd(adminSession, tenantId, correlationId, _tenantNotifications))
+        {
+            return;
+        }
+
+        if (adminSession is IOctoSessionInternal { IsTransactionActive: true } transaction)
+        {
+            var version = TenantTransactionNotificationState.RecordCreate(adminSession, tenantId);
+            transaction.RegisterTransactionCallbacks(() =>
+            {
+                // A detach or drop (or another create or attach) of the tenant later in the same transaction decides
+                // without a read; the registry read below stays as the second check.
+                if (!TenantTransactionNotificationState.IsCurrentCreate(adminSession, tenantId, version))
+                {
+                    _logger.LogDebug(
+                        "Tenant-created notification of tenant '{TenantId}' skipped: changed again in the same transaction",
+                        tenantId);
+                    return Task.CompletedTask;
+                }
+
+                return PublishPosTenantCreateWithRetryAsync(tenantId, correlationId);
+            });
+            return;
+        }
+
+        await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
+    }
+
+    private async Task PublishPosTenantCreateWithRetryAsync(string tenantId, Guid correlationId)
+    {
+        // The same transaction may have detached or dropped the tenant after creating or attaching it; then the event
+        // would announce a tenant that is not registered (after its delete event). Read failures publish anyway.
+        if (!await IsStillRegisteredChildAsync(tenantId))
+        {
+            _logger.LogDebug(
+                "Tenant-created notification of tenant '{TenantId}' skipped: the tenant was removed in the same transaction",
+                tenantId);
+            return;
+        }
+
+        var delays = PosTenantCreateRetryDelays;
+        for (var attempt = 1;; attempt++)
+        {
+            try
+            {
+                // Bounded: the attempts run inside the caller's commit call. A publish that is still pending when the
+                // time is up is abandoned; if it completes later the services set the tenant up twice (idempotent).
+                await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId)
+                    .WaitAsync(PosTenantCreateAttemptTimeout);
+                return;
+            }
+            catch (Exception ex) when (attempt <= delays.Count)
+            {
+                _logger.LogDebug(ex,
+                    "Tenant-created notification of tenant '{TenantId}' failed (attempt {Attempt}); retrying",
+                    tenantId, attempt);
+                await Task.Delay(delays[attempt - 1]);
+            }
+            catch (Exception ex)
+            {
+                // The tenant is committed; only the event is missing. Nothing retries it later: the services set the
+                // tenant up after a ClearCache of the tenant or their next restart.
+                _logger.LogWarning(ex,
+                    "Tenant '{TenantId}' is registered, but its tenant-created notification failed after {Attempts} " +
+                    "attempts (correlation {CorrelationId}); the services have not set it up. Run ClearCache for the " +
+                    "tenant (or restart the services) to set it up",
+                    tenantId, attempt, correlationId);
+                return;
+            }
+        }
+    }
+
     // ReSharper disable once UnusedMember.Global
     public async Task ClearChildTenantAsync(IOctoAdminSession adminSession, string tenantId)
     {
@@ -1016,7 +1124,57 @@ public class TenantContext : ITenantContext
         }
         finally
         {
-            await _tenantNotifications.NotifyPosTenantUpdateAsync(tenantId, correlationId);
+            // Inside a transaction when it ends (commit or rollback; not after a commit whose outcome is unknown), and
+            // after the tenant-created notification of the re-create, which is registered first.
+            if (adminSession is IOctoSessionInternal { IsTransactionActive: true } transaction)
+            {
+                Task PublishUpdate() => PublishTransactionCallbackAsync(
+                    () => _tenantNotifications.NotifyPosTenantUpdateAsync(tenantId, correlationId), tenantId);
+                transaction.RegisterTransactionCallbacks(PublishUpdate, PublishUpdate);
+            }
+            else
+            {
+                await _tenantNotifications.NotifyPosTenantUpdateAsync(tenantId, correlationId);
+            }
+        }
+    }
+
+    private static void RecordRemovalInTransaction(IOctoAdminSession adminSession, string tenantId)
+    {
+        if (adminSession is IOctoSessionInternal { IsTransactionActive: true })
+        {
+            TenantTransactionNotificationState.RecordRemoval(adminSession, tenantId);
+        }
+    }
+
+    private async Task<bool> IsStillRegisteredChildAsync(string tenantId)
+    {
+        try
+        {
+            using var session = await GetAdminSessionAsync();
+            session.StartTransaction();
+            var exists = await IsChildTenantExistingAsync(session, tenantId);
+            await session.CommitTransactionAsync();
+            return exists;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Registration check of tenant '{TenantId}' failed; publishing anyway", tenantId);
+            return true;
+        }
+    }
+
+    private async Task PublishTransactionCallbackAsync(Func<Task> publish, string tenantId)
+    {
+        try
+        {
+            // Bounded like the tenant-created notification: it runs inside the caller's commit or the session's dispose.
+            await publish().WaitAsync(PosTenantCreateAttemptTimeout);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Tenant-updated notification of tenant '{TenantId}' failed after the transaction",
+                tenantId);
         }
     }
 
@@ -1136,6 +1294,7 @@ public class TenantContext : ITenantContext
         string tenantId, bool dropStreamData = false, bool overrideForeignOwnership = false)
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+        RecordRemovalInTransaction(adminSession, tenantId);
 
         var tenantRepository = GetTenantRepositoryAsAdmin();
 

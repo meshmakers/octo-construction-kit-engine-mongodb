@@ -11,6 +11,13 @@ public class CommandResult
     public TimeSpan Duration { get; set; }
     public string Command { get; set; } = string.Empty;
 
+    /// <summary>
+    ///     A restore with attach succeeded, but the tenant-created notification could not be published: the tenant is
+    ///     registered and holds its data, the services have not set it up yet. Recover with a ClearCache of the tenant.
+    ///     <see cref="Output" /> carries the same warning as text.
+    /// </summary>
+    public bool TenantCreatedNotificationFailed { get; set; }
+
     public static CommandResult Failure(string error)
     {
         return new CommandResult

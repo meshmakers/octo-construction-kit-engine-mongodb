@@ -131,7 +131,12 @@ internal class TenantBackupService(
             logger.LogInformation(
                 "Clone of tenant '{SourceTenantId}' to '{TempTenantId}' complete",
                 sourceTenantId, tempTenantId);
-            return new CommandResult { Success = true, ExitCode = 0 };
+            return new CommandResult
+            {
+                Success = true, ExitCode = 0,
+                TenantCreatedNotificationFailed = restoreResult.TenantCreatedNotificationFailed,
+                Output = restoreResult.TenantCreatedNotificationFailed ? restoreResult.Output : string.Empty
+            };
         }
         catch (Exception ex)
         {
@@ -485,13 +490,33 @@ internal class TenantBackupService(
         {
             logger.LogInformation("Attaching tenant '{TenantId}' to database '{DatabaseName}'",
                 tenantId, databaseName);
+            // The tenant-created notification is published here, after the commit: the services set the tenant up
+            // when they receive it and must find it registered. A failed publish does not fail the restore (the data is
+            // restored and attached); it is reported on the result, so the caller can surface it.
             using var session = await systemContext.GetAdminSessionAsync();
+            using var notification = TenantCreatedNotificationScope.Begin(session);
             session.StartTransaction();
             await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
             await session.CommitTransactionAsync();
+
             logger.LogInformation(
                 "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
                 tenantId, databaseName);
+
+            try
+            {
+                await notification.PublishAsync();
+            }
+            catch (Exception ex)
+            {
+                var warning =
+                    $"Tenant '{tenantId}' was restored and attached to database '{databaseName}', but the " +
+                    $"tenant-created notification failed ({ex.Message}). The services have not set the tenant up: " +
+                    "run ClearCache for the tenant.";
+                logger.LogWarning(ex, "Restore of tenant '{TenantId}': {Warning}", tenantId, warning);
+                result.TenantCreatedNotificationFailed = true;
+                result.Output = string.IsNullOrEmpty(result.Output) ? warning : result.Output + Environment.NewLine + warning;
+            }
         }
 
         return result;
