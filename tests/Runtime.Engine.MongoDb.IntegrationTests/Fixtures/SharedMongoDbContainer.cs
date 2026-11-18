@@ -49,7 +49,7 @@ internal static class SharedMongoDbContainer
                     // (see TestContainerLimits). Appended to the --replSet arguments of WithReplicaSet.
                     .WithCommand("--wiredTigerCacheSizeGB", TestContainerLimits.MongoWiredTigerCacheSizeGb)
                     .WithCommand(TestContainerLimits.MongoFileHandleParameters)
-                    .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.MongoMemoryLimitBytes))
+                    .WithCreateParameterModifier(TestContainerLimits.Resources(TestContainerLimits.MongoMemoryLimitBytes, TestContainerLimits.MongoCpuLimit))
                     .Build();
 
                 using var startCts = new CancellationTokenSource(perAttemptTimeout);

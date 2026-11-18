@@ -46,18 +46,22 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
 
     public string ConnectionString { get; private set; } = string.Empty;
 
+    /// <summary>Name of the fixture's container, for failure messages (AB#9250).</summary>
+    public string ContainerName { get; private set; } = string.Empty;
+
     // CrateDB rejects the ROLLBACK a pooled connection sends when it is reset; the helpers do not pool.
     private string PlainConnectionString => ConnectionString + ";Pooling=false";
 
     public async ValueTask InitializeAsync()
     {
+        ContainerName = $"cratedb-stagingcopy-test-{Guid.NewGuid():N}";
         var container = new ContainerBuilder(Image)
-            .WithName($"cratedb-stagingcopy-test-{Guid.NewGuid():N}")
+            .WithName(ContainerName)
             .WithPortBinding(5432, true)
             .WithPortBinding(4200, true)
             .WithEnvironment("CRATE_HEAP_SIZE", TestContainerLimits.CrateHeapSize)
             // AB#8511: hard cap, see TestContainerLimits.
-            .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.CrateMemoryLimitBytes))
+            .WithCreateParameterModifier(TestContainerLimits.Resources(TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
             .WithCommand("-Cdiscovery.type=single-node")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("started"))
             .Build();
@@ -101,6 +105,55 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
         {
             await _container.DisposeAsync();
         }
+    }
+
+    /// <summary>
+    ///     Waits until the container accepts a connection and answers <c>SELECT 1</c>, at most
+    ///     <see cref="CrateTestConnect.ReadinessBudget" /> (AB#9250). Tests that open their own pools with a short connect
+    ///     timeout call it before the measured part: on a loaded machine the first connect to the container can take longer
+    ///     than their timeout, and without this wait such a test failed with a bare <c>BrokenCircuitException</c> of the
+    ///     resilience pipeline instead of saying that the container was not reachable.
+    /// </summary>
+    public async Task EnsureReachableAsync(CancellationToken cancellationToken)
+    {
+        var connectionString = new NpgsqlConnectionStringBuilder(PlainConnectionString)
+        {
+            Timeout = CrateTestConnect.ReadinessAttemptConnectTimeoutSeconds,
+        }.ConnectionString;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Exception? last = null;
+        var attempts = 0;
+        while (watch.Elapsed < CrateTestConnect.ReadinessBudget)
+        {
+            attempts++;
+            try
+            {
+                await using var connection = new NpgsqlConnection(connectionString);
+                await connection.OpenAsync(cancellationToken);
+                await using var command = new NpgsqlCommand("SELECT 1", connection);
+                await command.ExecuteScalarAsync(cancellationToken);
+                return;
+            }
+            catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+            {
+                last = ex;
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"{Describe(CrateTestConnect.ReadinessAttemptConnectTimeoutSeconds)} did not accept a connection within " +
+            $"{CrateTestConnect.ReadinessBudget.TotalSeconds:0} s ({attempts} attempts); the machine or the Docker VM is " +
+            $"probably overloaded (test README, \"Container resources and parallelism\"). Last error: {last?.Message}",
+            last);
+    }
+
+    /// <summary>The container, its image, its endpoint and the given connect timeout, for failure messages.</summary>
+    public string Describe(int connectTimeoutSeconds)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(ConnectionString);
+        return $"CrateDB test container '{ContainerName}' ({Image}, {builder.Host}:{builder.Port}, " +
+               $"connect timeout {connectTimeoutSeconds} s)";
     }
 
     /// <summary>A tenant id that maps to a schema of its own, so tests do not see each other's tables.</summary>

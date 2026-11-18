@@ -4,6 +4,64 @@ Integration tests of the MongoDB runtime engine against a Testcontainers MongoDB
 tests, a Testcontainers CrateDB). Layout, parallelism rules and the CI time budget: repository `CLAUDE.md`, section
 *Test layout, parallelism rules and the CI time budget*.
 
+## Container resources and parallelism (AB#9250)
+
+Every Testcontainer of the suite has a memory **and** a CPU limit, and xUnit runs at most 8 collections at once, so a
+full run takes a bounded share of the machine and stays predictable next to other work (other agent lanes, Docker
+builds, a local kind cluster). Values in `Fixtures/TestContainerLimits.cs` (with the measurements behind them), pinned
+by `TestContainerLimitsTests` and `CrateTestContainerLimitsTests`:
+
+| Container | Fixture (collection) | Memory limit | CPU limit | JVM heap / cache |
+|---|---|---|---|---|
+| shared mongod | `SharedMongoDbContainer` (all MongoDB collections) | 12 GiB | 4 CPUs | WiredTiger cache 3 GB |
+| CrateDB | `CrateStagingCopyFixture` (`CrateStagingCopy`, ~40 classes) | 3 GiB | 2 CPUs | heap 1 GB |
+| CrateDB | `BlueprintArchiveActivationFixture` (`BlueprintArchiveActivation`) | 3 GiB | 2 CPUs | heap 1 GB |
+| CrateDB, stress only | `CrateMemoryPressureFixture` (`CrateMemoryPressure`, `Category=Stress`) | 3 GiB | 2 CPUs | heap 512 MB |
+
+MEASUREMENT_TABLE
+
+- **One container per CrateDB fixture.** Each CrateDB fixture belongs to exactly one xUnit collection, so it starts one
+  container, and the tests that share it run one after the other. At most three CrateDB containers exist at once (two
+  without the stress tests).
+- **Sum of the limits:** the CI suite (`Category!=Stress`) 18 GiB / 8 CPUs, everything at once 21 GiB / 10 CPUs. The limits
+  are ceilings, not reservations; the measured peaks add up to far less (table above).
+- **`maxParallelThreads: 8`** (`xunit.runner.json`). Without it xUnit runs as many collections at once as the machine has
+  logical CPUs: 22 on a current developer laptop, where every collection fixture then creates its system tenant and imports
+  its CK models at the same moment against the one mongod. 8 is what the CI agents ran with before (their log shows 8
+  fixtures initialising at once), so the CI time does not change, and it is at least the number of collections that use
+  a CrateDB container (2, 3 with the stress tests) plus the long MongoDB chains.
+
+### Running the suite locally on Windows
+
+1. **Docker Desktop memory.** Docker Desktop (WSL 2) gives its VM half of the host's RAM by default - 16 GiB on a 32 GiB
+   machine, less than the 18 GiB of limits of the CI suite. Give it at least **20 GiB** and **12 CPUs** in
+   `%UserProfile%\.wslconfig`, then `wsl --shutdown` and restart Docker Desktop:
+
+   ```ini
+   [wsl2]
+   memory=20GB
+   processors=12
+   ```
+
+   Check with `docker info --format "{{.NCPU}} CPUs, {{.MemTotal}} bytes"`. A local kind cluster or other containers in the
+   same VM need their share on top.
+2. **One heavy Docker job at a time.** Do not run two integration suites, or a suite and Docker image builds, at the same
+   time on one workstation: on 2026-11-17 a parallel image build turned a 6-minute slice into 50 minutes with CrateDB connect
+   timeouts. Several agent lanes on one machine serialize their heavy Docker runs.
+3. **Build, then run** (Git Bash or PowerShell, from the repository root):
+
+   ```bash
+   dotnet build Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL
+   dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --no-build --filter "Category!=LoadSensitive"
+   ```
+
+   Known local Windows problems are filtered with `FullyQualifiedName!~<test>` while their Bugs are open (AB#9145, AB#9105,
+   AB#8555, AB#9203; the PR of a change names the filter it used).
+4. **A CrateDB container that does not answer** fails `DownsamplingPhaseProbePoolIntegrationTests` and
+   `CrateConnectionPoolReturnTests` with a message naming the container, its port and the connect timeout (they wait up to
+   30 s for it before they measure), not with a bare `BrokenCircuitException`. That points at the machine (Docker VM
+   memory, other Docker work), not at the code.
+
 ## Container memory caps (AB#8511)
 
 Every Testcontainer of this suite has a fixed memory footprint (`Fixtures/TestContainerLimits.cs`):

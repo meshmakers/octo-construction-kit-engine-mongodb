@@ -20,9 +20,17 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.CrateCompat;
 ///     Runs on every supported CrateDB line (<c>OCTO_TEST_CRATEDB_IMAGE</c>).
 /// </summary>
 [Collection(CrateStagingCopyCollection.Name)]
-public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture)
+public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture) : IAsyncLifetime
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    /// <summary>
+    ///     AB#9250: these tests keep the short pool wait they measure (<see cref="CrateTestConnect.PoolWaitSeconds" />), so the
+    ///     container must already accept connections when they start: wait for it first, with a failure that names it.
+    /// </summary>
+    public ValueTask InitializeAsync() => new(fixture.EnsureReachableAsync(Ct));
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     [Fact]
     public async Task FailedStatements_ReturnTheirConnectionsToThePool()
@@ -83,7 +91,7 @@ public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture)
 
         Assert.True(CrateDatabaseClient.IsConnectionPoolExhausted(error.InnerException!), error.ToString());
         Assert.Equal(tenantId, error.TenantId);
-        // One wait for a slot (Timeout=3), no retries: well below the 35 s the retried wait used to take.
+        // One wait for a slot (CrateTestConnect.PoolWaitSeconds), no retries: well below the 35 s the retried wait used to take.
         Assert.True(started.Elapsed < TimeSpan.FromSeconds(10), $"took {started.Elapsed}");
     }
 
@@ -94,7 +102,7 @@ public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture)
         // drops it instead of keeping its slot.
         var builder = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
         {
-            Pooling = true, MaxPoolSize = 1, Timeout = 3, NoResetOnClose = true,
+            Pooling = true, MaxPoolSize = 1, Timeout = CrateTestConnect.PoolWaitSeconds, NoResetOnClose = true,
         };
         await using var dataSource = NpgsqlDataSource.Create(builder.ConnectionString);
 
@@ -110,7 +118,10 @@ public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture)
     private CrateDbConnectionAccess NewAccess(int maxPoolSize)
     {
         // A short wait for a pool slot, so a leak fails the test in seconds instead of after 15 s per attempt.
-        var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Timeout = 3 }.ConnectionString;
+        var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+        {
+            Timeout = CrateTestConnect.PoolWaitSeconds
+        }.ConnectionString;
         var configuration = Options.Create(new StreamDataConfiguration
         {
             ConnectionString = connectionString,
