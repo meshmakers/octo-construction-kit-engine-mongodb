@@ -38,6 +38,7 @@ public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture) : I
         await using var access = NewAccess(maxPoolSize: 2);
         var client = NewClient(access);
         var tenantId = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenantId, ct), 2, Ct);
         var existing = TenantSchema.QualifiedArchiveTable(tenantId, OctoObjectId.GenerateNewId().ToString());
         await fixture.SqlAsync(ArchiveDdlGenerator.GenerateCreateTable(
             existing, [new ArchiveColumnDdl("v", new CrateColumnType.Primitive("DOUBLE PRECISION"), false, true)], 1, 0));
@@ -63,6 +64,7 @@ public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture) : I
         await using var access = NewAccess(maxPoolSize: 2);
         var client = NewClient(access);
         var tenantId = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenantId, ct), 2, Ct);
         var missing = TenantSchema.QualifiedArchiveTable(tenantId, OctoObjectId.GenerateNewId().ToString());
 
         for (var i = 0; i < 5; i++)
@@ -82,6 +84,7 @@ public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture) : I
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenantId = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenantId, ct), 1, Ct);
         await using var held = await access.CreateConnectionAsync(tenantId, Ct);
 
         var started = System.Diagnostics.Stopwatch.StartNew();

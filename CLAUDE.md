@@ -187,8 +187,9 @@ sets `maxParallelThreads: 8` (the xUnit default is the number of logical CPUs: 2
 laptop; the CI agents already ran 8). Sum of the limits: 18 GiB / 8 CPUs for the CI suite, 21 GiB / 10 CPUs with the stress
 container; a local Windows run needs a Docker Desktop VM of at least 20 GiB and 12 CPUs (`.wslconfig`). The two CrateDB tests
 that open their own pools (`DownsamplingPhaseProbePoolIntegrationTests`, `CrateConnectionPoolReturnTests`) wait up to 30 s for
-the container first and name it when it does not answer (`StagingCopy/CrateTestConnect.cs`); the pool-wait tests keep their
-3 s connect timeout on purpose. Local run on Windows and the measurements: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`,
+the container first and name it when it does not answer, then open the connections of their pool once and give them back
+before the measured part (`StagingCopy/CrateTestConnect.cs`, `WarmUpAsync`): on Windows a new connection through the Docker
+Desktop port proxy sometimes takes seconds while CrateDB is idle. The pool-wait tests keep their 3 s connect timeout on purpose. Local run on Windows and the measurements: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`,
 *Container resources and parallelism*.
 
 **Performance budget tests are not in the CI (AB#8004).** The Test step runs with

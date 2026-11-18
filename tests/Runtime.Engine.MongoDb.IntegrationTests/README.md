@@ -84,6 +84,13 @@ suite in about 6 minutes.
    `CrateConnectionPoolReturnTests` with a message naming the container, its port and the connect timeout (they wait up to
    30 s for it before they measure), not with a bare `BrokenCircuitException`. That points at the machine (Docker VM
    memory, other Docker work), not at the code.
+5. **Slow connection setup on Windows.** A new connection through the Docker Desktop port proxy sometimes takes several
+   seconds while CrateDB is idle (2026-11-18: in one of the AC4 runs the `CrateStagingCopy` collection took about four times
+   as long as in the run before, CrateDB at ~0.06 CPUs, and the ten-parallel probe test failed on a 3 s Npgsql connect
+   timeout, although direct TCP connects to the same port took 0-46 ms). The two pool test classes therefore open the
+   connections of their pool once and give them back before the measured part (`CrateTestConnect.WarmUpAsync`, same data
+   source as the test), so the 3 s pool wait they prove is not spent on connects. A failed warm-up names the container
+   and the slow connection setup. The cause is tracked in a follow-up Bug.
 
 ## Container memory caps (AB#8511)
 

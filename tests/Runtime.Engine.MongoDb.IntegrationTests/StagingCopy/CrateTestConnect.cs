@@ -37,6 +37,75 @@ internal static class CrateTestConnect
     public const int PoolWaitSeconds = 3;
 
     /// <summary>
+    ///     Opens <paramref name="connections" /> physical connections of the pool under test and gives them back, so the
+    ///     measured part finds them idle in the pool and opens no new connection (AB#9250).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Why: on a Windows workstation a new connection through the Docker Desktop port proxy sometimes takes several
+    ///         seconds while CrateDB itself is idle (2026-11-18, AC4 run 2: <c>TenParallelQueries_..._DoNotExhaustAPoolOf32</c>
+    ///         failed with an Npgsql connect timeout inside <c>NpgsqlConnector.ConnectAsync</c>, while direct TCP connects to the
+    ///         same port took 0-46 ms). With the 3 s <see cref="PoolWaitSeconds" /> such a connect fails the test although the
+    ///         pool behaves correctly.
+    ///     </para>
+    ///     <para>
+    ///         The proof stays as strict: <paramref name="open" /> must open through the same data source (same access, same
+    ///         tenant) as the measured part, so the connections land in the pool the test measures. The tests prove that a pool
+    ///         is not drained and that failed or cancelled statements give their connection back; that is measured as the wait
+    ///         for a free slot, which keeps its 3 s. A slot that is not given back still leaves the pool short and fails the test
+    ///         as before; only the connect of a new physical connection is taken out of the measured part.
+    ///     </para>
+    ///     <para>
+    ///         A connect that times out is retried until <see cref="ReadinessBudget" />; then the test fails with a message that
+    ///         names the container and the slow connection setup.
+    ///     </para>
+    /// </remarks>
+    public static async Task WarmUpAsync(CrateStagingCopyFixture fixture,
+        Func<CancellationToken, Task<NpgsqlConnection>> open, int connections, CancellationToken cancellationToken)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var opened = new List<NpgsqlConnection>();
+        Exception? last = null;
+        var failures = 0;
+        try
+        {
+            while (opened.Count < connections && watch.Elapsed < ReadinessBudget)
+            {
+                var attempts = Enumerable.Range(0, connections - opened.Count).Select(_ => open(cancellationToken)).ToList();
+                foreach (var attempt in attempts)
+                {
+                    try
+                    {
+                        opened.Add(await attempt);
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested && MayBeUnreachable(ex))
+                    {
+                        last = ex;
+                        failures++;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            // back to the pool: the measured part leases exactly these connections
+            foreach (var connection in opened)
+            {
+                await connection.DisposeAsync();
+            }
+        }
+
+        if (opened.Count < connections)
+        {
+            throw new InvalidOperationException(
+                $"{fixture.Describe()}: could open only {opened.Count} of {connections} connections within " +
+                $"{ReadinessBudget.TotalSeconds:0} s ({failures} connects took longer than {PoolWaitSeconds} s; " +
+                "slow connection setup through the Docker Desktop port proxy?). " +
+                $"Last error: {last?.GetType().Name}: {last?.Message}", last);
+        }
+    }
+
+    /// <summary>
     ///     Runs <paramref name="action" />. When it fails with an error that can mean "no connection" (an Npgsql timeout or
     ///     socket error, or the <see cref="BrokenCircuitException" /> the resilience pipeline throws after such failures), the
     ///     container is probed once: if it does not answer, the failure names the container; if it answers, the original error

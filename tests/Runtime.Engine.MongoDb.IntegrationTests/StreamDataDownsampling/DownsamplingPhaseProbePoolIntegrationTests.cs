@@ -57,6 +57,8 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         var rtId = OctoObjectId.GenerateNewId();
         var series = await CreateArchiveAsync(tenant, rtId);
         await using var access = NewAccess(maxPoolSize: 32);
+        // as many connections as the refresh below runs queries at once (3 x Series), so no query has to connect
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 3 * Series, Ct);
         var client = A.Fake<IStreamDataDatabaseClient>(o => o.Wrapping(NewClient(access)));
         var process = new RecomputeProcessState();
 
@@ -90,6 +92,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenant = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 1, Ct);
         var held = await access.CreateConnectionAsync(tenant, Ct);
 
         var started = Stopwatch.StartNew();
@@ -111,6 +114,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenant = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 1, Ct);
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
 
@@ -132,6 +136,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenant = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 1, Ct);
         using var cancel = new CancellationTokenSource();
 
         var started = Stopwatch.StartNew();
@@ -156,6 +161,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenant = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 1, Ct);
 
         var started = Stopwatch.StartNew();
         await Assert.ThrowsAnyAsync<Exception>(
