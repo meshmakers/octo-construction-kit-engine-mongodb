@@ -88,6 +88,8 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
             Options.Create(new StreamDataInstanceConfiguration()),
             Options.Create(new CrateRecomputeOptions()));
 
+        // the container logged "started"; make sure it also answers before the first statement of the fixture
+        await EnsureReachableAsync(CancellationToken.None);
         await SetJobLogFilterAsync(JobLogFilterGuard.RecommendedFilter);
     }
 

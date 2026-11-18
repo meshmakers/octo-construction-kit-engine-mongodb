@@ -15,7 +15,7 @@ mongod runs under) and `CrateTestContainerLimitsTests` (heap and processors the 
 
 | Container | Fixture (collection) | Memory limit | CPU limit | JVM heap / cache |
 |---|---|---|---|---|
-| shared mongod | `SharedMongoDbContainer` (all MongoDB collections) | 12 GiB | 4 CPUs | WiredTiger cache 3 GB |
+| shared mongod | `SharedMongoDbContainer` (all MongoDB collections) | 12 GiB | 4 CPUs (the Docker daemon needs at least 4) | WiredTiger cache 3 GB |
 | CrateDB | `CrateStagingCopyFixture` (`CrateStagingCopy`, ~40 classes) | 3 GiB | 2 CPUs | heap 1 GB |
 | CrateDB | `BlueprintArchiveActivationFixture` (`BlueprintArchiveActivation`) | 3 GiB | 2 CPUs | heap 1 GB |
 | CrateDB, stress only | `CrateMemoryPressureFixture` (`CrateMemoryPressure`, `Category=Stress`) | 3 GiB | 2 CPUs | heap 512 MB |
@@ -78,19 +78,20 @@ suite in about 6 minutes.
    dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --no-build --filter "Category!=LoadSensitive"
    ```
 
-   Known local Windows problems are filtered with `FullyQualifiedName!~<test>` while their Bugs are open (AB#9145, AB#9105,
-   AB#8555, AB#9203; the PR of a change names the filter it used).
 4. **A CrateDB container that does not answer** fails `DownsamplingPhaseProbePoolIntegrationTests` and
    `CrateConnectionPoolReturnTests` with a message naming the container, its port and the connect timeout (they wait up to
-   30 s for it before they measure), not with a bare `BrokenCircuitException`. That points at the machine (Docker VM
-   memory, other Docker work), not at the code.
+   30 s for it before they measure), not with a bare `BrokenCircuitException`. When a later connect error is followed by a
+   failed probe, the message reports the probe as an observation next to the original error: a loaded Docker VM or other
+   Docker work is one possible cause, but read the original exception before blaming the machine.
 5. **Slow connection setup on Windows.** A new connection through the Docker Desktop port proxy sometimes takes several
    seconds while CrateDB is idle (2026-11-18: in one of the AC4 runs the `CrateStagingCopy` collection took about four times
    as long as in the run before, CrateDB at ~0.06 CPUs, and the ten-parallel probe test failed on a 3 s Npgsql connect
    timeout, although direct TCP connects to the same port took 0-46 ms; many connects at once each took longer than 3 s,
    single ones did not). The two pool test classes therefore open the connections of their pool once, one after the other,
    and give them back before the measured part (`CrateTestConnect.WarmUpAsync`, same data source as the test, as many
-   connections as the test holds at once), so the 3 s pool wait they prove is not spent on connects. A failed warm-up names the container
+   connections as the test holds at once), so the 3 s pool wait they prove is not spent on the initial connects while the
+   warmed connections stay healthy. A test that breaks a connection (`ADiscardedConnection_FreesItsPoolSlot` on purpose, or a
+   cancelled statement) still opens a replacement within its 3 s. A failed warm-up names the container
    and the slow connection setup. The cause is tracked in AB#9320.
 
 ## Container memory caps (AB#8511)

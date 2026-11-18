@@ -28,6 +28,15 @@ public class CrateTestContainerLimitsTests(CrateStagingCopyFixture fixture)
         // fewer CPUs); without the quota it would see every CPU of the Docker VM
         Assert.InRange(Convert.ToInt32(node["processors"], CultureInfo.InvariantCulture), 1,
             (int)Math.Ceiling(TestContainerLimits.CrateCpuLimit));
+
+        // and the quota itself, from the container's cgroup: "<quota> <period>" in microseconds, and the memory limit
+        var (exitCode, output) = await fixture.ExecAsync("cat", "/sys/fs/cgroup/cpu.max", "/sys/fs/cgroup/memory.max");
+        Assert.Equal(0, exitCode);
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var cpuMax = lines[0].Split(' ');
+        Assert.Equal(TestContainerLimits.CrateCpuLimit,
+            double.Parse(cpuMax[0], CultureInfo.InvariantCulture) / double.Parse(cpuMax[1], CultureInfo.InvariantCulture));
+        Assert.Equal(TestContainerLimits.CrateMemoryLimitBytes, long.Parse(lines[1], CultureInfo.InvariantCulture));
     }
 }
 
@@ -57,6 +66,10 @@ public class TestContainerLimitsValueTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => TestContainerLimits.Resources(0, 2));
         Assert.Throws<ArgumentOutOfRangeException>(() => TestContainerLimits.Resources(GiB, 0));
+        // positive, but below Docker's 0.01 CPUs it would round to NanoCPUs = 0, which means no limit
+        Assert.Throws<ArgumentOutOfRangeException>(() => TestContainerLimits.Resources(GiB, 0.0000000005));
+        Assert.Throws<ArgumentOutOfRangeException>(() => TestContainerLimits.Resources(GiB, 0.009));
+        TestContainerLimits.Resources(GiB, 0.01)(new CreateContainerParameters());
     }
 
     [Fact]

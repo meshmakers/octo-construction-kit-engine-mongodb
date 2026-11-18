@@ -25,9 +25,10 @@ internal static class SharedMongoDbContainer
 
     public static async Task<string> GetHostAsync(SystemTestOptions options)
     {
-        if (_host != null)
+        var host = Volatile.Read(ref _host);
+        if (host != null)
         {
-            return _host;
+            return host;
         }
 
         await Gate.WaitAsync();
@@ -64,8 +65,9 @@ internal static class SharedMongoDbContainer
                 {
                     var watch = System.Diagnostics.Stopwatch.StartNew();
                     await container.StartAsync(startCts.Token);
-                    _host = $"localhost:{container.GetMappedPublicPort()}";
+                    // Container first: the unlocked fast path above returns as soon as it sees _host
                     Container = container;
+                    Volatile.Write(ref _host, $"localhost:{container.GetMappedPublicPort()}");
                     // Reported, not Console.WriteLine'd: console output from a fixture is captured as
                     // test output and only ever reaches the .trx, which is why this line was invisible
                     // in every CI log so far (AB#5436).

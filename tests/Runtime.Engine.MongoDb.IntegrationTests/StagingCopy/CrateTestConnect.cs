@@ -66,8 +66,9 @@ internal static class CrateTestConnect
     ///         whose cancel CrateDB does not acknowledge in time) is replaced by a new connect within the measured part.
     ///     </para>
     ///     <para>
-    ///         The connects run one after the other; a failed one is retried after a short pause until
-    ///         <see cref="ReadinessBudget" /> (the attempt that starts last may end up to one connect timeout later), then the
+    ///         The connects run one after the other; a failed one is retried after a short pause until the warm-up budget
+    ///         is used up (<see cref="WarmUpBudget" />: one connect timeout per requested connection, at least
+    ///         <see cref="ReadinessBudget" />; the attempt that starts last may end up to one connect timeout later), then the
     ///         test fails with a message that names the container and the slow connection setup. An exhausted pool is not
     ///         retried: it means more connections were asked for than the pool holds, a mistake of the test, and fails at once.
     ///     </para>
@@ -75,6 +76,7 @@ internal static class CrateTestConnect
     public static async Task WarmUpAsync(CrateStagingCopyFixture fixture,
         Func<CancellationToken, Task<NpgsqlConnection>> open, int connections, CancellationToken cancellationToken)
     {
+        var budget = WarmUpBudget(connections);
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var opened = new List<NpgsqlConnection>();
         Exception? last = null;
@@ -83,7 +85,7 @@ internal static class CrateTestConnect
         {
             // One connect after the other: many connects at once through the Docker Desktop port proxy each took longer
             // than 3 s (2026-11-18, AC4 run 4: 1 of 30 within 30 s, without any other load), single ones did not.
-            while (opened.Count < connections && watch.Elapsed < ReadinessBudget)
+            while (opened.Count < connections && watch.Elapsed < budget)
             {
                 try
                 {
@@ -93,7 +95,7 @@ internal static class CrateTestConnect
                 {
                     last = ex;
                     failures++;
-                    var remaining = ReadinessBudget - watch.Elapsed;
+                    var remaining = budget - watch.Elapsed;
                     if (remaining > TimeSpan.Zero)
                     {
                         var pause = TimeSpan.FromMilliseconds(200);
@@ -115,17 +117,30 @@ internal static class CrateTestConnect
         {
             throw new InvalidOperationException(
                 $"{fixture.Describe()}: could open only {opened.Count} of {connections} connections within " +
-                $"{ReadinessBudget.TotalSeconds:0} s ({failures} connects failed, connect timeout {PoolWaitSeconds} s; " +
+                $"{budget.TotalSeconds:0} s ({failures} connects failed, connect timeout {PoolWaitSeconds} s; " +
                 "slow connection setup through the Docker Desktop port proxy?). " +
                 $"Last error: {last?.GetType().Name}: {last?.Message}", last);
         }
     }
 
     /// <summary>
+    ///     Budget of <see cref="WarmUpAsync" />: one connect timeout per requested connection, at least
+    ///     <see cref="ReadinessBudget" />, so a slow but working connection setup (each connect inside its 3 s) never runs out of
+    ///     time because many connections are asked for.
+    /// </summary>
+    internal static TimeSpan WarmUpBudget(int connections)
+    {
+        var perConnection = TimeSpan.FromSeconds(PoolWaitSeconds * (double)connections);
+        return perConnection > ReadinessBudget ? perConnection : ReadinessBudget;
+    }
+
+    /// <summary>
     ///     Runs <paramref name="action" />. When it fails with an error that can mean "no connection" (an Npgsql timeout or
     ///     socket error, or the <see cref="BrokenCircuitException" /> the resilience pipeline throws after such failures), the
-    ///     container is probed once: if it does not answer, the failure names the container; if it answers, the original error
-    ///     is rethrown unchanged, so a slow query or a drained pool is never reported as an unreachable container.
+    ///     container is probed once with a new connection: if it answers (or the test is being cancelled), the original error is
+    ///     rethrown unchanged, so a slow query or a drained pool is never reported as a connection problem; if it does not
+    ///     answer, the failure keeps the original error as its cause and adds the container and the probe result as an
+    ///     observation - the probe only shows that a new connection did not answer afterwards, not why the original failed.
     /// </summary>
     public static async Task<T> NamingAnUnreachableContainerAsync<T>(CrateStagingCopyFixture fixture,
         Func<Task<T>> action, CancellationToken cancellationToken)
@@ -134,18 +149,29 @@ internal static class CrateTestConnect
         {
             return await action();
         }
-        catch (Exception ex) when (MayBeUnreachable(ex))
+        catch (Exception ex) when (MayBeUnreachable(ex) && !cancellationToken.IsCancellationRequested)
         {
-            var probe = await fixture.TryConnectOnceAsync(FailureProbeBudget, cancellationToken);
+            Exception? probe;
+            try
+            {
+                probe = await fixture.TryConnectOnceAsync(FailureProbeBudget, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                probe = null; // the test is being cancelled: report the original error, not the interrupted probe
+            }
+
             if (probe is null)
             {
                 ExceptionDispatchInfo.Capture(ex).Throw();
             }
 
             throw new InvalidOperationException(
-                $"{fixture.Describe()} was not reachable during the test (connect timeout {PoolWaitSeconds} s; " +
-                $"a probe after the failure got no answer within {FailureProbeBudget.TotalSeconds:0} s either: " +
-                $"{probe.GetType().Name}: {probe.Message}). Original error: {ex.GetType().Name}: {ex.Message}", ex);
+                $"{ex.GetType().Name}: {ex.Message} - Observation: after this failure a new connection to " +
+                $"{fixture.Describe()} got no answer within {FailureProbeBudget.TotalSeconds:0} s either " +
+                $"({probe.GetType().Name}: {probe.Message}); connect timeout of the test {PoolWaitSeconds} s. " +
+                "Possible cause: slow connection setup through the Docker Desktop port proxy (AB#9320) or a loaded Docker VM; " +
+                "check the inner exception first.", ex);
         }
     }
 

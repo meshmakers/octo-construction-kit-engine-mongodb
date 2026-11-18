@@ -92,7 +92,8 @@ internal static class TestContainerLimits
     ///     every core of the Docker host, so one suite could starve the rest of the machine (other lanes, a kind cluster).
     ///     Measured 2026-11-18 on a full local run without the limit (22 logical CPUs, cgroup <c>cpu.stat</c> sampled
     ///     every ~8 s): average 0.62, p95 1.19, highest sample 1.88 CPUs. 4 leaves more than twice the highest sample, so
-    ///     the limit only takes effect when something goes wrong.
+    ///     the limit only takes effect when something goes wrong. Docker refuses a CPU limit above the number of CPUs of its
+    ///     daemon, so the suite needs a Docker daemon (VM) with at least 4 CPUs (CI agents: 8; README: 12 recommended).
     /// </summary>
     public const double MongoCpuLimit = 4;
 
@@ -148,6 +149,9 @@ internal static class TestContainerLimits
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(memoryBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(cpus);
+        // Docker accepts 0.01 CPUs at least; a smaller value would round to NanoCPUs = 0, which means "no limit"
+        var nanoCpus = (long)(cpus * 1_000_000_000);
+        ArgumentOutOfRangeException.ThrowIfLessThan(nanoCpus, 10_000_000L, nameof(cpus));
         return parameters =>
         {
             parameters.HostConfig ??= new HostConfig();
@@ -156,7 +160,7 @@ internal static class TestContainerLimits
             parameters.HostConfig.MemorySwap = memoryBytes;
             // CFS quota, the same as `docker run --cpus`: the container may use that many CPUs' worth of time and is
             // throttled above it, so one container cannot take every core of the host.
-            parameters.HostConfig.NanoCPUs = (long)(cpus * 1_000_000_000);
+            parameters.HostConfig.NanoCPUs = nanoCpus;
         };
     }
 }
