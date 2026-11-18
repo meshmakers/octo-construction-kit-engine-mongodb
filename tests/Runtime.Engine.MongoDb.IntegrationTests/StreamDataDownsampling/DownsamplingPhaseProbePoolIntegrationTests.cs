@@ -26,7 +26,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StreamDataDown
 ///     retried 30 s budget, and the pool of 32 ran dry.
 /// </summary>
 [Collection(CrateStagingCopyCollection.Name)]
-public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture fixture)
+public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture fixture) : IAsyncLifetime
 {
     private static readonly RtCkId<CkTypeId> MeterType = new("Test", new CkTypeId("Meter"));
     private const string MeterTypeLiteral = "Test/Meter";
@@ -41,6 +41,15 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
 
     private const int Series = 10;
 
+    /// <summary>
+    ///     AB#9250: wait for the container before anything is measured (the pool keeps its 3 s connect timeout), so an
+    ///     overloaded machine fails the test with a message that names the container instead of a
+    ///     <c>BrokenCircuitException</c>.
+    /// </summary>
+    public ValueTask InitializeAsync() => new(fixture.EnsureReachableAsync(Ct));
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
     [Fact]
     public async Task TenParallelQueries_OnATimeRangeArchiveWithoutRollup_DoNotExhaustAPoolOf32_AndReadEveryWindow()
     {
@@ -48,13 +57,16 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         var rtId = OctoObjectId.GenerateNewId();
         var series = await CreateArchiveAsync(tenant, rtId);
         await using var access = NewAccess(maxPoolSize: 32);
+        // as many connections as the refresh below runs queries at once (3 x Series), so no query has to connect
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 3 * Series, Ct);
         var client = A.Fake<IStreamDataDatabaseClient>(o => o.Wrapping(NewClient(access)));
         var process = new RecomputeProcessState();
 
         // one query per series, like the line chart's OBIS groups, all at once
         var started = Stopwatch.StartNew();
-        var results = await Task.WhenAll(series.Select(s =>
-            NewRepository(tenant, rtId, client, process).ExecuteDownsamplingQueryAsync(rtId, Query(s))));
+        var results = await CrateTestConnect.NamingAnUnreachableContainerAsync(fixture, () => Task.WhenAll(
+            series.Select(s => NewRepository(tenant, rtId, client, process).ExecuteDownsamplingQueryAsync(rtId, Query(s)))),
+            Ct);
         started.Stop();
 
         // the axis snapped to :35, so every window inside [18:35, To) is read: none dropped by the §7 predicate
@@ -66,8 +78,9 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         Assert.True(started.Elapsed < TimeSpan.FromSeconds(30), $"took {started.Elapsed}");
 
         // the next refresh of the board, three times at once: the phases come from the cache, no further probe
-        var refresh = await Task.WhenAll(Enumerable.Range(0, 3).SelectMany(_ => series).Select(s =>
-            NewRepository(tenant, rtId, client, process).ExecuteDownsamplingQueryAsync(rtId, Query(s))));
+        var refresh = await CrateTestConnect.NamingAnUnreachableContainerAsync(fixture, () => Task.WhenAll(
+            Enumerable.Range(0, 3).SelectMany(_ => series).Select(s =>
+                NewRepository(tenant, rtId, client, process).ExecuteDownsamplingQueryAsync(rtId, Query(s)))), Ct);
         Assert.All(refresh, r => Assert.Equal(expected, SumOf(r)));
         A.CallTo(() => client.QueryRowsOnceAsync(A<string>._, A<string>._, A<TimeSpan>._, A<CancellationToken>._))
             .MustHaveHappened(Series, Times.Exactly);
@@ -79,6 +92,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenant = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 1, Ct);
         var held = await access.CreateConnectionAsync(tenant, Ct);
 
         var started = Stopwatch.StartNew();
@@ -100,6 +114,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenant = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 1, Ct);
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
 
@@ -121,6 +136,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenant = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 1, Ct);
         using var cancel = new CancellationTokenSource();
 
         var started = Stopwatch.StartNew();
@@ -145,6 +161,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         await using var access = NewAccess(maxPoolSize: 1);
         var client = NewClient(access);
         var tenant = CrateStagingCopyFixture.NewTenantId();
+        await CrateTestConnect.WarmUpAsync(fixture, ct => access.CreateConnectionAsync(tenant, ct), 1, Ct);
 
         var started = Stopwatch.StartNew();
         await Assert.ThrowsAnyAsync<Exception>(
@@ -219,8 +236,11 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
 
     private CrateDbConnectionAccess NewAccess(int maxPoolSize)
     {
-        // A short wait for a pool slot, so an exhausted pool fails the test in seconds.
-        var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Timeout = 3 }.ConnectionString;
+        // A short wait for a pool slot, so an exhausted pool fails the test in seconds (CrateTestConnect.PoolWaitSeconds).
+        var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+        {
+            Timeout = CrateTestConnect.PoolWaitSeconds
+        }.ConnectionString;
         return new CrateDbConnectionAccess(Options.Create(new StreamDataConfiguration
         {
             ConnectionString = connectionString,

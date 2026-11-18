@@ -4,6 +4,98 @@ Integration tests of the MongoDB runtime engine against a Testcontainers MongoDB
 tests, a Testcontainers CrateDB). Layout, parallelism rules and the CI time budget: repository `CLAUDE.md`, section
 *Test layout, parallelism rules and the CI time budget*.
 
+## Container resources and parallelism (AB#9250)
+
+Every Testcontainer of the suite has a memory **and** a CPU limit, and xUnit runs at most 8 collections at once, so a
+full run takes a bounded share of the machine and stays predictable next to other work (other agent lanes, Docker
+builds, a local kind cluster). Values in `Fixtures/TestContainerLimits.cs` (with the measurements behind them); all four
+fixtures apply them through one modifier, `TestContainerLimits.Resources(memory, cpus)`. Pinned by
+`TestContainerLimitsValueTests` (the modifier and the sums, no Docker), `TestContainerLimitsTests` (the cgroup limits
+mongod runs under) and `CrateTestContainerLimitsTests` (heap and processors the staging copy CrateDB sees):
+
+| Container | Fixture (collection) | Memory limit | CPU limit | JVM heap / cache |
+|---|---|---|---|---|
+| shared mongod | `SharedMongoDbContainer` (all MongoDB collections) | 12 GiB | 4 CPUs (the Docker daemon needs at least 4) | WiredTiger cache 3 GB |
+| CrateDB | `CrateStagingCopyFixture` (`CrateStagingCopy`, ~40 classes) | 3 GiB | 2 CPUs | heap 1 GB |
+| CrateDB | `BlueprintArchiveActivationFixture` (`BlueprintArchiveActivation`) | 3 GiB | 2 CPUs | heap 1 GB |
+| CrateDB, stress only | `CrateMemoryPressureFixture` (`CrateMemoryPressure`, `Category=Stress`) | 3 GiB | 2 CPUs | heap 512 MB |
+
+Measured on full local runs on 2026-11-18 (Windows 11, 22 logical CPUs, 63 GiB RAM, Docker Desktop VM 31 GiB / 22 CPUs,
+a kind cluster running next to it), cgroup `memory.peak` and `cpu.stat` of each container sampled every ~8 s:
+
+| Container | Memory peak | CPUs without limits (avg / p95 / max) | CPUs with limits (avg / p95 / max) |
+|---|---|---|---|
+| shared mongod | 7.9 GiB | 0.62 / 1.19 / 1.88 | 0.58 / 1.09 / 1.75 |
+| CrateDB staging copy | 2.1 GiB | 0.72 / 1.71 / 2.42 | 0.78 / 1.40 / 1.60 |
+| CrateDB blueprint archive | 1.3 GiB | 0.27 / 1.14 / 1.14 | not sampled |
+
+`memory.peak` counts the page cache of the container too; `docker stats` showed about 3.6 GiB for mongod at the same time.
+With the limits (and `maxParallelThreads: 8`) the run had the same shape as without them: 32 of 33 collections done after
+13:00 min (13:30 without), the staging copy collection took 8:19 min (8:43 without), and the suite ended normally after
+20:41 min (filtered run, 1,531 passed, 0 failed). The tail of a local Windows run is `ImportTestCkModelCollection` (30 test
+classes in one collection, among them `TiebreakIndexUpgradeTests` with 60,000 entities); mongod used about 0.2 CPUs there,
+so that part waits on round trips through the Docker Desktop port forwarding, not on CPU. The CI (Linux) runs the whole
+suite in about 6 minutes.
+
+- **Stress tests under the CPU limit.** The stress container has the same 2-CPU limit. On the local Windows machine the
+  guarded write test (`ArchiveWriteUnderMemoryPressureIntegrationTests.GuardedWrites_StoreWhatTheyReport_OrFailLoudly`) was
+  skipped with "The CrateDB memory breaker never tripped" in most runs, with 2, 4 and 8 CPUs alike, and passed in the one
+  run without a limit; the other three stress tests tripped the breaker and passed every time. A skip proves nothing and
+  fails nothing; the nightly Linux run (`octo-construction-kit-engine-mongodb-Performance`) tripped the breaker in all four
+  tests (runs 79174, 71153, 70255).
+- **One container per CrateDB fixture.** Each CrateDB fixture belongs to exactly one xUnit collection, so it starts one
+  container, and the tests that share it run one after the other. At most three CrateDB containers exist at once (two
+  without the stress tests).
+- **Sum of the limits:** the CI suite (`Category!=Stress`) 18 GiB / 8 CPUs, everything at once 21 GiB / 10 CPUs. The limits
+  are ceilings, not reservations; the measured peaks add up to far less (table above).
+- **`maxParallelThreads: 8`** (`xunit.runner.json`). Without it xUnit runs as many collections at once as the machine has
+  logical CPUs: 22 on a current developer laptop, where every collection fixture then creates its system tenant and imports
+  its CK models at the same moment against the one mongod. 8 is what the CI agents ran with before (their log shows 8
+  fixtures initialising at once), so the CI time does not change, and it is at least the number of collections that use
+  a CrateDB container (2, 3 with the stress tests) plus the long MongoDB chains.
+
+### Running the suite locally on Windows
+
+1. **Docker Desktop memory.** Docker Desktop (WSL 2) gives its VM half of the host's RAM by default - 16 GiB on a 32 GiB
+   machine, less than the 18 GiB of limits of the CI suite. Give it at least **20 GiB** and **12 CPUs** in
+   `%UserProfile%\.wslconfig`, then `wsl --shutdown` and restart Docker Desktop:
+
+   ```ini
+   [wsl2]
+   memory=20GB
+   processors=12
+   ```
+
+   Check with `docker info --format "{{.NCPU}} CPUs, {{.MemTotal}} bytes"`. A local kind cluster or other containers in the
+   same VM need their share on top.
+2. **One heavy Docker job at a time.** Do not run two integration suites, or a suite and Docker image builds, at the same
+   time on one workstation: on 2026-11-17 a parallel image build turned a 6-minute slice into 50 minutes with CrateDB connect
+   timeouts. Several agent lanes on one machine serialize their heavy Docker runs.
+3. **Build, then run** (Git Bash or PowerShell, from the repository root):
+
+   ```bash
+   dotnet build Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL
+   dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --no-build --filter "Category!=LoadSensitive"
+   ```
+
+4. **A CrateDB container that does not answer** fails `DownsamplingPhaseProbePoolIntegrationTests` and
+   `CrateConnectionPoolReturnTests` with a message naming the container, its port and the connect timeout (they wait up to
+   30 s for it before they measure), not with a bare `BrokenCircuitException`. When a later connect error is followed by a
+   failed probe, the message reports the probe as an observation next to the original error: a loaded Docker VM or other
+   Docker work is one possible cause, but read the original exception before blaming the machine.
+5. **Slow connection setup on Windows.** A new connection through the Docker Desktop port proxy sometimes takes several
+   seconds while CrateDB is idle (2026-11-18: in one of the AC4 runs the `CrateStagingCopy` collection took about four times
+   as long as in the run before, CrateDB at ~0.06 CPUs, and the ten-parallel probe test failed on a 3 s Npgsql connect
+   timeout, although direct TCP connects to the same port took 0-46 ms; many connects at once each took longer than 3 s,
+   single ones did not). The pool tests of the two classes therefore open the connections of their pool once, one after the
+   other, and give them back before the measured part (`CrateTestConnect.WarmUpAsync`, same data source as the test, as many
+   connections as the test holds at once), so the 3 s pool wait they prove is not spent on the initial connects while the
+   warmed connections stay healthy. A cancelled statement in a warmed test still opens a replacement within its 3 s.
+   `ADiscardedConnection_FreesItsPoolSlot` is the exception: it has no warm-up, because it uses a data source of its own
+   with one connection and breaks that connection on purpose, so both of its connects (the first and the replacement)
+   must each succeed within 3 s. A failed warm-up names the container
+   and the slow connection setup. The cause is tracked in AB#9320.
+
 ## Container memory caps (AB#8511)
 
 Every Testcontainer of this suite has a fixed memory footprint (`Fixtures/TestContainerLimits.cs`):

@@ -17,11 +17,18 @@ internal static class SharedMongoDbContainer
     private static readonly SemaphoreSlim Gate = new(1, 1);
     private static string? _host;
 
+    /// <summary>
+    ///     The running container, <c>null</c> before it started (AB#9250: <c>TestContainerLimitsTests</c> reads its cgroup
+    ///     limits).
+    /// </summary>
+    public static MongoDbContainer? Container { get; private set; }
+
     public static async Task<string> GetHostAsync(SystemTestOptions options)
     {
-        if (_host != null)
+        var host = Volatile.Read(ref _host);
+        if (host != null)
         {
-            return _host;
+            return host;
         }
 
         await Gate.WaitAsync();
@@ -49,7 +56,8 @@ internal static class SharedMongoDbContainer
                     // (see TestContainerLimits). Appended to the --replSet arguments of WithReplicaSet.
                     .WithCommand("--wiredTigerCacheSizeGB", TestContainerLimits.MongoWiredTigerCacheSizeGb)
                     .WithCommand(TestContainerLimits.MongoFileHandleParameters)
-                    .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.MongoMemoryLimitBytes))
+                    .WithCreateParameterModifier(TestContainerLimits.Resources(
+                        TestContainerLimits.MongoMemoryLimitBytes, TestContainerLimits.MongoCpuLimit))
                     .Build();
 
                 using var startCts = new CancellationTokenSource(perAttemptTimeout);
@@ -57,7 +65,9 @@ internal static class SharedMongoDbContainer
                 {
                     var watch = System.Diagnostics.Stopwatch.StartNew();
                     await container.StartAsync(startCts.Token);
-                    _host = $"localhost:{container.GetMappedPublicPort()}";
+                    // Container first: the unlocked fast path above returns as soon as it sees _host
+                    Container = container;
+                    Volatile.Write(ref _host, $"localhost:{container.GetMappedPublicPort()}");
                     // Reported, not Console.WriteLine'd: console output from a fixture is captured as
                     // test output and only ever reaches the .trx, which is why this line was invisible
                     // in every CI log so far (AB#5436).

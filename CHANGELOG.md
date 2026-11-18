@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- AB#9250 Test: the integration test containers get a CPU limit next to their memory limit (mongod 4 CPUs, CrateDB 2 CPUs
+  each; the CrateDB heap is set explicitly for every CrateDB fixture), xUnit runs at most 8 collections at once
+  (`maxParallelThreads: 8`), and the CrateDB pool tests wait for their container and name it when it does not answer instead
+  of failing with a bare `BrokenCircuitException`. Test project only; the test README describes the local run on Windows
+  (Docker Desktop VM of at least 20 GiB / 12 CPUs).
 - Fix: a restore or a backup with detach that throws after its drop or detach was committed and whose tenant-deleted
   notification failed now keeps the warning ("... run ClearCache for the tenant") in `CommandResult.Output` of its failure
   result. Before, the failure result of the throw carried only the exception message and only the WARN log named the

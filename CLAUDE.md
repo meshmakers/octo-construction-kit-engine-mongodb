@@ -179,6 +179,19 @@ container with a 1 GB heap and a 3 GiB limit (`Fixtures/TestContainerLimits.cs`,
 stalled until MongoDB aborted transactions after 60 s. Never raise `transactionLifetimeLimitSeconds` or a test budget
 to hide a stall. Details: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`.
 
+**Container CPU limits and bounded parallelism (AB#9250).** Every Testcontainer also has a CPU limit (Docker `NanoCpus`:
+mongod 4 CPUs, every CrateDB container 2 CPUs; measured peaks 1.9 and 2.4 CPUs without a limit) and the CrateDB heap is set
+explicitly for all three CrateDB fixtures (1 GB, the stress container 512 MB), all in `Fixtures/TestContainerLimits.cs`
+(`Resources(memory, cpus)`, pinned by `TestContainerLimitsValueTests`, `TestContainerLimitsTests` and `CrateTestContainerLimitsTests`). `xunit.runner.json`
+sets `maxParallelThreads: 8` (the xUnit default is the number of logical CPUs: 22 collections started at once on a developer
+laptop; the CI agents already ran 8). Sum of the limits: 18 GiB / 8 CPUs for the CI suite, 21 GiB / 10 CPUs with the stress
+container; a local Windows run needs a Docker Desktop VM of at least 20 GiB and 12 CPUs (`.wslconfig`). The two CrateDB tests
+that open their own pools (`DownsamplingPhaseProbePoolIntegrationTests`, `CrateConnectionPoolReturnTests`) wait up to 30 s for
+the container first and name it when it does not answer, then open the connections of their pool once, one after the other, and give them back (this removes the initial connects while the warmed connections stay healthy; a broken one is still replaced within 3 s; `ADiscardedConnection_FreesItsPoolSlot` has no warm-up, its own one-connection data source must connect twice within 3 s each)
+before the measured part (`StagingCopy/CrateTestConnect.cs`, `WarmUpAsync`): on Windows a new connection through the Docker
+Desktop port proxy sometimes takes seconds while CrateDB is idle. The pool-wait tests keep their 3 s connect timeout on purpose. Local run on Windows and the measurements: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`,
+*Container resources and parallelism*.
+
 **Performance budget tests are not in the CI (AB#8004).** The Test step runs with
 `--filter "Category!=Performance"`. Tests that assert a wall-clock budget carry
 `[Trait("Category", "Performance")]` (today `GetRtEntitiesByInterfacePerformanceTests`, budget AB#6930, and `DownsamplingManyIdsPerformanceTests`, budget AB#8993: < 5 s per downsampling call over 400 ids and 7 days) and run only in the

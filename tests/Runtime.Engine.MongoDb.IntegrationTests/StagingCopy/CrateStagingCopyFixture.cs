@@ -46,18 +46,23 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
 
     public string ConnectionString { get; private set; } = string.Empty;
 
+    /// <summary>Name of the fixture's container, for failure messages (AB#9250).</summary>
+    public string ContainerName { get; private set; } = string.Empty;
+
     // CrateDB rejects the ROLLBACK a pooled connection sends when it is reset; the helpers do not pool.
     private string PlainConnectionString => ConnectionString + ";Pooling=false";
 
     public async ValueTask InitializeAsync()
     {
+        ContainerName = $"cratedb-stagingcopy-test-{Guid.NewGuid():N}";
         var container = new ContainerBuilder(Image)
-            .WithName($"cratedb-stagingcopy-test-{Guid.NewGuid():N}")
+            .WithName(ContainerName)
             .WithPortBinding(5432, true)
             .WithPortBinding(4200, true)
             .WithEnvironment("CRATE_HEAP_SIZE", TestContainerLimits.CrateHeapSize)
             // AB#8511: hard cap, see TestContainerLimits.
-            .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.CrateMemoryLimitBytes))
+            .WithCreateParameterModifier(TestContainerLimits.Resources(
+                TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
             .WithCommand("-Cdiscovery.type=single-node")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("started"))
             .Build();
@@ -83,7 +88,30 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
             Options.Create(new StreamDataInstanceConfiguration()),
             Options.Create(new CrateRecomputeOptions()));
 
-        await SetJobLogFilterAsync(JobLogFilterGuard.RecommendedFilter);
+        // the container logged "started"; make sure it also answers before the first statement of the fixture
+        await EnsureReachableAsync(CancellationToken.None);
+        await SetInitialJobLogFilterAsync();
+    }
+
+    /// <summary>
+    ///     Sets the recommended job-log filter on a new connection. A transient failure of that connection (a connect
+    ///     timeout or a socket error right after the readiness probe answered) is retried after another readiness wait, at
+    ///     most three attempts; an SQL error of the statement (<see cref="PostgresException" />) is not retried (AB#9250).
+    /// </summary>
+    private async Task SetInitialJobLogFilterAsync()
+    {
+        for (var attempt = 1;; attempt++)
+        {
+            try
+            {
+                await SetJobLogFilterAsync(JobLogFilterGuard.RecommendedFilter);
+                return;
+            }
+            catch (NpgsqlException ex) when (attempt < 3 && ex is not PostgresException && ex.IsTransient)
+            {
+                await EnsureReachableAsync(CancellationToken.None);
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -101,6 +129,97 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
         {
             await _container.DisposeAsync();
         }
+    }
+
+    /// <summary>
+    ///     Waits until the container accepts a connection and answers <c>SELECT 1</c>, at most
+    ///     <see cref="CrateTestConnect.ReadinessBudget" /> (AB#9250). Tests that open their own pools with a short connect
+    ///     timeout call it before the measured part: on a loaded machine the first connect to the container can take longer
+    ///     than their timeout, and without this wait such a test failed with a bare <c>BrokenCircuitException</c> of the
+    ///     resilience pipeline instead of saying that the container was not reachable.
+    /// </summary>
+    public async Task EnsureReachableAsync(CancellationToken cancellationToken)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Exception? last = null;
+        var attempts = 0;
+        // every attempt and every pause is cut to the rest of the budget, so the wait exceeds it at most by the
+        // cancellation wait of the last attempt (CancellationWaitMilliseconds)
+        while (true)
+        {
+            var remaining = CrateTestConnect.ReadinessBudget - watch.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            attempts++;
+            var attempt = remaining < CrateTestConnect.ReadinessAttemptBudget
+                ? remaining
+                : CrateTestConnect.ReadinessAttemptBudget;
+            last = await TryConnectOnceAsync(attempt, cancellationToken);
+            if (last is null)
+            {
+                return;
+            }
+
+            remaining = CrateTestConnect.ReadinessBudget - watch.Elapsed;
+            if (remaining > TimeSpan.Zero)
+            {
+                var pause = TimeSpan.FromMilliseconds(500);
+                await Task.Delay(remaining < pause ? remaining : pause, cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"{Describe()} did not accept a connection and answer SELECT 1 within {watch.Elapsed.TotalSeconds:0.0} s " +
+            $"({attempts} attempts of at most {CrateTestConnect.ReadinessAttemptBudget.TotalSeconds:0} s); " +
+            "the machine or the Docker VM is probably overloaded " +
+            "(test README, \"Container resources and parallelism\"). " +
+            $"Last error: {last?.GetType().Name}: {last?.Message}",
+            last);
+    }
+
+    /// <summary>How long a cancelled probe statement waits for the server's answer to the cancel request.</summary>
+    internal const int CancellationWaitMilliseconds = 500;
+
+    /// <summary>
+    ///     One connect and <c>SELECT 1</c> on a plain connection within <paramref name="budget" />: <c>null</c> when the
+    ///     container answered, otherwise the error.
+    /// </summary>
+    internal async Task<Exception?> TryConnectOnceAsync(TimeSpan budget, CancellationToken cancellationToken)
+    {
+        var seconds = Math.Max(1, (int)Math.Ceiling(budget.TotalSeconds));
+        var connectionString = new NpgsqlConnectionStringBuilder(PlainConnectionString)
+        {
+            Timeout = seconds,
+            CommandTimeout = seconds,
+            // a cancelled SELECT 1 waits for the server's answer to the cancel request; bound that wait explicitly
+            // (Npgsql default 2000 ms; 0 would mean no bound)
+            CancellationTimeout = CancellationWaitMilliseconds,
+        }.ConnectionString;
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        attempt.CancelAfter(budget);
+        try
+        {
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync(attempt.Token);
+            await using var command = new NpgsqlCommand("SELECT 1", connection);
+            await command.ExecuteScalarAsync(attempt.Token);
+            return null;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+                                   ex is NpgsqlException or TimeoutException or OperationCanceledException)
+        {
+            return ex;
+        }
+    }
+
+    /// <summary>The container, its image and its endpoint, for failure messages.</summary>
+    public string Describe()
+    {
+        var builder = new NpgsqlConnectionStringBuilder(ConnectionString);
+        return $"CrateDB test container '{ContainerName}' ({Image}, {builder.Host}:{builder.Port})";
     }
 
     /// <summary>A tenant id that maps to a schema of its own, so tests do not see each other's tables.</summary>

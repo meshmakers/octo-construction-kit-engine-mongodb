@@ -60,7 +60,8 @@ internal static class TestContainerLimits
     /// <summary>
     ///     Container memory limit of the shared mongod. Measured with cgroup <c>memory.peak</c> on full runs:
     ///     2026-11-07 (1,082 tests, cache 1 GB) 7.1, 6.4 and 8.4 GiB; 2026-11-16 (1,454 tests, cache 3 GB) 9.1 GiB
-    ///     without and 6.7 GiB with <see cref="MongoFileHandleParameters" />. Most of it is not data: every fixture keeps
+    ///     without and 6.7 GiB with <see cref="MongoFileHandleParameters" />; 2026-11-18 (local Windows, Docker Desktop,
+    ///     AB#9250) 7.9 GiB. Most of it is not data: every fixture keeps
     ///     its databases in the shared server (130,000-140,000 WiredTiger data handles per run, up to ~1,300
     ///     connections). A 3 GiB limit was OOM-killed in the middle of the run. 12 GiB leaves headroom over the highest
     ///     peak; when the suite outgrows it the container is OOM-killed and the tests fail with "Connection refused" -
@@ -69,9 +70,16 @@ internal static class TestContainerLimits
     public const long MongoMemoryLimitBytes = 12 * GiB;
 
     /// <summary>
-    ///     CrateDB JVM heap (<c>CRATE_HEAP_SIZE</c>).
+    ///     CrateDB JVM heap (<c>CRATE_HEAP_SIZE</c>) of the CrateDB containers of the CI suite
+    ///     (<c>BlueprintArchiveActivationFixture</c>, <c>CrateStagingCopyFixture</c>).
     /// </summary>
     public const string CrateHeapSize = "1g";
+
+    /// <summary>
+    ///     CrateDB JVM heap of the stress container (<c>CrateMemoryPressureFixture</c>, <c>Category=Stress</c>, AB#8679): small on
+    ///     purpose, so that the query circuit breaker the tests set is a few dozen MB and parallel writes trip it.
+    /// </summary>
+    public const string CrateStressHeapSize = "512m";
 
     /// <summary>
     ///     Container memory limit of a CrateDB test container: the 1 GB heap plus off-heap memory and Lucene's file
@@ -80,16 +88,79 @@ internal static class TestContainerLimits
     public const long CrateMemoryLimitBytes = 3 * GiB;
 
     /// <summary>
-    ///     Returns a create-parameter modifier that sets a hard memory limit without swap.
+    ///     CPU limit of the shared mongod, in CPUs (Docker <c>NanoCpus</c>; AB#9250). Without a limit a container may use
+    ///     every core of the Docker host, so one suite could starve the rest of the machine (other lanes, a kind cluster).
+    ///     Measured 2026-11-18 on a full local run without the limit (22 logical CPUs, cgroup <c>cpu.stat</c> sampled
+    ///     every ~8 s): average 0.62, p95 1.19, highest sample 1.88 CPUs. 4 leaves more than twice the highest sample, so
+    ///     the limit only takes effect when something goes wrong. Docker refuses a CPU limit above the number of CPUs of its
+    ///     daemon, so the suite needs a Docker daemon (VM) with at least 4 CPUs (CI agents: 8; README: 12 recommended).
     /// </summary>
-    public static Action<CreateContainerParameters> MemoryLimit(long bytes)
+    public const double MongoCpuLimit = 4;
+
+    /// <summary>
+    ///     CPU limit of every CrateDB test container, in CPUs (Docker <c>NanoCpus</c>; AB#9250). The JVM sizes its thread
+    ///     pools from the processors it sees, which follow the quota (2). Measured 2026-11-18 without the limit: staging copy
+    ///     fixture average 0.72, p95 1.71, highest sample 2.42 CPUs (memory peak 2.09 GiB); blueprint archive fixture highest
+    ///     sample 1.14 CPUs (1.28 GiB). Short bursts above 2 are throttled; with the limit the staging copy collection took 8:19 min (8:43 without), its
+    ///     highest sample 1.60 CPUs.
+    /// </summary>
+    public const double CrateCpuLimit = 2;
+
+    /// <summary>
+    ///     Number of CrateDB containers a run can hold at once: one per CrateDB collection fixture
+    ///     (<c>BlueprintArchiveActivationFixture</c>, <c>CrateStagingCopyFixture</c>, <c>CrateMemoryPressureFixture</c>). Each
+    ///     fixture belongs to exactly one xUnit collection, so it starts one container, and the tests that share it run one
+    ///     after the other.
+    /// </summary>
+    public const int MaxCrateContainers = 3;
+
+    /// <summary>
+    ///     Upper bound of the memory all containers of one run can take together (the shared mongod plus every CrateDB
+    ///     container at its limit): 21 GiB. The limits are ceilings, not reservations; the measured peaks add up to far less
+    ///     (see the limits above). It has to fit the Docker Desktop VM of a developer workstation with 32 GiB RAM.
+    /// </summary>
+    public const long WorstCaseMemoryBytes = MongoMemoryLimitBytes + MaxCrateContainers * CrateMemoryLimitBytes;
+
+    /// <summary>
+    ///     Upper bound of the memory of the CI suite (<c>Category!=Stress</c>; the stress container is never started): the
+    ///     shared mongod and the two CrateDB containers of the CI collections.
+    /// </summary>
+    public const long CiSuiteMemoryBytes = MongoMemoryLimitBytes + (MaxCrateContainers - 1) * CrateMemoryLimitBytes;
+
+    /// <summary>Upper bound of the CPUs all containers of one run can take together.</summary>
+    public const double WorstCaseCpus = MongoCpuLimit + MaxCrateContainers * CrateCpuLimit;
+
+    /// <summary>
+    ///     Memory the Docker Desktop VM (WSL 2) should have for a local run: the limits of the CI suite plus room for the
+    ///     Docker engine itself. Docker Desktop gives the VM half of the host's RAM by default (16 GiB on a 32 GiB machine),
+    ///     which is below the sum of the limits; set it in <c>%UserProfile%\.wslconfig</c> (<c>[wsl2] memory=20GB</c>).
+    /// </summary>
+    public const long RecommendedDockerVmMemoryBytes = 20 * GiB;
+
+    /// <summary>CPUs the Docker VM should have, so that every container can reach its CPU limit at the same time.</summary>
+    public const double RecommendedDockerVmCpus = 12;
+
+    /// <summary>
+    ///     Returns a create-parameter modifier that sets a hard memory limit without swap and a CPU limit.
+    /// </summary>
+    /// <param name="memoryBytes">Container memory limit (also the memory + swap limit, so no swap on top).</param>
+    /// <param name="cpus">CPU limit in CPUs, e.g. 2 or 1.5 (Docker <c>--cpus</c>).</param>
+    public static Action<CreateContainerParameters> Resources(long memoryBytes, double cpus)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(memoryBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(cpus);
+        // Docker accepts 0.01 CPUs at least; a smaller value would round to NanoCPUs = 0, which means "no limit"
+        var nanoCpus = (long)(cpus * 1_000_000_000);
+        ArgumentOutOfRangeException.ThrowIfLessThan(nanoCpus, 10_000_000L, nameof(cpus));
         return parameters =>
         {
             parameters.HostConfig ??= new HostConfig();
-            parameters.HostConfig.Memory = bytes;
+            parameters.HostConfig.Memory = memoryBytes;
             // Same value as Memory: no swap on top, so the limit is the real ceiling.
-            parameters.HostConfig.MemorySwap = bytes;
+            parameters.HostConfig.MemorySwap = memoryBytes;
+            // CFS quota, the same as `docker run --cpus`: the container may use that many CPUs' worth of time and is
+            // throttled above it, so one container cannot take every core of the host.
+            parameters.HostConfig.NanoCPUs = nanoCpus;
         };
     }
 }

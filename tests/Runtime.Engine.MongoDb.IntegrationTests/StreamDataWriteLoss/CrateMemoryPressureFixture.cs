@@ -26,10 +26,6 @@ public sealed class CrateMemoryPressureFixture : IAsyncLifetime
         ? image
         : "crate:6.4.6";
 
-    /// <summary>Heap of the container; small, so that the breaker limit below is a few dozen MB.</summary>
-    internal const string HeapSize = "512m";
-
-
     private IContainer? _container;
 
     internal CrateDatabaseClient Client { get; private set; } = null!;
@@ -44,8 +40,9 @@ public sealed class CrateMemoryPressureFixture : IAsyncLifetime
         var container = new ContainerBuilder(Image)
             .WithName($"cratedb-breaker-test-{Guid.NewGuid():N}")
             .WithPortBinding(5432, true)
-            .WithEnvironment("CRATE_HEAP_SIZE", HeapSize)
-            .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.CrateMemoryLimitBytes))
+            .WithEnvironment("CRATE_HEAP_SIZE", TestContainerLimits.CrateStressHeapSize)
+            .WithCreateParameterModifier(TestContainerLimits.Resources(
+                TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
             .WithCommand("-Cdiscovery.type=single-node")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("started"))
             .Build();
