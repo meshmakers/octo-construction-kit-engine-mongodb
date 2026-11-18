@@ -163,7 +163,8 @@ internal static class CrateTestConnect
                 probe = null;
             }
 
-            if (probe is null)
+            // the container answered, or the test was cancelled (also after the probe returned): the original error
+            if (probe is null || cancellationToken.IsCancellationRequested)
             {
                 ExceptionDispatchInfo.Capture(ex).Throw();
             }
