@@ -10,8 +10,8 @@ Every Testcontainer of the suite has a memory **and** a CPU limit, and xUnit run
 full run takes a bounded share of the machine and stays predictable next to other work (other agent lanes, Docker
 builds, a local kind cluster). Values in `Fixtures/TestContainerLimits.cs` (with the measurements behind them); all four
 fixtures apply them through one modifier, `TestContainerLimits.Resources(memory, cpus)`. Pinned by
-`TestContainerLimitsValueTests` (the modifier and the sums, no Docker), `TestContainerLimitsTests` (the mongod container as
-Docker reports it) and `CrateTestContainerLimitsTests` (heap and processors the staging copy CrateDB sees):
+`TestContainerLimitsValueTests` (the modifier and the sums, no Docker), `TestContainerLimitsTests` (the cgroup limits
+mongod runs under) and `CrateTestContainerLimitsTests` (heap and processors the staging copy CrateDB sees):
 
 | Container | Fixture (collection) | Memory limit | CPU limit | JVM heap / cache |
 |---|---|---|---|---|
@@ -37,6 +37,12 @@ classes in one collection, among them `TiebreakIndexUpgradeTests` with 60,000 en
 so that part waits on round trips through the Docker Desktop port forwarding, not on CPU. The CI (Linux) runs the whole
 suite in about 6 minutes.
 
+- **Stress tests under the CPU limit.** The stress container has the same 2-CPU limit. On the local Windows machine the
+  guarded write test (`ArchiveWriteUnderMemoryPressureIntegrationTests.GuardedWrites_StoreWhatTheyReport_OrFailLoudly`) was
+  skipped with "The CrateDB memory breaker never tripped" in most runs, with 2, 4 and 8 CPUs alike, and passed in the one
+  run without a limit; the other three stress tests tripped the breaker and passed every time. A skip proves nothing and
+  fails nothing; the nightly Linux run (`octo-construction-kit-engine-mongodb-Performance`) tripped the breaker in all four
+  tests (runs 79174, 71153, 70255).
 - **One container per CrateDB fixture.** Each CrateDB fixture belongs to exactly one xUnit collection, so it starts one
   container, and the tests that share it run one after the other. At most three CrateDB containers exist at once (two
   without the stress tests).
