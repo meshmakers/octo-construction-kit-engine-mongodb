@@ -91,7 +91,7 @@ suite in about 6 minutes.
    single ones did not). The two pool test classes therefore open the connections of their pool once, one after the other,
    and give them back before the measured part (`CrateTestConnect.WarmUpAsync`, same data source as the test, as many
    connections as the test holds at once), so the 3 s pool wait they prove is not spent on connects. A failed warm-up names the container
-   and the slow connection setup. The cause is tracked in a follow-up Bug.
+   and the slow connection setup. The cause is tracked in AB#9320.
 
 ## Container memory caps (AB#8511)
 
