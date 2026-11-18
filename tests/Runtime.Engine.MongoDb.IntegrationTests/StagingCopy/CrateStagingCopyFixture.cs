@@ -90,7 +90,28 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
 
         // the container logged "started"; make sure it also answers before the first statement of the fixture
         await EnsureReachableAsync(CancellationToken.None);
-        await SetJobLogFilterAsync(JobLogFilterGuard.RecommendedFilter);
+        await SetInitialJobLogFilterAsync();
+    }
+
+    /// <summary>
+    ///     Sets the recommended job-log filter on a new connection. A transient failure of that connection (a connect
+    ///     timeout or a socket error right after the readiness probe answered) is retried after another readiness wait, at
+    ///     most three attempts; an SQL error of the statement (<see cref="PostgresException" />) is not retried (AB#9250).
+    /// </summary>
+    private async Task SetInitialJobLogFilterAsync()
+    {
+        for (var attempt = 1;; attempt++)
+        {
+            try
+            {
+                await SetJobLogFilterAsync(JobLogFilterGuard.RecommendedFilter);
+                return;
+            }
+            catch (NpgsqlException ex) when (attempt < 3 && ex is not PostgresException && ex.IsTransient)
+            {
+                await EnsureReachableAsync(CancellationToken.None);
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -122,7 +143,8 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
         var watch = System.Diagnostics.Stopwatch.StartNew();
         Exception? last = null;
         var attempts = 0;
-        // every attempt and every pause is cut to the rest of the budget, so the wait never exceeds it
+        // every attempt and every pause is cut to the rest of the budget, so the wait exceeds it at most by the
+        // cancellation wait of the last attempt (CancellationWaitMilliseconds)
         while (true)
         {
             var remaining = CrateTestConnect.ReadinessBudget - watch.Elapsed;
@@ -158,6 +180,9 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
             last);
     }
 
+    /// <summary>How long a cancelled probe statement waits for the server's answer to the cancel request.</summary>
+    internal const int CancellationWaitMilliseconds = 500;
+
     /// <summary>
     ///     One connect and <c>SELECT 1</c> on a plain connection within <paramref name="budget" />: <c>null</c> when the
     ///     container answered, otherwise the error.
@@ -169,6 +194,9 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
         {
             Timeout = seconds,
             CommandTimeout = seconds,
+            // a cancelled SELECT 1 waits for the server's answer to the cancel request; bound that wait explicitly
+            // (Npgsql default 2000 ms; 0 would mean no bound)
+            CancellationTimeout = CancellationWaitMilliseconds,
         }.ConnectionString;
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         attempt.CancelAfter(budget);

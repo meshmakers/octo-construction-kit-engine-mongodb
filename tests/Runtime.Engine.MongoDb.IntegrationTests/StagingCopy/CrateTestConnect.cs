@@ -156,9 +156,11 @@ internal static class CrateTestConnect
             {
                 probe = await fixture.TryConnectOnceAsync(FailureProbeBudget, cancellationToken);
             }
-            catch (OperationCanceledException)
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
-                probe = null; // the test is being cancelled: report the original error, not the interrupted probe
+                // the test is being cancelled while the probe runs: report the original error, not the interrupted
+                // probe (a driver error or an OperationCanceledException)
+                probe = null;
             }
 
             if (probe is null)

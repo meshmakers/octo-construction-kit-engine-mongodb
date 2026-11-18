@@ -87,11 +87,13 @@ suite in about 6 minutes.
    seconds while CrateDB is idle (2026-11-18: in one of the AC4 runs the `CrateStagingCopy` collection took about four times
    as long as in the run before, CrateDB at ~0.06 CPUs, and the ten-parallel probe test failed on a 3 s Npgsql connect
    timeout, although direct TCP connects to the same port took 0-46 ms; many connects at once each took longer than 3 s,
-   single ones did not). The two pool test classes therefore open the connections of their pool once, one after the other,
-   and give them back before the measured part (`CrateTestConnect.WarmUpAsync`, same data source as the test, as many
+   single ones did not). The pool tests of the two classes therefore open the connections of their pool once, one after the
+   other, and give them back before the measured part (`CrateTestConnect.WarmUpAsync`, same data source as the test, as many
    connections as the test holds at once), so the 3 s pool wait they prove is not spent on the initial connects while the
-   warmed connections stay healthy. A test that breaks a connection (`ADiscardedConnection_FreesItsPoolSlot` on purpose, or a
-   cancelled statement) still opens a replacement within its 3 s. A failed warm-up names the container
+   warmed connections stay healthy. A cancelled statement in a warmed test still opens a replacement within its 3 s.
+   `ADiscardedConnection_FreesItsPoolSlot` is the exception: it has no warm-up, because it uses a data source of its own
+   with one connection and breaks that connection on purpose, so both of its connects (the first and the replacement)
+   must each succeed within 3 s. A failed warm-up names the container
    and the slow connection setup. The cause is tracked in AB#9320.
 
 ## Container memory caps (AB#8511)
