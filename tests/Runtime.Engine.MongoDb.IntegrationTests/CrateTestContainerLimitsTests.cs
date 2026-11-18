@@ -24,9 +24,10 @@ public class CrateTestContainerLimitsTests(CrateStagingCopyFixture fixture)
         var heapMax = Convert.ToInt64(node["heap_max"], CultureInfo.InvariantCulture);
         // CRATE_HEAP_SIZE=1g; the JVM reports its maximum heap slightly below -Xmx
         Assert.InRange(heapMax, 900L * 1024 * 1024, GiB);
-        // the JVM derives its processor count from the CFS quota that NanoCpus sets
-        Assert.Equal((int)Math.Ceiling(TestContainerLimits.CrateCpuLimit),
-            Convert.ToInt32(node["processors"], CultureInfo.InvariantCulture));
+        // the JVM derives its processor count from the CFS quota that NanoCpus sets (or from the host, when the host has
+        // fewer CPUs); without the quota it would see every CPU of the Docker VM
+        Assert.InRange(Convert.ToInt32(node["processors"], CultureInfo.InvariantCulture), 1,
+            (int)Math.Ceiling(TestContainerLimits.CrateCpuLimit));
     }
 }
 

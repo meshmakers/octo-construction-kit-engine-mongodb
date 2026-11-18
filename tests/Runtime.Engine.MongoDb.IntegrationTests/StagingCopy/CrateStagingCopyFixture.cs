@@ -61,7 +61,8 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
             .WithPortBinding(4200, true)
             .WithEnvironment("CRATE_HEAP_SIZE", TestContainerLimits.CrateHeapSize)
             // AB#8511: hard cap, see TestContainerLimits.
-            .WithCreateParameterModifier(TestContainerLimits.Resources(TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
+            .WithCreateParameterModifier(TestContainerLimits.Resources(
+                TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
             .WithCommand("-Cdiscovery.type=single-node")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("started"))
             .Build();
@@ -116,44 +117,79 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
     /// </summary>
     public async Task EnsureReachableAsync(CancellationToken cancellationToken)
     {
-        var connectionString = new NpgsqlConnectionStringBuilder(PlainConnectionString)
-        {
-            Timeout = CrateTestConnect.ReadinessAttemptConnectTimeoutSeconds,
-        }.ConnectionString;
         var watch = System.Diagnostics.Stopwatch.StartNew();
         Exception? last = null;
         var attempts = 0;
-        while (watch.Elapsed < CrateTestConnect.ReadinessBudget)
+        // every attempt and every pause is cut to the rest of the budget, so the wait never exceeds it
+        while (true)
         {
-            attempts++;
-            try
+            var remaining = CrateTestConnect.ReadinessBudget - watch.Elapsed;
+            if (remaining <= TimeSpan.Zero)
             {
-                await using var connection = new NpgsqlConnection(connectionString);
-                await connection.OpenAsync(cancellationToken);
-                await using var command = new NpgsqlCommand("SELECT 1", connection);
-                await command.ExecuteScalarAsync(cancellationToken);
+                break;
+            }
+
+            attempts++;
+            var attempt = remaining < CrateTestConnect.ReadinessAttemptBudget
+                ? remaining
+                : CrateTestConnect.ReadinessAttemptBudget;
+            last = await TryConnectOnceAsync(attempt, cancellationToken);
+            if (last is null)
+            {
                 return;
             }
-            catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+
+            remaining = CrateTestConnect.ReadinessBudget - watch.Elapsed;
+            if (remaining > TimeSpan.Zero)
             {
-                last = ex;
-                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+                var pause = TimeSpan.FromMilliseconds(500);
+                await Task.Delay(remaining < pause ? remaining : pause, cancellationToken);
             }
         }
 
         throw new InvalidOperationException(
-            $"{Describe(CrateTestConnect.ReadinessAttemptConnectTimeoutSeconds)} did not accept a connection within " +
-            $"{CrateTestConnect.ReadinessBudget.TotalSeconds:0} s ({attempts} attempts); the machine or the Docker VM is " +
-            $"probably overloaded (test README, \"Container resources and parallelism\"). Last error: {last?.Message}",
+            $"{Describe()} did not accept a connection and answer SELECT 1 within {watch.Elapsed.TotalSeconds:0.0} s " +
+            $"({attempts} attempts of at most {CrateTestConnect.ReadinessAttemptBudget.TotalSeconds:0} s); " +
+            "the machine or the Docker VM is probably overloaded " +
+            "(test README, \"Container resources and parallelism\"). " +
+            $"Last error: {last?.GetType().Name}: {last?.Message}",
             last);
     }
 
-    /// <summary>The container, its image, its endpoint and the given connect timeout, for failure messages.</summary>
-    public string Describe(int connectTimeoutSeconds)
+    /// <summary>
+    ///     One connect and <c>SELECT 1</c> on a plain connection within <paramref name="budget" />: <c>null</c> when the
+    ///     container answered, otherwise the error.
+    /// </summary>
+    internal async Task<Exception?> TryConnectOnceAsync(TimeSpan budget, CancellationToken cancellationToken)
+    {
+        var seconds = Math.Max(1, (int)Math.Ceiling(budget.TotalSeconds));
+        var connectionString = new NpgsqlConnectionStringBuilder(PlainConnectionString)
+        {
+            Timeout = seconds,
+            CommandTimeout = seconds,
+        }.ConnectionString;
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        attempt.CancelAfter(budget);
+        try
+        {
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync(attempt.Token);
+            await using var command = new NpgsqlCommand("SELECT 1", connection);
+            await command.ExecuteScalarAsync(attempt.Token);
+            return null;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+                                   ex is NpgsqlException or TimeoutException or OperationCanceledException)
+        {
+            return ex;
+        }
+    }
+
+    /// <summary>The container, its image and its endpoint, for failure messages.</summary>
+    public string Describe()
     {
         var builder = new NpgsqlConnectionStringBuilder(ConnectionString);
-        return $"CrateDB test container '{ContainerName}' ({Image}, {builder.Host}:{builder.Port}, " +
-               $"connect timeout {connectTimeoutSeconds} s)";
+        return $"CrateDB test container '{ContainerName}' ({Image}, {builder.Host}:{builder.Port})";
     }
 
     /// <summary>A tenant id that maps to a schema of its own, so tests do not see each other's tables.</summary>

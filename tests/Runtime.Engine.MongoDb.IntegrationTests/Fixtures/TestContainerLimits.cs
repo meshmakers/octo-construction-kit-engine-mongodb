@@ -100,7 +100,8 @@ internal static class TestContainerLimits
     ///     CPU limit of every CrateDB test container, in CPUs (Docker <c>NanoCpus</c>; AB#9250). The JVM sizes its thread
     ///     pools from the processors it sees, which follow the quota (2). Measured 2026-11-18 without the limit: staging copy
     ///     fixture average 0.72, p95 1.71, highest sample 2.42 CPUs (memory peak 2.09 GiB); blueprint archive fixture highest
-    ///     sample 1.14 CPUs (1.28 GiB). Short bursts above 2 are throttled; the run with the limit took no longer.
+    ///     sample 1.14 CPUs (1.28 GiB). Short bursts above 2 are throttled; with the limit the staging copy collection took 8:19 min (8:43 without), its
+    ///     highest sample 1.60 CPUs.
     /// </summary>
     public const double CrateCpuLimit = 2;
 

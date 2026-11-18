@@ -58,7 +58,8 @@ public class BlueprintArchiveActivationFixture : BlueprintServiceFixture
             .WithPortBinding(5432, true)
             .WithEnvironment("CRATE_HEAP_SIZE", TestContainerLimits.CrateHeapSize)
             // AB#8511: hard cap, see TestContainerLimits.
-            .WithCreateParameterModifier(TestContainerLimits.Resources(TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
+            .WithCreateParameterModifier(TestContainerLimits.Resources(
+                TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
             .WithCommand("-Cdiscovery.type=single-node")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("started"))
             .Build();

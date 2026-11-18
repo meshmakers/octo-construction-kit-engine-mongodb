@@ -8,8 +8,10 @@ tests, a Testcontainers CrateDB). Layout, parallelism rules and the CI time budg
 
 Every Testcontainer of the suite has a memory **and** a CPU limit, and xUnit runs at most 8 collections at once, so a
 full run takes a bounded share of the machine and stays predictable next to other work (other agent lanes, Docker
-builds, a local kind cluster). Values in `Fixtures/TestContainerLimits.cs` (with the measurements behind them), pinned
-by `TestContainerLimitsTests` and `CrateTestContainerLimitsTests`:
+builds, a local kind cluster). Values in `Fixtures/TestContainerLimits.cs` (with the measurements behind them); all four
+fixtures apply them through one modifier, `TestContainerLimits.Resources(memory, cpus)`. Pinned by
+`TestContainerLimitsValueTests` (the modifier and the sums, no Docker), `TestContainerLimitsTests` (the mongod container as
+Docker reports it) and `CrateTestContainerLimitsTests` (heap and processors the staging copy CrateDB sees):
 
 | Container | Fixture (collection) | Memory limit | CPU limit | JVM heap / cache |
 |---|---|---|---|---|
@@ -18,7 +20,22 @@ by `TestContainerLimitsTests` and `CrateTestContainerLimitsTests`:
 | CrateDB | `BlueprintArchiveActivationFixture` (`BlueprintArchiveActivation`) | 3 GiB | 2 CPUs | heap 1 GB |
 | CrateDB, stress only | `CrateMemoryPressureFixture` (`CrateMemoryPressure`, `Category=Stress`) | 3 GiB | 2 CPUs | heap 512 MB |
 
-MEASUREMENT_TABLE
+Measured on full local runs on 2026-11-18 (Windows 11, 22 logical CPUs, 63 GiB RAM, Docker Desktop VM 31 GiB / 22 CPUs,
+a kind cluster running next to it), cgroup `memory.peak` and `cpu.stat` of each container sampled every ~8 s:
+
+| Container | Memory peak | CPUs without limits (avg / p95 / max) | CPUs with limits (avg / p95 / max) |
+|---|---|---|---|
+| shared mongod | 7.9 GiB | 0.62 / 1.19 / 1.88 | 0.58 / 1.09 / 1.75 |
+| CrateDB staging copy | 2.1 GiB | 0.72 / 1.71 / 2.42 | 0.78 / 1.40 / 1.60 |
+| CrateDB blueprint archive | 1.3 GiB | 0.27 / 1.14 / 1.14 | not sampled |
+
+`memory.peak` counts the page cache of the container too; `docker stats` showed about 3.6 GiB for mongod at the same time.
+With the limits (and `maxParallelThreads: 8`) the run had the same shape as without them: 32 of 33 collections done after
+13:00 min (13:30 without), the staging copy collection took 8:19 min (8:43 without), and the suite ended normally after
+20:41 min (filtered run, 1,531 passed, 0 failed). The tail of a local Windows run is `ImportTestCkModelCollection` (30 test
+classes in one collection, among them `TiebreakIndexUpgradeTests` with 60,000 entities); mongod used about 0.2 CPUs there,
+so that part waits on round trips through the Docker Desktop port forwarding, not on CPU. The CI (Linux) runs the whole
+suite in about 6 minutes.
 
 - **One container per CrateDB fixture.** Each CrateDB fixture belongs to exactly one xUnit collection, so it starts one
   container, and the tests that share it run one after the other. At most three CrateDB containers exist at once (two

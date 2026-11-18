@@ -42,8 +42,9 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
     private const int Series = 10;
 
     /// <summary>
-    ///     AB#9250: wait for the container before anything is measured, so an overloaded machine fails the test with a message
-    ///     that names the container instead of a <c>BrokenCircuitException</c>.
+    ///     AB#9250: wait for the container before anything is measured (the pool keeps its 3 s connect timeout), so an
+    ///     overloaded machine fails the test with a message that names the container instead of a
+    ///     <c>BrokenCircuitException</c>.
     /// </summary>
     public ValueTask InitializeAsync() => new(fixture.EnsureReachableAsync(Ct));
 
@@ -61,9 +62,9 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
 
         // one query per series, like the line chart's OBIS groups, all at once
         var started = Stopwatch.StartNew();
-        var results = await CrateTestConnect.NamingTheContainerAsync(fixture, CrateTestConnect.LoadedConnectTimeoutSeconds,
-            () => Task.WhenAll(series.Select(s =>
-                NewRepository(tenant, rtId, client, process).ExecuteDownsamplingQueryAsync(rtId, Query(s)))));
+        var results = await CrateTestConnect.NamingAnUnreachableContainerAsync(fixture, () => Task.WhenAll(
+            series.Select(s => NewRepository(tenant, rtId, client, process).ExecuteDownsamplingQueryAsync(rtId, Query(s)))),
+            Ct);
         started.Stop();
 
         // the axis snapped to :35, so every window inside [18:35, To) is read: none dropped by the §7 predicate
@@ -75,9 +76,9 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
         Assert.True(started.Elapsed < TimeSpan.FromSeconds(30), $"took {started.Elapsed}");
 
         // the next refresh of the board, three times at once: the phases come from the cache, no further probe
-        var refresh = await CrateTestConnect.NamingTheContainerAsync(fixture, CrateTestConnect.LoadedConnectTimeoutSeconds,
-            () => Task.WhenAll(Enumerable.Range(0, 3).SelectMany(_ => series).Select(s =>
-                NewRepository(tenant, rtId, client, process).ExecuteDownsamplingQueryAsync(rtId, Query(s)))));
+        var refresh = await CrateTestConnect.NamingAnUnreachableContainerAsync(fixture, () => Task.WhenAll(
+            Enumerable.Range(0, 3).SelectMany(_ => series).Select(s =>
+                NewRepository(tenant, rtId, client, process).ExecuteDownsamplingQueryAsync(rtId, Query(s)))), Ct);
         Assert.All(refresh, r => Assert.Equal(expected, SumOf(r)));
         A.CallTo(() => client.QueryRowsOnceAsync(A<string>._, A<string>._, A<TimeSpan>._, A<CancellationToken>._))
             .MustHaveHappened(Series, Times.Exactly);
@@ -96,7 +97,7 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
             () => client.QueryRowsOnceAsync(tenant, "SELECT 1 AS \"x\"", TimeSpan.FromSeconds(1), Ct));
         started.Stop();
 
-        // one budget for the wait, no retry: well below the pool's own wait, let alone the retried 35 s call
+        // one budget for the wait, no retry: well below the pool's own 3 s wait, let alone the retried 35 s call
         Assert.True(started.Elapsed < TimeSpan.FromSeconds(2.5), $"took {started.Elapsed}");
 
         await held.DisposeAsync();
@@ -229,11 +230,10 @@ public class DownsamplingPhaseProbePoolIntegrationTests(CrateStagingCopyFixture 
 
     private CrateDbConnectionAccess NewAccess(int maxPoolSize)
     {
-        // AB#9250: long enough for the first connects on a loaded machine; the probes bound themselves by their own budgets,
-        // and an exhausted pool still fails the test within this wait (CrateTestConnect.LoadedConnectTimeoutSeconds).
+        // A short wait for a pool slot, so an exhausted pool fails the test in seconds (CrateTestConnect.PoolWaitSeconds).
         var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
         {
-            Timeout = CrateTestConnect.LoadedConnectTimeoutSeconds
+            Timeout = CrateTestConnect.PoolWaitSeconds
         }.ConnectionString;
         return new CrateDbConnectionAccess(Options.Create(new StreamDataConfiguration
         {

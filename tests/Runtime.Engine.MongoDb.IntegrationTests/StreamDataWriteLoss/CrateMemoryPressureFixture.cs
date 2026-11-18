@@ -41,7 +41,8 @@ public sealed class CrateMemoryPressureFixture : IAsyncLifetime
             .WithName($"cratedb-breaker-test-{Guid.NewGuid():N}")
             .WithPortBinding(5432, true)
             .WithEnvironment("CRATE_HEAP_SIZE", TestContainerLimits.CrateStressHeapSize)
-            .WithCreateParameterModifier(TestContainerLimits.Resources(TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
+            .WithCreateParameterModifier(TestContainerLimits.Resources(
+                TestContainerLimits.CrateMemoryLimitBytes, TestContainerLimits.CrateCpuLimit))
             .WithCommand("-Cdiscovery.type=single-node")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("started"))
             .Build();
