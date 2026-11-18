@@ -1,5 +1,7 @@
 using System.Net.Sockets;
 using System.Runtime.ExceptionServices;
+using Meshmakers.Octo.Runtime.Engine.CrateDb;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Npgsql;
 using Polly.CircuitBreaker;
 
@@ -60,11 +62,14 @@ internal static class CrateTestConnect
     ///         at most the pool size, so the measured part never has to connect: the ten-parallel probe test warms 30 (its
     ///         refresh runs 3 x 10 queries at once) in a pool of 32, the other tests warm their whole pool of 1 or 2. Npgsql
     ///         closes an idle pooled connection only after <c>ConnectionIdleLifetime</c> (300 s by default), far longer than
-    ///         a test. A test that breaks a connection on purpose (a discarded slot) still connects anew afterwards.
+    ///         a test. A connection that is broken during the test (a discarded slot on purpose, or a cancelled statement
+    ///         whose cancel CrateDB does not acknowledge in time) is replaced by a new connect within the measured part.
     ///     </para>
     ///     <para>
-    ///         The connects run one after the other; one that times out is retried until <see cref="ReadinessBudget" />,
-    ///         then the test fails with a message that names the container and the slow connection setup.
+    ///         The connects run one after the other; a failed one is retried after a short pause until
+    ///         <see cref="ReadinessBudget" /> (the attempt that starts last may end up to one connect timeout later), then the
+    ///         test fails with a message that names the container and the slow connection setup. An exhausted pool is not
+    ///         retried: it means more connections were asked for than the pool holds, a mistake of the test, and fails at once.
     ///     </para>
     /// </remarks>
     public static async Task WarmUpAsync(CrateStagingCopyFixture fixture,
@@ -88,6 +93,12 @@ internal static class CrateTestConnect
                 {
                     last = ex;
                     failures++;
+                    var remaining = ReadinessBudget - watch.Elapsed;
+                    if (remaining > TimeSpan.Zero)
+                    {
+                        var pause = TimeSpan.FromMilliseconds(200);
+                        await Task.Delay(remaining < pause ? remaining : pause, cancellationToken);
+                    }
                 }
             }
         }
@@ -104,7 +115,7 @@ internal static class CrateTestConnect
         {
             throw new InvalidOperationException(
                 $"{fixture.Describe()}: could open only {opened.Count} of {connections} connections within " +
-                $"{ReadinessBudget.TotalSeconds:0} s ({failures} connects took longer than {PoolWaitSeconds} s; " +
+                $"{ReadinessBudget.TotalSeconds:0} s ({failures} connects failed, connect timeout {PoolWaitSeconds} s; " +
                 "slow connection setup through the Docker Desktop port proxy?). " +
                 $"Last error: {last?.GetType().Name}: {last?.Message}", last);
         }
@@ -138,11 +149,19 @@ internal static class CrateTestConnect
         }
     }
 
-    /// <summary>True when the exception or one of its inner exceptions can mean that no connection could be made.</summary>
+    /// <summary>
+    ///     True when the exception or one of its inner exceptions can mean that no connection could be made. An exhausted
+    ///     pool (also an Npgsql timeout) is not: the container was reached, the pool had no free slot.
+    /// </summary>
     internal static bool MayBeUnreachable(Exception exception)
     {
         for (var current = exception; current != null; current = current.InnerException)
         {
+            if (CrateDatabaseClient.IsConnectionPoolExhausted(current) || current is StreamDataConnectionPoolExhaustedException)
+            {
+                return false;
+            }
+
             switch (current)
             {
                 case BrokenCircuitException:
