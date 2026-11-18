@@ -56,8 +56,15 @@ internal static class CrateTestConnect
     ///         as before; only the connect of a new physical connection is taken out of the measured part.
     ///     </para>
     ///     <para>
-    ///         A connect that times out is retried until <see cref="ReadinessBudget" />; then the test fails with a message that
-    ///         names the container and the slow connection setup.
+    ///         <paramref name="connections" /> must be at least the number of connections the measured part holds at once and
+    ///         at most the pool size, so the measured part never has to connect: the ten-parallel probe test warms 30 (its
+    ///         refresh runs 3 x 10 queries at once) in a pool of 32, the other tests warm their whole pool of 1 or 2. Npgsql
+    ///         closes an idle pooled connection only after <c>ConnectionIdleLifetime</c> (300 s by default), far longer than
+    ///         a test. A test that breaks a connection on purpose (a discarded slot) still connects anew afterwards.
+    ///     </para>
+    ///     <para>
+    ///         The connects run one after the other; one that times out is retried until <see cref="ReadinessBudget" />,
+    ///         then the test fails with a message that names the container and the slow connection setup.
     ///     </para>
     /// </remarks>
     public static async Task WarmUpAsync(CrateStagingCopyFixture fixture,
@@ -69,20 +76,18 @@ internal static class CrateTestConnect
         var failures = 0;
         try
         {
+            // One connect after the other: many connects at once through the Docker Desktop port proxy each took longer
+            // than 3 s (2026-11-18, AC4 run 4: 1 of 30 within 30 s, without any other load), single ones did not.
             while (opened.Count < connections && watch.Elapsed < ReadinessBudget)
             {
-                var attempts = Enumerable.Range(0, connections - opened.Count).Select(_ => open(cancellationToken)).ToList();
-                foreach (var attempt in attempts)
+                try
                 {
-                    try
-                    {
-                        opened.Add(await attempt);
-                    }
-                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested && MayBeUnreachable(ex))
-                    {
-                        last = ex;
-                        failures++;
-                    }
+                    opened.Add(await open(cancellationToken));
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested && MayBeUnreachable(ex))
+                {
+                    last = ex;
+                    failures++;
                 }
             }
         }
