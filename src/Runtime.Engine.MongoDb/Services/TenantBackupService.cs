@@ -360,22 +360,20 @@ internal class TenantBackupService(
             }
 
             var restored = false;
-            var mongoRestoreMayStillWrite = false;
             try
             {
                 var result = await RestoreClaimedTargetAsync(tenantId, databaseName, archiveFilePath,
                     effectiveSourceDatabaseName, detectedDatabases, dropExistingTenant, attachTenant,
                     overrideForeignOwnership, claim, timeout, cancellationToken);
                 restored = result.Success;
-                mongoRestoreMayStillWrite = result.ProcessMayStillRun;
                 return result;
             }
             finally
             {
-                if (mongoRestoreMayStillWrite)
+                if (claim.IsKept)
                 {
                     logger.LogError(
-                        "Restore of tenant '{TenantId}': mongorestore may still write into '{DatabaseName}'; the claim is not released. Drop the database by hand if it reappears",
+                        "Restore of tenant '{TenantId}': the claim on database '{DatabaseName}' is kept, so no other instance attaches it; make sure mongorestore has stopped, then drop the database by hand",
                         tenantId, databaseName);
                 }
                 else if (!restored || !attachTenant)
@@ -527,48 +525,55 @@ internal class TenantBackupService(
             logger.LogError("Restore failed for tenant '{TenantId}': {Error}", tenantId, result.Error);
             if (result.Cancelled || result.ProcessMayStillRun)
             {
-                await DropInterruptedRestoreTargetAsync(tenantId, databaseName, result);
+                await DropInterruptedRestoreTargetAsync(tenantId, databaseName, result, claim);
                 return result;
             }
 
-            await RemovePlatformOnlyValuesAfterFailedRestoreAsync(tenantId, databaseName);
+            if (result.ProcessNeverStarted)
+            {
+                return result;
+            }
+
+            await RemovePlatformOnlyValuesAfterFailedRestoreAsync(tenantId, databaseName, claim);
             return result;
         }
 
-        // AB#4367: a mongorestore whose --nsInclude matched no namespace exits 0 with
-        // "0 documents restored" and writes nothing - the target then holds no more than the claim of this
-        // restore. Turn that silent no-op into a descriptive failure instead of a misleading downstream attach error.
-        if (await tenantOwnershipStore.HoldsOnlyMarkersAsync(databaseName, cancellationToken ?? CancellationToken.None))
-        {
-            var archiveInfo = detectedDatabases.Count > 0
-                ? $" The archive contains database(s) '{string.Join("', '", detectedDatabases)}'."
-                : string.Empty;
-            var errorMessage =
-                $"mongorestore completed but restored no data into database '{databaseName}' — " +
-                $"no namespaces in the archive matched.{archiveInfo}";
-            logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
-            return CommandResult.Failure(errorMessage);
-        }
-
-        // A restored copy of a dumped system database is a tenant database and must not look like another
-        // instance's system database. The marker collection is excluded from the restore above; this removes one an
-        // older mongorestore without namespace exclusion may still have written.
-        await systemDatabaseMarkerStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
-
-        // The values only the platform may hold never reach the tenant, also from an older or edited archive.
-        // Removed before the attach, so no service reads them in between.
+        // Fail closed: mongorestore wrote, so every exit before the platform-only values are removed drops the target.
         IReadOnlyList<string> removedPlatformOnlyValues;
         try
         {
+            // AB#4367: a mongorestore whose --nsInclude matched no namespace exits 0 with
+            // "0 documents restored" and writes nothing - the target then holds no more than the claim of this
+            // restore. Turn that silent no-op into a descriptive failure instead of a misleading downstream attach error.
+            if (await tenantOwnershipStore.HoldsOnlyMarkersAsync(databaseName,
+                    cancellationToken ?? CancellationToken.None))
+            {
+                var archiveInfo = detectedDatabases.Count > 0
+                    ? $" The archive contains database(s) '{string.Join("', '", detectedDatabases)}'."
+                    : string.Empty;
+                var errorMessage =
+                    $"mongorestore completed but restored no data into database '{databaseName}' — " +
+                    $"no namespaces in the archive matched.{archiveInfo}";
+                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
+            }
+
+            // A restored copy of a dumped system database is a tenant database and must not look like another
+            // instance's system database. The marker collection is excluded from the restore above; this removes one
+            // an older mongorestore without namespace exclusion may still have written.
+            await systemDatabaseMarkerStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
+
+            // The values only the platform may hold never reach the tenant, also from an older or edited archive.
+            // Removed before the attach, so no service reads them in between.
             removedPlatformOnlyValues = await platformOnlyValueRemover.RemoveAsync(databaseName,
                 cancellationToken ?? CancellationToken.None);
         }
         catch (Exception exception)
         {
             logger.LogError(exception,
-                "Restore of tenant '{TenantId}' failed: the platform-only values could not be removed; the restored database '{DatabaseName}' is dropped",
+                "Restore of tenant '{TenantId}' failed before the platform-only values were removed; the restored database '{DatabaseName}' is dropped",
                 tenantId, databaseName);
-            await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
+            await DropRestoredTargetAsync(tenantId, databaseName, claim);
             throw;
         }
 
@@ -657,25 +662,78 @@ internal class TenantBackupService(
 
     /// <summary>
     ///     A cancelled mongorestore, or one that may still run, leaves a database whose content nobody can vouch for: it is
-    ///     dropped, never cleaned while it may still be written.
+    ///     dropped, never cleaned while it may still be written. While mongorestore may still run, the dropped target is
+    ///     claimed again for this instance and the claim is kept, so no other instance attaches what it writes.
     /// </summary>
-    private async Task DropInterruptedRestoreTargetAsync(string tenantId, string databaseName, CommandResult result)
+    private async Task DropInterruptedRestoreTargetAsync(string tenantId, string databaseName, CommandResult result,
+        RestoreClaim claim)
     {
         logger.LogError(
             "Restore of tenant '{TenantId}' was interrupted (cancelled: {Cancelled}, process may still run: {ProcessMayStillRun}); the target database '{DatabaseName}' is dropped",
             tenantId, result.Cancelled, result.ProcessMayStillRun, databaseName);
-        await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
-        var dropNote = result.ProcessMayStillRun
-            ? $"The target database '{databaseName}' was dropped, but mongorestore may still be running: make sure it has stopped and drop the database by hand if it reappears."
-            : $"The target database '{databaseName}' was dropped.";
+        var dropped = await DropRestoredTargetAsync(tenantId, databaseName, claim);
+        var dropNote = dropped
+            ? $"The target database '{databaseName}' was dropped."
+            : $"The target database '{databaseName}' could not be dropped; the claim of this instance on it is kept. Drop it by hand.";
+        if (dropped && result.ProcessMayStillRun)
+        {
+            var claimKept = await KeepClaimWhileMongoRestoreMayRunAsync(tenantId, databaseName, claim);
+            dropNote = claimKept
+                ? $"The target database '{databaseName}' was dropped, but mongorestore may still be running: the database is claimed again for this instance and the claim is kept, so no other instance attaches it. Make sure mongorestore has stopped, then drop the database by hand."
+                : $"The target database '{databaseName}' was dropped, but mongorestore may still be running and the database could not be claimed again: make sure mongorestore has stopped and drop the database by hand if it reappears.";
+        }
+
         result.Error = string.IsNullOrEmpty(result.Error) ? dropNote : result.Error + Environment.NewLine + dropNote;
+    }
+
+    private async Task<bool> KeepClaimWhileMongoRestoreMayRunAsync(string tenantId, string databaseName,
+        RestoreClaim claim)
+    {
+        try
+        {
+            claim.TargetDropped();
+            var reclaimRefusal = await claim.AcquireAsync(approvedForeignMarker: null, CancellationToken.None);
+            if (reclaimRefusal != null)
+            {
+                logger.LogError(
+                    "Restore of tenant '{TenantId}': the dropped database '{DatabaseName}' could not be claimed again while mongorestore may still run: {Refusal}",
+                    tenantId, databaseName, reclaimRefusal);
+                return false;
+            }
+
+            claim.Keep();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception,
+                "Restore of tenant '{TenantId}': the dropped database '{DatabaseName}' could not be claimed again while mongorestore may still run",
+                tenantId, databaseName);
+            return false;
+        }
+    }
+
+    /// <summary>Drops the restored target; when the drop fails, the claim is kept so no other instance attaches it.</summary>
+    private async Task<bool> DropRestoredTargetAsync(string tenantId, string databaseName, RestoreClaim claim)
+    {
+        var dropped = await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
+        if (!dropped)
+        {
+            logger.LogError(
+                "Restore of tenant '{TenantId}': the restored database '{DatabaseName}' could not be dropped; the claim on it is kept",
+                tenantId, databaseName);
+            claim.Keep();
+        }
+
+        return dropped;
     }
 
     /// <summary>
     ///     A mongorestore that failed or timed out may have written documents, and a database left behind can be attached
     ///     later: the platform-only values are removed from it, and when that fails too it is dropped.
     /// </summary>
-    private async Task RemovePlatformOnlyValuesAfterFailedRestoreAsync(string tenantId, string databaseName)
+    private async Task RemovePlatformOnlyValuesAfterFailedRestoreAsync(string tenantId, string databaseName,
+        RestoreClaim claim)
     {
         try
         {
@@ -693,7 +751,7 @@ internal class TenantBackupService(
             logger.LogError(exception,
                 "Failed restore of tenant '{TenantId}': the platform-only values could not be removed from the partly restored database '{DatabaseName}'; it is dropped",
                 tenantId, databaseName);
-            await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
+            await DropRestoredTargetAsync(tenantId, databaseName, claim);
         }
     }
 
@@ -709,8 +767,14 @@ internal class TenantBackupService(
         private bool _inserted;
         private bool _materializedByClaim = !databaseExistedBefore;
 
+        /// <summary>The claim stays on the target when the restore ends: its content may not be attached elsewhere.</summary>
+        public bool IsKept { get; private set; }
+
         /// <summary>The restore dropped the target (the existing tenant's database): a new claim materializes it again.</summary>
         public void TargetDropped() => _materializedByClaim = true;
+
+        /// <summary>Keeps the claim when the restore ends; <see cref="ReleaseAsync" /> then leaves it in place.</summary>
+        public void Keep() => IsKept = true;
 
         /// <summary>
         ///     Claims the target; returns the logged refusal reason when another instance holds it.
@@ -754,7 +818,7 @@ internal class TenantBackupService(
         /// </summary>
         public async Task ReleaseAsync(bool dropIfOnlyTheClaim)
         {
-            if (!_inserted)
+            if (!_inserted || IsKept)
             {
                 return;
             }

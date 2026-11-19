@@ -63,18 +63,21 @@ internal class RestoredPlatformOnlyValueRemover(
     ///     Drops a restored database whose platform-only values could not be removed, or whose restore was interrupted;
     ///     never throws.
     /// </summary>
-    public virtual async Task DropRestoredDatabaseAsync(string databaseName)
+    /// <returns><c>true</c> when the database was dropped, <c>false</c> when the drop failed.</returns>
+    public virtual async Task<bool> DropRestoredDatabaseAsync(string databaseName)
     {
         try
         {
             var database = GetDatabase(databaseName);
             await database.Client.DropDatabaseAsync(database.DatabaseNamespace.DatabaseName, CancellationToken.None);
+            return true;
         }
         catch (Exception exception)
         {
             logger.LogError(exception,
                 "The restored database '{DatabaseName}' could not be dropped after a failed restore; drop it by hand before anyone attaches it",
                 databaseName);
+            return false;
         }
     }
 

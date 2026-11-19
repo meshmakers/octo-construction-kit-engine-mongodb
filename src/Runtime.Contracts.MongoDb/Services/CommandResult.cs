@@ -31,9 +31,12 @@ public class CommandResult
 
     /// <summary>
     ///     The command's process could not be confirmed stopped (the kill failed or it did not exit in time): it may still
-    ///     write. A restore drops its target database and keeps no claim on it.
+    ///     write. A restore drops its target database, claims it again for this instance and keeps that claim.
     /// </summary>
     public bool ProcessMayStillRun { get; set; }
+
+    /// <summary>The command's process was never started, so it wrote nothing. A restore leaves its target as it was.</summary>
+    public bool ProcessNeverStarted { get; set; }
 
     public static CommandResult Failure(string error)
     {

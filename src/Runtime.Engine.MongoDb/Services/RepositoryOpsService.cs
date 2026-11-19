@@ -75,10 +75,24 @@ public class RepositoryOpsService(
     public async Task<CommandResult> ExecuteMongoRestoreAsync(MongoRestoreOptions options, TimeSpan? timeout = null,
         CancellationToken? cancellationToken = null)
     {
-        var args = MongoToolArguments.BuildMongoRestoreArguments(options,
-            GetConnectionString(options.Database).ToString(),
-            systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword,
-            systemConfigurationOptions.Value.MongoRestoreBatchSize);
+        IReadOnlyList<string> args;
+        try
+        {
+            args = MongoToolArguments.BuildMongoRestoreArguments(options,
+                GetConnectionString(options.Database).ToString(),
+                systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword,
+                systemConfigurationOptions.Value.MongoRestoreBatchSize);
+        }
+        catch (Exception argumentException)
+        {
+            logger.LogError(argumentException,
+                "The mongorestore arguments for database '{DatabaseName}' could not be built; mongorestore was not started",
+                options.Database);
+            var notStartedResult =
+                CommandResult.Failure($"mongorestore was not started: {argumentException.Message}");
+            notStartedResult.ProcessNeverStarted = true;
+            return notStartedResult;
+        }
 
         logger.LogInformation("Executing mongorestore with options: {Options}",
             MongoToolArguments.ToDisplayString("mongorestore", args));
@@ -255,8 +269,10 @@ public class RepositoryOpsService(
         {
             logger.LogError(ex, "Failed to execute command: {Command}", displayCommand);
 
-            return CommandResult.Failure($"Failed to start process '{fileName}': {ex.Message}")
+            var notStartedResult = CommandResult.Failure($"Failed to start process '{fileName}': {ex.Message}")
                 .WithCommand(displayCommand);
+            notStartedResult.ProcessNeverStarted = true;
+            return notStartedResult;
         }
     }
 

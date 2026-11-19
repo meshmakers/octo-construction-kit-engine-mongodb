@@ -3601,16 +3601,25 @@ could move the ciphertext into any other attribute.
     engine also deserializes) fails the removal: the restore **fails closed** instead of leaving a value it cannot unset.
     So does a candidate with an attribute name that is not ASCII: the engine upper-cases the first letter of a stored key
     (`ToPascalCase`), and `ſealedCaller` (U+017F) is read as `SealedCaller`, while the server-side `$toLower` is ASCII-only.
-  - When the removal fails, the restored (still unattached) database is dropped and the restore fails, so no database with
-    the values is left on the server for a later attach.
+  - **Fail closed after mongorestore wrote**: every exit between a successful mongorestore and the finished removal (the
+    check for an empty restore, the removal of a system-database marker, the removal itself; a cancellation or a MongoDB
+    error in any of them) drops the restored (still unattached) database and fails the restore, so no database with the
+    values is left on the server for a later attach. When that drop fails, the claim of this instance on the database is
+    kept (not released), so no other instance attaches it, and the error log asks to drop it by hand.
   - When mongorestore fails after it wrote documents, the removal runs on the partly restored database (dropped
     when that fails too) before the claim is released, because such a database stays on the server and can be attached later.
   - **A cancelled restore stops mongorestore and drops the target database.** On cancellation, a timeout or an exception
     `RepositoryOpsService` kills the whole process tree and waits up to 30 s for it to exit (`CommandResult.Cancelled`).
     A cancelled mongorestore, one that may still run (`CommandResult.ProcessMayStillRun`: the kill failed or it did not exit
-    in time) and one that threw get no clean-up on a database that may still be written: the target is dropped, and a
-    restore whose mongorestore may still run releases no claim and tells the operator to drop the database by hand if it
-    reappears.
+    in time) and one that threw get no clean-up on a database that may still be written: the target is dropped. The drop
+    removes the claim marker with the database, so a restore whose mongorestore may still run (or threw) then claims the
+    empty target again for this instance and **keeps that claim**: the database holds only the claim marker plus whatever
+    mongorestore still writes, no other instance can attach it, and the error tells the operator to make sure mongorestore
+    has stopped and drop the database by hand. (The claim does not stop an attach by this instance.)
+  - **A mongorestore that never started** (`CommandResult.ProcessNeverStarted`: the arguments could not be built or the
+    program could not be started) wrote nothing: the restore fails like any other failure, without a drop or a clean-up of
+    the target; only the claim is released (and a database the claim alone materialized is dropped). An exception thrown out
+    of `ExecuteMongoRestoreAsync` is still treated as "may still run".
   - The database is opened under the name mongorestore and the claim use, never a normalized one.
 - **Result**: `CommandResult.RemovedPlatformOnlyValues` lists every removed value as `<CK type>@<rtId>.<attribute path>` and every
   deleted secret default entity as `<CK type>@<rtId>` (never the value); the restore logs them as a warning, and
@@ -3622,8 +3631,8 @@ could move the ciphertext into any other attribute.
   another attribute of the same tenant - only location-bound envelopes (enc:v3, a later stage) close that;
   a foreign archive carries its tenant's secrets readable for the restoring tenant; a restore bypasses the write rules and
   carries identity data (Bug AB#9381). The restore result is not yet shown in the bot-services job result; the warning
-  log names the removed values. When the drop after a failed removal fails as well, the database stays and the error log
-  asks to drop it by hand.
+  log names the removed values. When the drop after a failed removal fails as well, the database stays with the claim of
+  this instance kept and the error log asks to drop it by hand.
 - **Purpose binding and upgrade steps**: the purpose-bound protection of sealed execution values and the operator steps for
   executions queued or interrupted at the upgrade are documented in octo-communication-controller-services (`CLAUDE.md`, AB#9228).
 - Tests: `RestorePlatformOnlyValuesTests` (an archive dumped without any exclusion restores without the collection, the
@@ -3633,9 +3642,13 @@ could move the ciphertext into any other attribute.
   secret default value kept, a type derived from `PipelineExecution` through two inheritance rows, a failing removal drops the
   restored database and fails the restore), `RestorePlatformOnlyValuesFailClosedTests` (attributes stored as an array in both
   forms fail the restore and drop the database; a mongorestore that fails after writing leaves no sealed caller),
-  `RestoreInterruptedTests` (a mongorestore cancelled, possibly still running or throwing after it wrote drops the target),
+  `RestoreInterruptedTests` (a mongorestore cancelled, possibly still running or throwing after it wrote drops the target; the
+  last two keep the claim on the re-claimed target), `RestoreFailsClosedAfterMongoRestoreTests` (a cancellation after a
+  successful mongorestore drops the database, a failed drop keeps the claim, a mongorestore that never started leaves an
+  existing detached database as it was),
   `RestorePlatformOnlyNonAsciiKeyTests` (the engine reads `ſealedCaller` as `SealedCaller`; such a key fails the restore),
-  `RepositoryOpsServiceTests` (cancel and timeout stop the child of the command too) and
+  `RepositoryOpsServiceTests` (cancel and timeout stop the child of the command too; a program that cannot start reports
+  `ProcessNeverStarted`) and
   `RestoreLeavesOutSecretDefaultsTests` (a restore into the same tenant, secret defaults in another collection and under a
   derived type, a clone that reports the removed values).
 

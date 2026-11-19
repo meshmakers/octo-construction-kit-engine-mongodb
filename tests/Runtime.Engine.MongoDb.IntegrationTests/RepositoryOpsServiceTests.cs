@@ -169,6 +169,27 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture)
         }
     }
 
+    [Fact]
+    public async Task ExecuteCommandAsync_WhenTheProgramCannotStart_ReportsThatTheProcessNeverStarted()
+    {
+        var missingProgram = $"octo-missing-program-{Guid.NewGuid():N}";
+
+        var result = await _service.ExecuteCommandAsync(missingProgram, ["--version"]);
+
+        result.Success.Should().BeFalse();
+        result.ProcessNeverStarted.Should().BeTrue();
+        result.ProcessMayStillRun.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteCommandAsync_WhenTheProgramRan_DoesNotReportThatItNeverStarted()
+    {
+        var result = await _service.ExecuteCommandAsync("bash", ["-c", "exit 3"]);
+
+        result.Success.Should().BeFalse();
+        result.ProcessNeverStarted.Should().BeFalse();
+    }
+
     #endregion
 
     #region Stopping a running process

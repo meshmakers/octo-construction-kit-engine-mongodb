@@ -156,7 +156,11 @@ the `SecretValue` of an Application's `SecretDefaults` included: it is the hosti
 Application needs it. The list is `Services/Restore/PlatformOnlyRestoreValues.cs`; the restore result names the removed
 values (`CommandResult.RemovedPlatformOnlyValues`, paths only). A removal on restore does not stop an edited archive that
 moves a ciphertext into another attribute of the same tenant; only location-bound envelopes (enc:v3) close that. A restore
-that cannot remove the values safely, or whose mongorestore fails after writing, leaves no database that holds them. A cancelled restore stops mongorestore and drops the target database. Details:
+that cannot remove the values safely, or whose mongorestore fails after writing, leaves no database that holds them: once
+mongorestore wrote, every failure before the removal is done drops the target database (when the drop fails, the claim of
+this instance on it is kept). A cancelled restore stops mongorestore and drops the target database; when mongorestore may
+still run, the dropped target is claimed again for this instance and the claim is kept until an operator drops it by hand.
+A mongorestore that never started leaves the target as it was. Details:
 `CLAUDE.md`, "Restore leaves out platform-only values"; the purpose binding of sealed execution values and the operator steps
 at the upgrade are documented in octo-communication-controller-services.
 
