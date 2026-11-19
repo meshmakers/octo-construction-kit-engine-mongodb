@@ -1,5 +1,4 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
-using MongoDB.Bson;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 
@@ -13,6 +12,12 @@ internal static class PlatformOnlyRestoreValues
     /// <summary>Collections a restore leaves out entirely: the secret defaults the controller projects.</summary>
     public static IReadOnlyList<string> LeftOutCollections => MongoDumpOptions.PlatformOnlyTenantCollections;
 
+    /// <summary>
+    ///     CK types whose entities a restore leaves out wherever an edited archive put them: the secret defaults, also
+    ///     outside their collection and under a type derived from them.
+    /// </summary>
+    public static IReadOnlyList<string> LeftOutCkTypeIds { get; } = ["System.Communication/SecretDefault"];
+
     /// <summary>The attributes that a restore removes.</summary>
     public static IReadOnlyList<PlatformOnlyAttributeValue> AttributeValues { get; } =
     [
@@ -25,12 +30,11 @@ internal static class PlatformOnlyRestoreValues
 internal sealed record PlatformOnlyAttributeValue(string CkTypeId, string Attribute)
 {
     /// <summary>
-    ///     The stored keys of the attribute in an entity's attributes document, matched ignoring case, because the
+    ///     The stored keys of the attribute among the attribute names of an entity, matched ignoring case, because the
     ///     engine reads a stored key in any first-letter case.
     /// </summary>
-    public IEnumerable<string> FindStoredKeys(BsonDocument attributes) =>
-        attributes.Elements
-            .Where(element => string.Equals(element.Name, Attribute, StringComparison.OrdinalIgnoreCase))
-            .Select(element => element.Name)
+    public IEnumerable<string> FindStoredKeys(IEnumerable<string> storedAttributeNames) =>
+        storedAttributeNames
+            .Where(storedName => string.Equals(storedName, Attribute, StringComparison.OrdinalIgnoreCase))
             .ToList();
 }

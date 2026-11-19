@@ -20,7 +20,8 @@ public class CommandResult
 
     /// <summary>
     ///     A restore: the platform-only values it left out of the restored tenant, as paths
-    ///     (<c>&lt;CK type&gt;@&lt;rtId&gt;.&lt;attribute path&gt;</c>), never the values. A queued pipeline execution
+    ///     (<c>&lt;CK type&gt;@&lt;rtId&gt;.&lt;attribute path&gt;</c> for an attribute, <c>&lt;CK type&gt;@&lt;rtId&gt;</c>
+    ///     for a deleted entity), never the values. A queued pipeline execution
     ///     that lost its sealed caller fails when it is leased. Empty for every other command.
     /// </summary>
     public IReadOnlyList<string> RemovedPlatformOnlyValues { get; set; } = [];

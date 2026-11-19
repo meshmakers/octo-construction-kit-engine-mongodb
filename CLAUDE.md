@@ -3574,6 +3574,7 @@ own secrets are restored unchanged. The list is `Services/Restore/PlatformOnlyRe
 | Left out | How | Why |
 | --- | --- | --- |
 | Collection `RtEntity_SystemCommunicationSecretDefault` (`MongoDumpOptions.PlatformOnlyTenantCollections`) | `--nsExclude`, and dropped after mongorestore for an older mongorestore | the communication controller projects the secret defaults; it projects them again when the tenant is set up after the attach (controller `DefaultConfigurationCreatorService.StartTenantAsync` -> `EnsureSecretDefaultsAsync`) |
+| Entities of `System.Communication/SecretDefault` or a type derived from it in any other `RtEntity_*` collection (`PlatformOnlyRestoreValues.LeftOutCkTypeIds`) | deleted | an edited archive could put a secret default where the dropped collection does not reach, e.g. under a derived type that is its own collection root |
 | `System.Communication/PipelineExecution.SealedCaller` and `.CallerAccessToken` | `$unset` | the sealed caller carries the invoker's bearer token until the lease. A restored queued execution without it has no provenance: the lease service fails it with a reason (`QueuedProvenanceInvalid`, "not queued by the controller (no provenance)"); it is not the `QueuedProvenanceUnverifiable` path, which keeps an execution queued only for a missing key |
 
 **`System.Communication/Application.SecretDefaults[].SecretValue` is restored**, like every tenant secret, although
@@ -3587,17 +3588,25 @@ could move the ciphertext into any other attribute.
 
 - **Where**: `RestoredPlatformOnlyValueRemover.RemoveAsync`, called in `RestoreClaimedTargetCoreAsync` after mongorestore and
   before the attach, so no service reads the values in between. It works on the stored documents of every `RtEntity_*`
-  collection, whatever the stored form of the value (an `OctoSecret` sub-document, an `enc:` string or plain text):
+  collection, whatever the stored form of the value (an `OctoSecret` sub-document, an `enc:` string or plain text). The
+  server returns only the candidates and only their attribute names (`PlatformOnlyCandidatePipeline`, an aggregation), the
+  removal streams them and unsets in bulk, so a tenant with many executions is not loaded into memory:
   - the CK type (field `ckTypeId`) is matched together with every type derived from it, read from the restored
     `CkTypeInheritance` rows (`RestoredCkTypeFamilies`, the rows the engine builds its CK cache from), because
     `PipelineExecution` is derivable;
   - attribute keys (under `attributes`) are matched **ignoring case**:
     the engine reads a stored key in any first-letter case (`RtAttributeDictionarySerializer` maps keys through
     `ToPascalCase`), so an edited archive cannot hide a value behind `SealedCaller` instead of `sealedCaller`.
+  - a candidate whose `attributes` is stored in another form than a document (an array of key-value pairs, which the
+    engine also deserializes) fails the removal: the restore **fails closed** instead of leaving a value it cannot unset.
   - When the removal fails, the restored (still unattached) database is dropped and the restore fails, so no database with
     the values is left on the server for a later attach.
-- **Result**: `CommandResult.RemovedPlatformOnlyValues` lists every removed value as `<CK type>@<rtId>.<attribute path>` (never
-  the value) and the restore logs them as a warning. The secret defaults collection is always left out and is not listed.
+  - When mongorestore fails or throws after it wrote documents, the removal runs on the partly restored database (dropped
+    when that fails too) before the claim is released, because such a database stays on the server and can be attached later.
+  - The database is opened under the name mongorestore and the claim use, never a normalized one.
+- **Result**: `CommandResult.RemovedPlatformOnlyValues` lists every removed value as `<CK type>@<rtId>.<attribute path>` and every
+  deleted secret default entity as `<CK type>@<rtId>` (never the value); the restore logs them as a warning, and
+  `CloneTenantToTempAsync` passes the list on. The secret defaults collection is always left out and is not listed.
 - **Dumps are unchanged**: they still leave out only the secret defaults collection; `SecretValue` stays in a dump as ciphertext
   and comes back with the restore.
 - **Known limitations**: dumps made before the secret defaults exclusion still contain that collection (left out on restore
@@ -3605,13 +3614,19 @@ could move the ciphertext into any other attribute.
   another attribute of the same tenant - only location-bound envelopes (enc:v3, a later stage) close that;
   a foreign archive carries its tenant's secrets readable for the restoring tenant; a restore bypasses the write rules and
   carries identity data (Bug AB#9381). The restore result is not yet shown in the bot-services job result; the warning
-  log names the removed values.
+  log names the removed values. When the drop after a failed removal fails as well, the database stays and the error log
+  asks to drop it by hand.
+- **Purpose binding and upgrade steps**: the purpose-bound protection of sealed execution values and the operator steps for
+  executions queued or interrupted at the upgrade are documented in octo-communication-controller-services (`CLAUDE.md`, AB#9228).
 - Tests: `RestorePlatformOnlyValuesTests` (an archive dumped without any exclusion restores without the collection, the
   Application keeps every member and its `SecretValue` reads as a `Protected` secret, the execution loses both caller
   attributes, the tenant's own secret stays, the result lists the paths and never an envelope; an archive without such values
-  removes nothing; the list is pinned) and `RestorePlatformOnlyValuesEditedArchiveTests` (keys in another case, with the
+  removes nothing; the list is pinned), `RestorePlatformOnlyValuesEditedArchiveTests` (keys in another case, with the
   secret default value kept, a type derived from `PipelineExecution` through two inheritance rows, a failing removal drops the
-  restored database and fails the restore).
+  restored database and fails the restore), `RestorePlatformOnlyValuesFailClosedTests` (attributes stored as an array in both
+  forms fail the restore and drop the database; a mongorestore that fails after writing leaves no sealed caller) and
+  `RestoreLeavesOutSecretDefaultsTests` (a restore into the same tenant, secret defaults in another collection and under a
+  derived type, a clone that reports the removed values).
 
 ### Tenant-created notification after the commit (AB#9177)
 

@@ -42,6 +42,7 @@ public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
     public void PlatformOnlyValues_AreTheSecretDefaultCollectionAndTheSealedCaller()
     {
         Assert.Equal([SecretDefaultCollectionName], PlatformOnlyRestoreValues.LeftOutCollections);
+        Assert.Equal(["System.Communication/SecretDefault"], PlatformOnlyRestoreValues.LeftOutCkTypeIds);
         Assert.Equal(
         [
             new PlatformOnlyAttributeValue(ExecutionCkTypeId, "SealedCaller"),

@@ -148,7 +148,8 @@ internal class TenantBackupService(
             {
                 Success = true, ExitCode = 0,
                 TenantCreatedNotificationFailed = restoreResult.TenantCreatedNotificationFailed,
-                Output = restoreResult.TenantCreatedNotificationFailed ? restoreResult.Output : string.Empty
+                Output = restoreResult.TenantCreatedNotificationFailed ? restoreResult.Output : string.Empty,
+                RemovedPlatformOnlyValues = restoreResult.RemovedPlatformOnlyValues
             };
         }
         catch (Exception ex)
@@ -498,12 +499,24 @@ internal class TenantBackupService(
                 restoreOptions.NsFrom, restoreOptions.NsTo);
         }
 
-        var result = await repositoryOpsService.ExecuteMongoRestoreAsync(restoreOptions, timeout,
-            cancellationToken);
+        CommandResult result;
+        try
+        {
+            result = await repositoryOpsService.ExecuteMongoRestoreAsync(restoreOptions, timeout,
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "mongorestore of tenant '{TenantId}' into database '{DatabaseName}' failed",
+                tenantId, databaseName);
+            await RemovePlatformOnlyValuesAfterFailedRestoreAsync(tenantId, databaseName);
+            throw;
+        }
 
         if (!result.Success)
         {
             logger.LogError("Restore failed for tenant '{TenantId}': {Error}", tenantId, result.Error);
+            await RemovePlatformOnlyValuesAfterFailedRestoreAsync(tenantId, databaseName);
             return result;
         }
 
@@ -625,6 +638,32 @@ internal class TenantBackupService(
         }
 
         result.Output = string.IsNullOrEmpty(result.Output) ? warning : result.Output + Environment.NewLine + warning;
+    }
+
+    /// <summary>
+    ///     A mongorestore that failed or timed out may have written documents, and a database left behind can be attached
+    ///     later: the platform-only values are removed from it, and when that fails too it is dropped.
+    /// </summary>
+    private async Task RemovePlatformOnlyValuesAfterFailedRestoreAsync(string tenantId, string databaseName)
+    {
+        try
+        {
+            var removedPlatformOnlyValues =
+                await platformOnlyValueRemover.RemoveAsync(databaseName, CancellationToken.None);
+            if (removedPlatformOnlyValues.Count > 0)
+            {
+                logger.LogWarning(
+                    "Failed restore of tenant '{TenantId}': removed {Count} platform-only value(s) from the partly restored database '{DatabaseName}'",
+                    tenantId, removedPlatformOnlyValues.Count, databaseName);
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception,
+                "Failed restore of tenant '{TenantId}': the platform-only values could not be removed from the partly restored database '{DatabaseName}'; it is dropped",
+                tenantId, databaseName);
+            await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
+        }
     }
 
     /// <summary>
