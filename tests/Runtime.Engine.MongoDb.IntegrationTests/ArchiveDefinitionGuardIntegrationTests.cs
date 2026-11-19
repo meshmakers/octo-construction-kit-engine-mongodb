@@ -136,6 +136,15 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
         {string.Join("\n", columns)}
         """;
 
+    // A seed attribute that sets the archive status, appended after the columns of Raw(...). Built as its own
+    // literal instead of a string.Replace on a multi-line literal: the line endings of a raw literal follow the
+    // checkout (CRLF on Windows with core.autocrlf), so a search text with "\n" silently matched nothing (AB#9383).
+    private static string SeedStatus(CkArchiveStatus status) =>
+        $"""
+              - id: System.StreamData/Archive.Status
+                value: {(int)status}
+        """;
+
     private ITenantRepository Repository => fixture.GetSystemContext().GetSystemTenantRepository();
 
     private async Task ImportAsync(string yaml, ImportStrategy strategy)
@@ -274,8 +283,9 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
     public async Task SetStatus_StampsAnArchiveLeavingActivatedWithoutAStamp_AndItStaysGuarded()
     {
         var raw = OctoObjectId.GenerateNewId();
-        await ImportAsync(Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double")).Replace("attributes:\n      - id: System.StreamData/Archive.TargetCkTypeId",
-            "attributes:\n      - id: System.StreamData/Archive.Status\n        value: 1\n      - id: System.StreamData/Archive.TargetCkTypeId"), ImportStrategy.Insert);
+        await ImportAsync(Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double"), SeedStatus(CkArchiveStatus.Activated)),
+            ImportStrategy.Insert);
+        (await fixture.TenantContext.GetArchiveRuntimeStore().GetAsync(raw))!.Status.Should().Be(CkArchiveStatus.Activated, "the seed imports the archive as activated");
         (await FirstActivatedAtOfAsync(raw, RawType)).Should().BeNull();
 
         await fixture.TenantContext.GetArchiveRuntimeStore().SetStatusAsync(raw, CkArchiveStatus.Disabled);
