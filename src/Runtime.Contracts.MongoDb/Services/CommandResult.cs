@@ -26,7 +26,10 @@ public class CommandResult
     /// </summary>
     public IReadOnlyList<string> RemovedPlatformOnlyValues { get; set; } = [];
 
-    /// <summary>The command was cancelled before it finished; its process was stopped.</summary>
+    /// <summary>
+    ///     The command was cancelled before it finished; its process was stopped. Only a cancellation sets it, a timeout
+    ///     or an exception does not.
+    /// </summary>
     public bool Cancelled { get; set; }
 
     /// <summary>

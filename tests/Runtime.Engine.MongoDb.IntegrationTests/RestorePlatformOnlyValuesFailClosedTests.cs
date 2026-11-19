@@ -70,7 +70,7 @@ public class RestorePlatformOnlyValuesFailClosedTests(SystemFixture systemFixtur
     }
 
     [Fact]
-    public async Task AMongoRestoreThatFailsAfterWriting_LeavesNoPlatformOnlyValueInTheDatabase()
+    public async Task AMongoRestoreThatFailsAfterWriting_DropsTheTargetDatabase()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var systemContext = systemFixture.GetSystemContext();
@@ -95,12 +95,7 @@ public class RestorePlatformOnlyValuesFailClosedTests(SystemFixture systemFixtur
 
             Assert.False(restoreResult.Success);
             Assert.Null(await systemContext.TryFindTenantContextAsync(targetTenantId));
-            var leftExecutions = await _support.GetDatabase(targetTenantId)
-                .GetCollection<BsonDocument>(ExecutionCollectionName)
-                .Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(cancellationToken);
-            var leftExecution = Assert.Single(leftExecutions);
-            Assert.False(leftExecution["attributes"].AsBsonDocument.Contains("sealedCaller"));
-            Assert.Equal(1, leftExecution["attributes"]["status"].AsInt32);
+            Assert.False(await _support.DatabaseExistsAsync(targetTenantId, cancellationToken));
         }
         finally
         {

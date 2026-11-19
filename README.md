@@ -156,11 +156,13 @@ the `SecretValue` of an Application's `SecretDefaults` included: it is the hosti
 Application needs it. The list is `Services/Restore/PlatformOnlyRestoreValues.cs`; the restore result names the removed
 values (`CommandResult.RemovedPlatformOnlyValues`, paths only). A removal on restore does not stop an edited archive that
 moves a ciphertext into another attribute of the same tenant; only location-bound envelopes (enc:v3) close that. A restore
-that cannot remove the values safely, or whose mongorestore fails after writing, leaves no database that holds them: once
-mongorestore wrote, every failure before the removal is done drops the target database (when the drop fails, the claim of
-this instance on it is kept). A cancelled restore stops mongorestore and drops the target database; when mongorestore may
-still run, the dropped target is claimed again for this instance and the claim is kept until an operator drops it by hand.
-A mongorestore that never started leaves the target as it was. Details:
+that cannot remove the values safely leaves no database that holds them: every restore that does not complete after
+mongorestore started (a non-zero exit, a timeout, a cancellation, an exception, a failed attach) drops the target database
+(when the drop fails, the claim of this instance on it is kept). Only a cancellation sets `CommandResult.Cancelled`; a timeout
+is a plain failure. When mongorestore may still run, the dropped target is claimed again for this instance and the claim is
+kept until an operator drops it by hand. A mongorestore that never started leaves the target as it was. While the target is
+not a registered tenant, the claim of a restore is exclusive: a second restore of the same target is refused, and a restore
+whose claim was replaced before the attach drops the target and fails. Details:
 `CLAUDE.md`, "Restore leaves out platform-only values"; the purpose binding of sealed execution values and the operator steps
 at the upgrade are documented in octo-communication-controller-services.
 

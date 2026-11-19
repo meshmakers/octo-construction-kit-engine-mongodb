@@ -50,6 +50,9 @@ internal sealed class RestoredCkTypeFamilies
         return new RestoredCkTypeFamilies(directInheritors);
     }
 
+    /// <summary>Whether the restored database holds no readable inheritance row.</summary>
+    public bool IsEmpty => _directInheritors.Count == 0;
+
     /// <summary><paramref name="ckTypeId" /> and every type derived from it, directly or indirectly.</summary>
     public IReadOnlySet<string> WithDerivedTypes(string ckTypeId)
     {

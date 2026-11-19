@@ -14,7 +14,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 ///     (read from the restored inheritance rows), and attribute keys ignoring case, because the engine reads a stored key
 ///     in any first-letter case. A candidate whose attributes are stored in another form than a document (the engine also
 ///     reads an array of key-value pairs) or with an attribute name that is not ASCII (the engine may read it as a
-///     platform-only key) fails the removal, so the restore fails closed.
+///     platform-only key) fails the removal, so the restore fails closed. So does a candidate of any CK type when the
+///     restored database holds no inheritance rows, because then a type derived from PipelineExecution is not known.
 /// </summary>
 internal class RestoredPlatformOnlyValueRemover(
     IAdminRepositoryAccess adminRepositoryAccess,
@@ -41,8 +42,10 @@ internal class RestoredPlatformOnlyValueRemover(
             .Select(platformOnlyValue => new TypedRemoval(platformOnlyValue,
                 typeFamilies.WithDerivedTypes(platformOnlyValue.CkTypeId)))
             .ToList();
-        var candidatePipeline = Create(removals.SelectMany(removal => removal.CkTypeIds),
-            removals.Select(removal => removal.Value.Attribute));
+        var candidateCkTypeIds = typeFamilies.IsEmpty
+            ? null
+            : removals.SelectMany(removal => removal.CkTypeIds);
+        var candidatePipeline = Create(candidateCkTypeIds, removals.Select(removal => removal.Value.Attribute));
 
         var removedPaths = new List<string>();
         var collectionNames = await (await database.ListCollectionNamesAsync(cancellationToken: cancellationToken))
@@ -138,6 +141,14 @@ internal class RestoredPlatformOnlyValueRemover(
         IReadOnlyList<TypedRemoval> removals, List<string> removedPaths)
     {
         var ckTypeId = candidate[CkTypeIdField].AsString;
+        if (!removals.Any(removal => removal.CkTypeIds.Contains(ckTypeId)))
+        {
+            throw new InvalidOperationException(
+                $"The restored entity {ckTypeId}@{candidate[IdField]} in '{collection.CollectionNamespace.CollectionName}' " +
+                "may hold a platform-only value, but the restored database holds no CK type inheritance that tells " +
+                "whether its type derives from a type whose platform-only values are removed.");
+        }
+
         var storedForm = candidate[AttributesTypeField].AsString;
         if (!ReadableAttributesTypes.Contains(storedForm))
         {

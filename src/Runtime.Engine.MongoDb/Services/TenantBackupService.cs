@@ -3,8 +3,10 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 
@@ -349,11 +351,13 @@ internal class TenantBackupService(
             // through the whole restore, so another instance can neither attach nor restore the database in
             // between. mongorestore leaves the claim alone (the marker collections are excluded from the restore);
             // the attach at the end takes it over, and a restore that ends without attach or fails releases it.
+            // While the target is not a registered tenant, the claim is exclusive: a second restore of the same
+            // target on this instance is refused.
             var claim = new RestoreClaim(tenantOwnershipStore, databaseName, tenantId.NormalizeString(),
                 systemContext.DatabaseName.Trim().ToLowerInvariant(),
                 await systemContext.IsDatabaseExistingAsync(databaseName));
             var claimRefusal = await claim.AcquireAsync(approvedForeignMarker,
-                cancellationToken ?? CancellationToken.None);
+                targetIsRegisteredTenant: claimingTenantId != null, cancellationToken ?? CancellationToken.None);
             if (claimRefusal != null)
             {
                 return CommandResult.Failure(RefuseRestore(tenantId, databaseName, claimRefusal));
@@ -465,7 +469,7 @@ internal class TenantBackupService(
                 // it. Until then the database does not exist, so no attach can take it.
                 claim.TargetDropped();
                 var reclaimRefusal = await claim.AcquireAsync(approvedForeignMarker: null,
-                    cancellationToken ?? CancellationToken.None);
+                    targetIsRegisteredTenant: false, cancellationToken ?? CancellationToken.None);
                 if (reclaimRefusal != null)
                 {
                     return CommandResult.Failure(RefuseRestore(tenantId, databaseName, reclaimRefusal));
@@ -475,6 +479,13 @@ internal class TenantBackupService(
         else
         {
             logger.LogInformation("Tenant '{TenantId}' does not exist, proceeding with restore", tenantId);
+        }
+
+        if (!claim.IsHeld)
+        {
+            return CommandResult.Failure(RefuseRestore(tenantId, databaseName,
+                "the database is not claimed by this restore (another operation of this instance changed the tenant " +
+                "concurrently); nothing was written by the restore"));
         }
 
         // Perform the restore
@@ -523,18 +534,13 @@ internal class TenantBackupService(
         if (!result.Success)
         {
             logger.LogError("Restore failed for tenant '{TenantId}': {Error}", tenantId, result.Error);
-            if (result.Cancelled || result.ProcessMayStillRun)
+            var mongoRestoreMayHaveWritten =
+                result.Cancelled || result.ProcessMayStillRun || !result.ProcessNeverStarted;
+            if (mongoRestoreMayHaveWritten)
             {
-                await DropInterruptedRestoreTargetAsync(tenantId, databaseName, result, claim);
-                return result;
+                await DropFailedRestoreTargetAsync(tenantId, databaseName, result, claim);
             }
 
-            if (result.ProcessNeverStarted)
-            {
-                return result;
-            }
-
-            await RemovePlatformOnlyValuesAfterFailedRestoreAsync(tenantId, databaseName, claim);
             return result;
         }
 
@@ -588,8 +594,7 @@ internal class TenantBackupService(
         logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",
             databaseName, tenantId);
 
-        // Optionally attach tenant after restore. The attach finds this restore's claim (a marker of this instance)
-        // and takes it over in its transaction.
+        // Optionally attach tenant after restore. The attach takes over this restore's claim in its transaction.
         if (attachTenant)
         {
             logger.LogInformation("Attaching tenant '{TenantId}' to database '{DatabaseName}'",
@@ -599,9 +604,7 @@ internal class TenantBackupService(
             // restored and attached); it is reported on the result, so the caller can surface it.
             using var session = await systemContext.GetAdminSessionAsync();
             using var notification = TenantNotificationScope.Begin(session);
-            session.StartTransaction();
-            await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
-            await session.CommitTransactionAsync();
+            await AttachUnderOwnClaimAsync(tenantId, databaseName, claim, session);
 
             logger.LogInformation(
                 "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
@@ -661,15 +664,46 @@ internal class TenantBackupService(
     }
 
     /// <summary>
-    ///     A cancelled mongorestore, or one that may still run, leaves a database whose content nobody can vouch for: it is
-    ///     dropped, never cleaned while it may still be written. While mongorestore may still run, the dropped target is
-    ///     claimed again for this instance and the claim is kept, so no other instance attaches what it writes.
+    ///     Attaches the restored database in one transaction that first reads the claim: when it is no longer this
+    ///     restore's own claim, another operation claimed the database and its content is not attached. A change of the
+    ///     claim after that read collides with the attach's write of the marker. A failed attach drops the target.
     /// </summary>
-    private async Task DropInterruptedRestoreTargetAsync(string tenantId, string databaseName, CommandResult result,
+    private async Task AttachUnderOwnClaimAsync(string tenantId, string databaseName, RestoreClaim claim,
+        IOctoAdminSession session)
+    {
+        try
+        {
+            session.StartTransaction();
+            if (!await claim.IsStillOwnClaimAsync(session))
+            {
+                throw new InvalidOperationException(
+                    $"The claim of this restore on database '{databaseName}' was replaced by another operation before " +
+                    "the attach; the restored database is not attached.");
+            }
+
+            await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
+            await session.CommitTransactionAsync();
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception,
+                "Restore of tenant '{TenantId}' could not attach database '{DatabaseName}'; the restored database is dropped",
+                tenantId, databaseName);
+            await DropRestoredTargetAsync(tenantId, databaseName, claim);
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     A mongorestore that started and did not complete leaves a database whose content nobody can vouch for: it is
+    ///     dropped, never cleaned. While mongorestore may still run, the dropped target is claimed again for this
+    ///     instance and the claim is kept, so no other instance attaches what it writes.
+    /// </summary>
+    private async Task DropFailedRestoreTargetAsync(string tenantId, string databaseName, CommandResult result,
         RestoreClaim claim)
     {
         logger.LogError(
-            "Restore of tenant '{TenantId}' was interrupted (cancelled: {Cancelled}, process may still run: {ProcessMayStillRun}); the target database '{DatabaseName}' is dropped",
+            "mongorestore of tenant '{TenantId}' did not complete (cancelled: {Cancelled}, process may still run: {ProcessMayStillRun}); the target database '{DatabaseName}' is dropped",
             tenantId, result.Cancelled, result.ProcessMayStillRun, databaseName);
         var dropped = await DropRestoredTargetAsync(tenantId, databaseName, claim);
         var dropNote = dropped
@@ -692,7 +726,8 @@ internal class TenantBackupService(
         try
         {
             claim.TargetDropped();
-            var reclaimRefusal = await claim.AcquireAsync(approvedForeignMarker: null, CancellationToken.None);
+            var reclaimRefusal = await claim.AcquireAsync(approvedForeignMarker: null,
+                targetIsRegisteredTenant: false, CancellationToken.None);
             if (reclaimRefusal != null)
             {
                 logger.LogError(
@@ -729,33 +764,6 @@ internal class TenantBackupService(
     }
 
     /// <summary>
-    ///     A mongorestore that failed or timed out may have written documents, and a database left behind can be attached
-    ///     later: the platform-only values are removed from it, and when that fails too it is dropped.
-    /// </summary>
-    private async Task RemovePlatformOnlyValuesAfterFailedRestoreAsync(string tenantId, string databaseName,
-        RestoreClaim claim)
-    {
-        try
-        {
-            var removedPlatformOnlyValues =
-                await platformOnlyValueRemover.RemoveAsync(databaseName, CancellationToken.None);
-            if (removedPlatformOnlyValues.Count > 0)
-            {
-                logger.LogWarning(
-                    "Failed restore of tenant '{TenantId}': removed {Count} platform-only value(s) from the partly restored database '{DatabaseName}'",
-                    tenantId, removedPlatformOnlyValues.Count, databaseName);
-            }
-        }
-        catch (Exception exception)
-        {
-            logger.LogError(exception,
-                "Failed restore of tenant '{TenantId}': the platform-only values could not be removed from the partly restored database '{DatabaseName}'; it is dropped",
-                tenantId, databaseName);
-            await DropRestoredTargetAsync(tenantId, databaseName, claim);
-        }
-    }
-
-    /// <summary>
     ///     The ownership claim a restore holds on its target from before the first destructive step until the attach
     ///     (AB#8672). Only a claim THIS restore inserted is ever released; a marker of this instance that was there
     ///     before (a restore over the instance's own tenant) is left alone.
@@ -776,20 +784,40 @@ internal class TenantBackupService(
         /// <summary>Keeps the claim when the restore ends; <see cref="ReleaseAsync" /> then leaves it in place.</summary>
         public void Keep() => IsKept = true;
 
+        /// <summary>Whether the marker on the target is this restore's own claim (inserted or taken over).</summary>
+        public bool IsHeld => _inserted;
+
+        /// <summary>Whether the marker, read in <paramref name="session" />, is still this restore's own claim.</summary>
+        public async Task<bool> IsStillOwnClaimAsync(IOctoAdminSession session)
+        {
+            var marker = await store.GetAsync(databaseName, ((IOctoSessionInternal)session).SessionHandle);
+            return marker != null && TenantOwnershipStore.IsClaim(marker, ownerSystemDatabaseName, tenantId, _claimTime);
+        }
+
         /// <summary>
-        ///     Claims the target; returns the logged refusal reason when another instance holds it.
+        ///     Claims the target; returns the logged refusal reason when another instance holds it, or another operation
+        ///     of this instance while the target is not a registered tenant (<paramref name="targetIsRegisteredTenant" />).
         ///     <paramref name="approvedForeignMarker" /> is the foreign marker the ownership guard granted the
         ///     deliberate override for (null: no override); only exactly that marker is taken over (AB#8672).
         /// </summary>
         public async Task<string?> AcquireAsync(TenantOwnershipMarkerIdentity? approvedForeignMarker,
-            CancellationToken cancellationToken)
+            bool targetIsRegisteredTenant, CancellationToken cancellationToken)
         {
             var marker = await store.StampIfAbsentAndGetAsync(databaseName, tenantId, ownerSystemDatabaseName,
                 cancellationToken, _claimTime);
             if (string.Equals(marker.OwnerSystemDatabaseName, ownerSystemDatabaseName, StringComparison.Ordinal))
             {
-                _inserted |= TenantOwnershipStore.IsClaim(marker, ownerSystemDatabaseName, tenantId, _claimTime);
-                return null;
+                if (TenantOwnershipStore.IsClaim(marker, ownerSystemDatabaseName, tenantId, _claimTime))
+                {
+                    _inserted = true;
+                    return null;
+                }
+
+                return targetIsRegisteredTenant
+                    ? null
+                    : $"another restore or operation of this instance (tenant '{marker.TenantId}', claimed " +
+                      $"{marker.AttachedAtUtc:u}) holds the database, which is not a registered tenant; nothing was " +
+                      "dropped or written by the restore";
             }
 
             // The ownership guard granted the deliberate override for one foreign marker: take over exactly that

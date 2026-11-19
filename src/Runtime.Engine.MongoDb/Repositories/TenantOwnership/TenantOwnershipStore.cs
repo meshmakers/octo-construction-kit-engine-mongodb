@@ -48,6 +48,18 @@ internal sealed class TenantOwnershipStore
     }
 
     /// <summary>
+    ///     Returns the marker read in <paramref name="session" />: inside a transaction a later write of the marker by
+    ///     the same transaction collides with any change another operation committed since this read.
+    /// </summary>
+    public async Task<TenantOwnershipRecord?> GetAsync(string databaseName, IClientSessionHandle session,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = GetCollection(databaseName);
+        return await collection.Find(session, r => r.Id == TenantOwnershipRecord.DocumentId)
+            .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     ///     Stamps (or re-stamps) the marker. Used by create, which only writes into a database it
     ///     created itself. Attach claims with <see cref="StampIfAbsentAndGetAsync" /> instead, so two
     ///     instances attaching the same unmarked database cannot both win (AB#8796).

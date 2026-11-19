@@ -3593,7 +3593,9 @@ could move the ciphertext into any other attribute.
   removal streams them and unsets in bulk, so a tenant with many executions is not loaded into memory:
   - the CK type (field `ckTypeId`) is matched together with every type derived from it, read from the restored
     `CkTypeInheritance` rows (`RestoredCkTypeFamilies`, the rows the engine builds its CK cache from), because
-    `PipelineExecution` is derivable;
+    `PipelineExecution` is derivable. When the restored database holds no inheritance row, a derived type is not known:
+    every entity of any CK type that holds a platform-only attribute name (or a non-ASCII name, or attributes in another
+    form than a document) then fails the removal, so the restore fails closed and drops the target (AB#9420);
   - attribute keys (under `attributes`) are matched **ignoring case**:
     the engine reads a stored key in any first-letter case (`RtAttributeDictionarySerializer` maps keys through
     `ToPascalCase`), so an edited archive cannot hide a value behind `SealedCaller` instead of `sealedCaller`.
@@ -3606,20 +3608,32 @@ could move the ciphertext into any other attribute.
     error in any of them) drops the restored (still unattached) database and fails the restore, so no database with the
     values is left on the server for a later attach. When that drop fails, the claim of this instance on the database is
     kept (not released), so no other instance attaches it, and the error log asks to drop it by hand.
-  - When mongorestore fails after it wrote documents, the removal runs on the partly restored database (dropped
-    when that fails too) before the claim is released, because such a database stays on the server and can be attached later.
-  - **A cancelled restore stops mongorestore and drops the target database.** On cancellation, a timeout or an exception
-    `RepositoryOpsService` kills the whole process tree and waits up to 30 s for it to exit (`CommandResult.Cancelled`).
-    A cancelled mongorestore, one that may still run (`CommandResult.ProcessMayStillRun`: the kill failed or it did not exit
-    in time) and one that threw get no clean-up on a database that may still be written: the target is dropped. The drop
-    removes the claim marker with the database, so a restore whose mongorestore may still run (or threw) then claims the
-    empty target again for this instance and **keeps that claim**: the database holds only the claim marker plus whatever
-    mongorestore still writes, no other instance can attach it, and the error tells the operator to make sure mongorestore
-    has stopped and drop the database by hand. (The claim does not stop an attach by this instance.)
+  - **Every restore that does not complete after mongorestore started drops the target database** (AB#9420): a non-zero
+    exit, a timeout (also when the kill was confirmed), a cancellation, an exception, a failed attach. A partly restored
+    database is never only cleaned: the clean-up would read `CkTypeInheritance` from the same partial database, and an
+    execution of a derived type would keep its sealed caller when that collection was not written yet. A failed restore
+    over a detached database drops its earlier content too.
+  - **Timeout versus cancellation.** On cancellation, a timeout or an exception while the process runs,
+    `RepositoryOpsService` kills the whole process tree and waits up to 30 s for it to exit. Only a cancellation sets
+    `CommandResult.Cancelled`; a timeout and an exception return a plain failure. All three set
+    `CommandResult.ProcessMayStillRun` when the kill failed or the process did not exit in time. The drop removes the claim
+    marker with the database, so a restore whose mongorestore may still run (or threw) then claims the empty target again
+    for this instance and **keeps that claim**: the database holds only the claim marker plus whatever mongorestore still
+    writes, no restore can attach it, and the error tells the operator to make sure mongorestore has stopped and drop the
+    database by hand.
   - **A mongorestore that never started** (`CommandResult.ProcessNeverStarted`: the arguments could not be built or the
-    program could not be started) wrote nothing: the restore fails like any other failure, without a drop or a clean-up of
-    the target; only the claim is released (and a database the claim alone materialized is dropped). An exception thrown out
-    of `ExecuteMongoRestoreAsync` is still treated as "may still run".
+    program could not be started) wrote nothing: the restore fails without a drop of the target; only the claim is
+    released (and a database the claim alone materialized is dropped). An exception thrown out of
+    `ExecuteMongoRestoreAsync` is treated as "may still run".
+  - **The restore claim is exclusive per target database while the target is not a registered tenant** (AB#9420): a marker
+    of this instance that is not this restore's own claim refuses the restore before anything is dropped or written, so a
+    second restore of the same target (a job submitted twice) cannot write while the first one attaches. Over a registered
+    tenant of this instance the existing marker is accepted, and mongorestore runs only after the restore dropped that
+    tenant and claimed the target again (`RestoreClaim.IsHeld`). Right before the attach, the attach transaction reads the
+    marker first (`RestoreClaim.IsStillOwnClaimAsync`): when it is no longer this restore's claim, the target is dropped and
+    the restore fails; a change after that read collides with the attach's write of the marker. A stale claim of this
+    instance on an unregistered database (a restore that kept its claim, a release that failed) therefore blocks later
+    restores of that database until it is dropped by hand.
   - The database is opened under the name mongorestore and the claim use, never a normalized one.
 - **Result**: `CommandResult.RemovedPlatformOnlyValues` lists every removed value as `<CK type>@<rtId>.<attribute path>` and every
   deleted secret default entity as `<CK type>@<rtId>` (never the value); the restore logs them as a warning, and
@@ -3641,7 +3655,11 @@ could move the ciphertext into any other attribute.
   removes nothing; the list is pinned), `RestorePlatformOnlyValuesEditedArchiveTests` (keys in another case, with the
   secret default value kept, a type derived from `PipelineExecution` through two inheritance rows, a failing removal drops the
   restored database and fails the restore), `RestorePlatformOnlyValuesFailClosedTests` (attributes stored as an array in both
-  forms fail the restore and drop the database; a mongorestore that fails after writing leaves no sealed caller),
+  forms fail the restore and drop the database; a mongorestore that fails after writing drops the target),
+  `RestoreWithoutCkTypeInheritanceTests` (a non-zero exit before the inheritance was written drops the target; a completed
+  restore without inheritance and an execution of an unknown type fails and drops it), `RestoreConcurrentSameTargetTests`
+  (of two concurrent restores of the same target only one attaches and no sealed caller survives; a claim replaced before
+  the attach drops the target and fails the restore),
   `RestoreInterruptedTests` (a mongorestore cancelled, possibly still running or throwing after it wrote drops the target; the
   last two keep the claim on the re-claimed target), `RestoreFailsClosedAfterMongoRestoreTests` (a cancellation after a
   successful mongorestore drops the database, a failed drop keeps the claim, a mongorestore that never started leaves an

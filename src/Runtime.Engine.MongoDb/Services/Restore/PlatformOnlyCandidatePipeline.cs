@@ -27,7 +27,9 @@ internal static class PlatformOnlyCandidatePipeline
     /// <summary>Whether a stored attribute name holds a character outside ASCII.</summary>
     public static bool IsNotAscii(string attributeName) => !attributeName.All(char.IsAscii);
 
-    public static PipelineDefinition<BsonDocument, BsonDocument> Create(IEnumerable<string> ckTypeIds,
+    /// <param name="ckTypeIds">The CK types whose entities are candidates; <c>null</c>: every CK type.</param>
+    /// <param name="attributeNames">The platform-only attribute names.</param>
+    public static PipelineDefinition<BsonDocument, BsonDocument> Create(IEnumerable<string>? ckTypeIds,
         IEnumerable<string> attributeNames)
     {
         var lowerCaseAttributeNames = new BsonArray(attributeNames.Select(name => name.ToLowerInvariant()).Distinct());
@@ -69,9 +71,12 @@ internal static class PlatformOnlyCandidatePipeline
             new BsonDocument("$eq", new BsonArray { attributesType, "object" }), storedAttributeNames, new BsonArray()
         });
 
+        var typeFilter = ckTypeIds == null
+            ? new BsonDocument()
+            : new BsonDocument(CkTypeIdField, new BsonDocument("$in", new BsonArray(ckTypeIds.Distinct())));
+
         return PipelineDefinition<BsonDocument, BsonDocument>.Create(
-            new BsonDocument("$match",
-                new BsonDocument(CkTypeIdField, new BsonDocument("$in", new BsonArray(ckTypeIds.Distinct())))),
+            new BsonDocument("$match", typeFilter),
             new BsonDocument("$project", new BsonDocument
             {
                 { CkTypeIdField, 1 }, { AttributesTypeField, attributesType }, { AttributeNamesField, namesWhenDocument }

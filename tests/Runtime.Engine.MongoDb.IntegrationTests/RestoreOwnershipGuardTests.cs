@@ -569,7 +569,7 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
             var approved = await GetMarkerIdentityAsync(target);
 
             var claim = new TenantBackupService.RestoreClaim(OwnershipStoreA, target, target, SystemDatabaseA, true);
-            var refusal = await claim.AcquireAsync(approved, Ct);
+            var refusal = await claim.AcquireAsync(approved, targetIsRegisteredTenant: false, Ct);
 
             Assert.Null(refusal);
             Assert.Equal(SystemDatabaseA, (await OwnershipStoreA.GetAsync(target, Ct))!.OwnerSystemDatabaseName);
@@ -598,7 +598,7 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
             Assert.NotEqual(approved, newMarker);
 
             var claim = new TenantBackupService.RestoreClaim(OwnershipStoreA, target, target, SystemDatabaseA, true);
-            var refusal = await claim.AcquireAsync(approved, Ct);
+            var refusal = await claim.AcquireAsync(approved, targetIsRegisteredTenant: false, Ct);
 
             Assert.NotNull(refusal);
             Assert.Equal(newMarker, await GetMarkerIdentityAsync(target));
