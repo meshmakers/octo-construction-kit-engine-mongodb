@@ -11,7 +11,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 ///     Removes the <see cref="PlatformOnlyRestoreValues" /> from a restored tenant database before it is attached, so no
 ///     service reads them in between. Works on the stored documents of every entity collection, whatever the stored form
 ///     of a value: the CK type is matched with its derived types (read from the restored inheritance rows), and attribute
-///     and record member keys are matched ignoring case, because the engine reads a stored key in any first-letter case.
+///     keys are matched ignoring case, because the engine reads a stored key in any first-letter case.
 /// </summary>
 internal class RestoredPlatformOnlyValueRemover(
     IAdminRepositoryAccess adminRepositoryAccess,
@@ -33,7 +33,7 @@ internal class RestoredPlatformOnlyValueRemover(
         }
 
         var typeFamilies = await RestoredCkTypeFamilies.ReadAsync(database, cancellationToken);
-        var removals = PlatformOnlyRestoreValues.All
+        var removals = PlatformOnlyRestoreValues.AttributeValues
             .Select(platformOnlyValue => new TypedRemoval(platformOnlyValue,
                 typeFamilies.WithDerivedTypes(platformOnlyValue.CkTypeId)))
             .ToList();
@@ -89,10 +89,10 @@ internal class RestoredPlatformOnlyValueRemover(
         var storedFieldPaths = new List<string>();
         foreach (var removal in removals.Where(removal => removal.CkTypeIds.Contains(ckTypeId)))
         {
-            foreach (var (storedFieldPath, reportedPath) in removal.Value.FindStoredValues(attributes))
+            foreach (var storedKey in removal.Value.FindStoredKeys(attributes))
             {
-                storedFieldPaths.Add($"{AttributesField}.{storedFieldPath}");
-                removedPaths.Add($"{ckTypeId}@{candidate[IdField]}.{reportedPath}");
+                storedFieldPaths.Add($"{AttributesField}.{storedKey}");
+                removedPaths.Add($"{ckTypeId}@{candidate[IdField]}.{removal.Value.Attribute}");
             }
         }
 
@@ -114,5 +114,5 @@ internal class RestoredPlatformOnlyValueRemover(
         return ((MongoRepository)client.GetRepository(normalizedName)).Database;
     }
 
-    private sealed record TypedRemoval(IPlatformOnlyValue Value, IReadOnlySet<string> CkTypeIds);
+    private sealed record TypedRemoval(PlatformOnlyAttributeValue Value, IReadOnlySet<string> CkTypeIds);
 }

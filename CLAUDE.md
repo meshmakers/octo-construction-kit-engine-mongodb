@@ -3568,17 +3568,22 @@ exemption scope).
 
 A restore (`TenantBackupService.RestoreTenantAsync`, also the restore step of `CloneTenantToTempAsync`) never brings a value
 into a tenant that only the platform may hold, whatever archive it restores (own, foreign, older or edited). The tenant's
-own secrets are restored unchanged. The list is `Services/Restore/PlatformOnlyRestoreValues.cs`; it **must mirror**
-`PlatformOnlySecrets.cs` of the mesh adapter SDK (`octo-mesh-adapter/src/MeshAdapter.Sdk/Common/PlatformOnlySecrets.cs`,
-the values `RevealSecret@1` refuses to tenant identities) plus the sealed caller of a pipeline execution. A change of one
-list without the other is a bug; `RestorePlatformOnlyValuesTests.PlatformOnlyValues_MirrorWhatRevealSecretRefuses_PlusTheSealedCaller`
-pins this side.
+own secrets are restored unchanged. The list is `Services/Restore/PlatformOnlyRestoreValues.cs`, pinned by
+`RestorePlatformOnlyValuesTests.PlatformOnlyValues_AreTheSecretDefaultCollectionAndTheSealedCaller`.
 
 | Left out | How | Why |
 | --- | --- | --- |
 | Collection `RtEntity_SystemCommunicationSecretDefault` (`MongoDumpOptions.PlatformOnlyTenantCollections`) | `--nsExclude`, and dropped after mongorestore for an older mongorestore | the communication controller projects the secret defaults; it projects them again when the tenant is set up after the attach (controller `DefaultConfigurationCreatorService.StartTenantAsync` -> `EnsureSecretDefaultsAsync`) |
-| `System.Communication/Application.SecretDefaults[].SecretValue` | `$unset` of the record member, every other member (`Key`, `AllowedTenantIds`, `Description`) and the rest of the Application stay | RevealSecret refuses it. The controller treats an entry without value as `ValueMissing`: it writes nothing and **keeps** the defaults it projected into the served tenants (no delete, no blank value) until an operator enters the value again (CD redeploy of the Application) |
 | `System.Communication/PipelineExecution.SealedCaller` and `.CallerAccessToken` | `$unset` | the sealed caller carries the invoker's bearer token until the lease. A restored queued execution without it has no provenance: the lease service fails it with a reason (`QueuedProvenanceInvalid`, "not queued by the controller (no provenance)"); it is not the `QueuedProvenanceUnverifiable` path, which keeps an execution queued only for a missing key |
+
+**`System.Communication/Application.SecretDefaults[].SecretValue` is restored**, like every tenant secret, although
+`RevealSecret@1` refuses it to tenant identities (`PlatformOnlySecrets.cs` of the mesh adapter SDK; the restore list does
+**not** mirror that list for this value). It is the hosting tenant's own input, and the controller needs it: an Application
+whose declaration has no value is `ValueMissing` (controller `SecretDefaultDeclarationValidator`), a redeploy fails with
+`WorkloadSecretDefaultValueMissing`, and tenants created or restored later get no default (for EnergyCommunity the CAPTCHA
+default would be frozen after a legitimate restore of the management tenant). Removing it at its known place would not stop an
+edit either: the dump carries the value anyway (it leaves out only the secret defaults collection), and an edited archive
+could move the ciphertext into any other attribute.
 
 - **Where**: `RestoredPlatformOnlyValueRemover.RemoveAsync`, called in `RestoreClaimedTargetCoreAsync` after mongorestore and
   before the attach, so no service reads the values in between. It works on the stored documents of every `RtEntity_*`
@@ -3586,25 +3591,27 @@ pins this side.
   - the CK type (field `ckTypeId`) is matched together with every type derived from it, read from the restored
     `CkTypeInheritance` rows (`RestoredCkTypeFamilies`, the rows the engine builds its CK cache from), because
     `PipelineExecution` is derivable;
-  - attribute and record member keys (under `attributes` and `attributes.<array>[].attributes`) are matched **ignoring case**:
+  - attribute keys (under `attributes`) are matched **ignoring case**:
     the engine reads a stored key in any first-letter case (`RtAttributeDictionarySerializer` maps keys through
     `ToPascalCase`), so an edited archive cannot hide a value behind `SealedCaller` instead of `sealedCaller`.
   - When the removal fails, the restored (still unattached) database is dropped and the restore fails, so no database with
     the values is left on the server for a later attach.
 - **Result**: `CommandResult.RemovedPlatformOnlyValues` lists every removed value as `<CK type>@<rtId>.<attribute path>` (never
   the value) and the restore logs them as a warning. The secret defaults collection is always left out and is not listed.
-- **Dumps are unchanged**: they still leave out only the secret defaults collection; `SecretValue` stays in a dump as ciphertext,
-  harmless because every restore removes it.
+- **Dumps are unchanged**: they still leave out only the secret defaults collection; `SecretValue` stays in a dump as ciphertext
+  and comes back with the restore.
 - **Known limitations**: dumps made before the secret defaults exclusion still contain that collection (left out on restore
-  now); own ciphertexts can be moved between own attributes of an edited archive until the location-bound envelope (enc:v3);
+  now); a removal on restore cannot stop an edited archive that moves a ciphertext (a secret default value included) into
+  another attribute of the same tenant - only location-bound envelopes (enc:v3, a later stage) close that;
   a foreign archive carries its tenant's secrets readable for the restoring tenant; a restore bypasses the write rules and
   carries identity data (Bug AB#9381). The restore result is not yet shown in the bot-services job result; the warning
   log names the removed values.
 - Tests: `RestorePlatformOnlyValuesTests` (an archive dumped without any exclusion restores without the collection, the
-  Application keeps every member but `SecretValue`, the execution loses both caller attributes, the tenant's own secret stays,
-  the result lists the paths and never an envelope; an archive without such values removes nothing; the list is pinned) and
-  `RestorePlatformOnlyValuesEditedArchiveTests` (keys in another case, a type derived from `PipelineExecution` through two
-  inheritance rows, a failing removal drops the restored database and fails the restore).
+  Application keeps every member and its `SecretValue` reads as a `Protected` secret, the execution loses both caller
+  attributes, the tenant's own secret stays, the result lists the paths and never an envelope; an archive without such values
+  removes nothing; the list is pinned) and `RestorePlatformOnlyValuesEditedArchiveTests` (keys in another case, with the
+  secret default value kept, a type derived from `PipelineExecution` through two inheritance rows, a failing removal drops the
+  restored database and fails the restore).
 
 ### Tenant-created notification after the commit (AB#9177)
 

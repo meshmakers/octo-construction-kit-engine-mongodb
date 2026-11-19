@@ -548,7 +548,7 @@ internal class TenantBackupService(
         if (removedPlatformOnlyValues.Count > 0)
         {
             logger.LogWarning(
-                "Restore of tenant '{TenantId}' left out {Count} platform-only value(s); enter them again: {Paths}",
+                "Restore of tenant '{TenantId}' left out {Count} platform-only value(s): {Paths}",
                 tenantId, removedPlatformOnlyValues.Count, string.Join(", ", removedPlatformOnlyValues));
         }
 

@@ -1,20 +1,24 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
+using MongoDB.Bson.IO;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
 /// <summary>
-///     A restore leaves out the values only the platform may hold: the secret defaults collection, the secret values of
-///     an Application's secret default declarations and the sealed caller of a pipeline execution. The tenant's own
-///     secrets come back unchanged.
+///     A restore leaves out the values only the platform may hold: the secret defaults collection and the sealed caller
+///     of a pipeline execution. The tenant's own secrets come back unchanged, the secret values of an Application's
+///     secret default declarations included, because a redeploy of the Application needs them.
 /// </summary>
 [Collection(SystemCollection.Name)]
 public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
@@ -35,11 +39,9 @@ public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
     private static readonly ObjectId ExecutionId = ObjectId.GenerateNewId();
 
     [Fact]
-    public void PlatformOnlyValues_MirrorWhatRevealSecretRefuses_PlusTheSealedCaller()
+    public void PlatformOnlyValues_AreTheSecretDefaultCollectionAndTheSealedCaller()
     {
         Assert.Equal([SecretDefaultCollectionName], PlatformOnlyRestoreValues.LeftOutCollections);
-        Assert.Equal([new PlatformOnlyRecordValue(ApplicationCkTypeId, "SecretDefaults", "SecretValue")],
-            PlatformOnlyRestoreValues.RecordValues);
         Assert.Equal(
         [
             new PlatformOnlyAttributeValue(ExecutionCkTypeId, "SealedCaller"),
@@ -48,7 +50,7 @@ public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
     }
 
     [Fact]
-    public async Task RestoreOfAnArchiveWithPlatformOnlyValues_LeavesThemOut_AndKeepsEverythingElse()
+    public async Task RestoreOfAnArchiveWithPlatformOnlyValues_LeavesThemOut_AndKeepsTheSecretDefaultValues()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var systemContext = systemFixture.GetSystemContext();
@@ -75,11 +77,13 @@ public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
             var application = await FindAsync(targetDatabase, WorkloadCollectionName, ApplicationId, cancellationToken);
             var declarations = application["attributes"]["secretDefaults"].AsBsonArray;
             var firstDeclaration = declarations[0]["attributes"].AsBsonDocument;
-            Assert.False(firstDeclaration.Contains("secretValue"));
+            var restoredSecretDefaultValue = ReadStoredSecret(firstDeclaration["secretValue"]);
+            Assert.Equal(RtSecretValueState.Protected, restoredSecretDefaultValue.State);
+            Assert.Equal(PlatformEnvelope, restoredSecretDefaultValue.Envelope);
             Assert.Equal("ec-captcha-secret", firstDeclaration["key"].AsString);
             Assert.Equal("child-a", firstDeclaration["allowedTenantIds"][0].AsString);
             Assert.Equal("CAPTCHA secret", firstDeclaration["description"].AsString);
-            Assert.False(declarations[1]["attributes"].AsBsonDocument.Contains("secretValue"));
+            Assert.Equal("legacy-plaintext", declarations[1]["attributes"]["secretValue"].AsString);
             Assert.Equal("energy-community", application["attributes"]["name"].AsString);
 
             var adapter = await FindAsync(targetDatabase, WorkloadCollectionName, AdapterId, cancellationToken);
@@ -90,15 +94,11 @@ public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
             Assert.False(execution["attributes"].AsBsonDocument.Contains("callerAccessToken"));
             Assert.Equal(1, execution["attributes"]["status"].AsInt32);
 
-            Assert.Equal(4, restoreResult.RemovedPlatformOnlyValues.Count);
-            Assert.Contains($"{ApplicationCkTypeId}@{ApplicationId}.SecretDefaults[0].SecretValue",
-                restoreResult.RemovedPlatformOnlyValues);
-            Assert.Contains($"{ApplicationCkTypeId}@{ApplicationId}.SecretDefaults[1].SecretValue",
-                restoreResult.RemovedPlatformOnlyValues);
-            Assert.Contains($"{ExecutionCkTypeId}@{ExecutionId}.SealedCaller",
-                restoreResult.RemovedPlatformOnlyValues);
-            Assert.Contains($"{ExecutionCkTypeId}@{ExecutionId}.CallerAccessToken",
-                restoreResult.RemovedPlatformOnlyValues);
+            Assert.Equal(
+            [
+                $"{ExecutionCkTypeId}@{ExecutionId}.SealedCaller",
+                $"{ExecutionCkTypeId}@{ExecutionId}.CallerAccessToken"
+            ], restoreResult.RemovedPlatformOnlyValues);
             var everythingReported = string.Join(" ", restoreResult.RemovedPlatformOnlyValues) + restoreResult.Output;
             Assert.DoesNotContain("enc:v", everythingReported, StringComparison.Ordinal);
         }
@@ -213,6 +213,14 @@ public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
         { "ckTypeId", AdapterCkTypeId },
         { "attributes", new BsonDocument { { "name", "adapter" }, { "apiKey", StoredSecret(OwnEnvelope) } } }
     };
+
+    private static RtSecretValue ReadStoredSecret(BsonValue storedValue)
+    {
+        using var reader = new BsonDocumentReader(new BsonDocument("value", storedValue));
+        reader.ReadStartDocument();
+        reader.ReadName("value");
+        return new RtSecretValueSerializer().Deserialize(BsonDeserializationContext.CreateRoot(reader));
+    }
 
     private static BsonDocument StoredSecret(string envelope) => new()
     {

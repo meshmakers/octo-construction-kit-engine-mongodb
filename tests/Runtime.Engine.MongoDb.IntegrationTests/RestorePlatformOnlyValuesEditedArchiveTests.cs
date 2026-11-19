@@ -1,16 +1,20 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
+using MongoDB.Bson.IO;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using Xunit;
 
@@ -18,7 +22,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
 /// <summary>
 ///     An edited archive cannot carry a platform-only value past the restore: not under another spelling of its key, not
-///     on a type derived from its type, and not when the removal fails.
+///     on a type derived from its type, and not when the removal fails. The secret default values of an Application
+///     restore like every tenant secret.
 /// </summary>
 [Collection(SystemCollection.Name)]
 public class RestorePlatformOnlyValuesEditedArchiveTests(SystemFixture systemFixture)
@@ -27,13 +32,20 @@ public class RestorePlatformOnlyValuesEditedArchiveTests(SystemFixture systemFix
     private const string Envelope = "enc:v2:k1:ZWRpdGVkLWFyY2hpdmUtcGxhdGZvcm0tb25seS12YWx1ZQ";
 
     [Fact]
-    public async Task KeysInAnotherCase_AreRemovedToo()
+    public async Task KeysInAnotherCase_AreRemovedToo_AndTheSecretDefaultValueStays()
     {
         var applicationId = ObjectId.GenerateNewId();
         var executionId = ObjectId.GenerateNewId();
+        var storedSecretDefaultValue = new BsonDocument
+        {
+            { "_t", "OctoSecret" }, { "e", Envelope }, { "t", new BsonDateTime(DateTime.UtcNow) }
+        };
         var declaration = new BsonDocument
         {
-            { "attributes", new BsonDocument { { "Key", "ec-captcha-secret" }, { "SECRETVALUE", Envelope } } }
+            {
+                "attributes",
+                new BsonDocument { { "Key", "ec-captcha-secret" }, { "SECRETVALUE", storedSecretDefaultValue } }
+            }
         };
         BsonDocument[] documents =
         [
@@ -54,12 +66,26 @@ public class RestorePlatformOnlyValuesEditedArchiveTests(SystemFixture systemFix
         Assert.True(restoreResult.Success, $"Restore should succeed. Error: {restoreResult.Error}");
         var application = Find(restoredDocuments, applicationId);
         var restoredDeclaration = application["attributes"]["SecretDefaults"][0]["attributes"].AsBsonDocument;
-        Assert.False(restoredDeclaration.Contains("SECRETVALUE"));
+        var restoredSecretDefaultValue = ReadStoredSecret(restoredDeclaration["SECRETVALUE"]);
+        Assert.Equal(RtSecretValueState.Protected, restoredSecretDefaultValue.State);
+        Assert.Equal(Envelope, restoredSecretDefaultValue.Envelope);
         Assert.Equal("ec-captcha-secret", restoredDeclaration["Key"].AsString);
         var execution = Find(restoredDocuments, executionId);
         Assert.False(execution["attributes"].AsBsonDocument.Contains("SealedCaller"));
         Assert.False(execution["attributes"].AsBsonDocument.Contains("CallerAccessToken"));
-        Assert.Equal(3, restoreResult.RemovedPlatformOnlyValues.Count);
+        Assert.Equal(
+        [
+            $"System.Communication/PipelineExecution@{executionId}.SealedCaller",
+            $"System.Communication/PipelineExecution@{executionId}.CallerAccessToken"
+        ], restoreResult.RemovedPlatformOnlyValues);
+    }
+
+    private static RtSecretValue ReadStoredSecret(BsonValue storedValue)
+    {
+        using var reader = new BsonDocumentReader(new BsonDocument("value", storedValue));
+        reader.ReadStartDocument();
+        reader.ReadName("value");
+        return new RtSecretValueSerializer().Deserialize(BsonDeserializationContext.CreateRoot(reader));
     }
 
     [Fact]
