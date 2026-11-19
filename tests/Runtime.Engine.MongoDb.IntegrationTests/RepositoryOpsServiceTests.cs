@@ -132,17 +132,26 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture)
     [Fact]
     public async Task ExecuteCommandAsync_WithWorkingDirectory_ShouldUseSpecifiedDirectory()
     {
-        // Arrange
-        var tempDir = Path.GetTempPath();
+        // Arrange - a directory with a unique name: pwd prints the path in the shell's own form (/c/Users/... under
+        // Git Bash on Windows, a resolved symlink on macOS), so the test asserts on the last segment only (AB#9382).
+        var dirName = $"repo-ops-pwd-{Guid.NewGuid():N}";
+        var workingDirectory = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), dirName)).FullName;
 
-        // Act
-        var result = await _service.ExecuteCommandAsync("pwd", "", tempDir);
-
-        // Assert
-        result.Should().NotBeNull();
-        if (result.Success) // pwd might not be available on all systems
+        try
         {
-            result.Output.Should().Contain(tempDir.TrimEnd('/'));
+            // Act
+            var result = await _service.ExecuteCommandAsync("pwd", "", workingDirectory);
+
+            // Assert
+            result.Should().NotBeNull();
+            if (result.Success) // pwd might not be available on all systems
+            {
+                result.Output.Trim().TrimEnd('/', '\\').Should().EndWith(dirName);
+            }
+        }
+        finally
+        {
+            Directory.Delete(workingDirectory);
         }
     }
 
