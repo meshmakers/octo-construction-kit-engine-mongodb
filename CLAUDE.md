@@ -3582,9 +3582,15 @@ pins this side.
 
 - **Where**: `RestoredPlatformOnlyValueRemover.RemoveAsync`, called in `RestoreClaimedTargetCoreAsync` after mongorestore and
   before the attach, so no service reads the values in between. It works on the stored documents of every `RtEntity_*`
-  collection (field `ckTypeId`, exact type; attributes in camel case under `attributes`, record members under
-  `attributes.<array>[].attributes`), whatever the stored form of the value (an `OctoSecret` sub-document, an `enc:` string
-  or plain text). A failure fails the restore before the attach.
+  collection, whatever the stored form of the value (an `OctoSecret` sub-document, an `enc:` string or plain text):
+  - the CK type (field `ckTypeId`) is matched together with every type derived from it, read from the restored
+    `CkTypeInheritance` rows (`RestoredCkTypeFamilies`, the rows the engine builds its CK cache from), because
+    `PipelineExecution` is derivable;
+  - attribute and record member keys (under `attributes` and `attributes.<array>[].attributes`) are matched **ignoring case**:
+    the engine reads a stored key in any first-letter case (`RtAttributeDictionarySerializer` maps keys through
+    `ToPascalCase`), so an edited archive cannot hide a value behind `SealedCaller` instead of `sealedCaller`.
+  - When the removal fails, the restored (still unattached) database is dropped and the restore fails, so no database with
+    the values is left on the server for a later attach.
 - **Result**: `CommandResult.RemovedPlatformOnlyValues` lists every removed value as `<CK type>@<rtId>.<attribute path>` (never
   the value) and the restore logs them as a warning. The secret defaults collection is always left out and is not listed.
 - **Dumps are unchanged**: they still leave out only the secret defaults collection; `SecretValue` stays in a dump as ciphertext,
@@ -3592,11 +3598,13 @@ pins this side.
 - **Known limitations**: dumps made before the secret defaults exclusion still contain that collection (left out on restore
   now); own ciphertexts can be moved between own attributes of an edited archive until the location-bound envelope (enc:v3);
   a foreign archive carries its tenant's secrets readable for the restoring tenant; a restore bypasses the write rules and
-  carries identity data (Bug AB#9381). Exact CK type match: a type derived from `PipelineExecution` in another model is not
-  covered (`Application` is final).
+  carries identity data (Bug AB#9381). The restore result is not yet shown in the bot-services job result; the warning
+  log names the removed values.
 - Tests: `RestorePlatformOnlyValuesTests` (an archive dumped without any exclusion restores without the collection, the
   Application keeps every member but `SecretValue`, the execution loses both caller attributes, the tenant's own secret stays,
-  the result lists the paths and never an envelope; an archive without such values removes nothing).
+  the result lists the paths and never an envelope; an archive without such values removes nothing; the list is pinned) and
+  `RestorePlatformOnlyValuesEditedArchiveTests` (keys in another case, a type derived from `PipelineExecution` through two
+  inheritance rows, a failing removal drops the restored database and fails the restore).
 
 ### Tenant-created notification after the commit (AB#9177)
 

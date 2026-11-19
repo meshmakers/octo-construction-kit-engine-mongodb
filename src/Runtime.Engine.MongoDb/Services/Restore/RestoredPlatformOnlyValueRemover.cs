@@ -1,7 +1,7 @@
-using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -9,10 +9,13 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 
 /// <summary>
 ///     Removes the <see cref="PlatformOnlyRestoreValues" /> from a restored tenant database before it is attached, so no
-///     service reads them in between. Works on the stored documents (field <c>ckTypeId</c>, attributes in camel case
-///     under <c>attributes</c>), whatever form the stored value has.
+///     service reads them in between. Works on the stored documents of every entity collection, whatever the stored form
+///     of a value: the CK type is matched with its derived types (read from the restored inheritance rows), and attribute
+///     and record member keys are matched ignoring case, because the engine reads a stored key in any first-letter case.
 /// </summary>
-internal class RestoredPlatformOnlyValueRemover(IAdminRepositoryAccess adminRepositoryAccess)
+internal class RestoredPlatformOnlyValueRemover(
+    IAdminRepositoryAccess adminRepositoryAccess,
+    ILogger<RestoredPlatformOnlyValueRemover> logger)
 {
     private const string EntityCollectionPrefix = "RtEntity_";
     private const string CkTypeIdField = "ckTypeId";
@@ -29,6 +32,13 @@ internal class RestoredPlatformOnlyValueRemover(IAdminRepositoryAccess adminRepo
             await database.DropCollectionAsync(leftOutCollection, cancellationToken);
         }
 
+        var typeFamilies = await RestoredCkTypeFamilies.ReadAsync(database, cancellationToken);
+        var removals = PlatformOnlyRestoreValues.All
+            .Select(platformOnlyValue => new TypedRemoval(platformOnlyValue,
+                typeFamilies.WithDerivedTypes(platformOnlyValue.CkTypeId)))
+            .ToList();
+        var allCkTypeIds = removals.SelectMany(removal => removal.CkTypeIds).Distinct().ToList();
+
         var removedPaths = new List<string>();
         var collectionNames = await (await database.ListCollectionNamesAsync(cancellationToken: cancellationToken))
             .ToListAsync(cancellationToken);
@@ -36,90 +46,65 @@ internal class RestoredPlatformOnlyValueRemover(IAdminRepositoryAccess adminRepo
                      name.StartsWith(EntityCollectionPrefix, StringComparison.Ordinal)))
         {
             var collection = database.GetCollection<BsonDocument>(collectionName);
-            foreach (var recordValue in PlatformOnlyRestoreValues.RecordValues)
+            var candidates = await collection.Find(Builders<BsonDocument>.Filter.In(CkTypeIdField, allCkTypeIds))
+                .Project(Builders<BsonDocument>.Projection.Include(CkTypeIdField).Include(AttributesField))
+                .ToListAsync(cancellationToken);
+            foreach (var candidate in candidates)
             {
-                removedPaths.AddRange(await RemoveRecordValuesAsync(collection, recordValue, cancellationToken));
-            }
-
-            foreach (var attributeValue in PlatformOnlyRestoreValues.AttributeValues)
-            {
-                removedPaths.AddRange(await RemoveAttributeValuesAsync(collection, attributeValue, cancellationToken));
+                removedPaths.AddRange(await RemoveFromDocumentAsync(collection, candidate, removals,
+                    cancellationToken));
             }
         }
 
         return removedPaths;
     }
 
-    private static async Task<IReadOnlyList<string>> RemoveRecordValuesAsync(IMongoCollection<BsonDocument> collection,
-        PlatformOnlyRecordValue recordValue, CancellationToken cancellationToken)
+    /// <summary>Drops a restored database whose platform-only values could not be removed; never throws.</summary>
+    public virtual async Task DropRestoredDatabaseAsync(string databaseName)
     {
-        var arrayField = $"{AttributesField}.{recordValue.RecordArrayAttribute.ToCamelCase()}";
-        var recordField = recordValue.RecordAttribute.ToCamelCase();
-        var valueInRecordField = $"{arrayField}.{AttributesField}.{recordField}";
-        var filter = Builders<BsonDocument>.Filter.Eq(CkTypeIdField, recordValue.CkTypeId) &
-                     Builders<BsonDocument>.Filter.Exists(valueInRecordField);
-        var documents = await collection.Find(filter)
-            .Project(Builders<BsonDocument>.Projection.Include(arrayField)).ToListAsync(cancellationToken);
-
-        var removedPaths = new List<string>();
-        foreach (var document in documents)
+        try
         {
-            var records = ReadArray(document, arrayField);
-            for (var recordIndex = 0; recordIndex < records.Count; recordIndex++)
-            {
-                if (records[recordIndex] is BsonDocument record &&
-                    record.TryGetValue(AttributesField, out var recordAttributes) &&
-                    recordAttributes is BsonDocument recordAttributeDocument &&
-                    recordAttributeDocument.Contains(recordField))
-                {
-                    removedPaths.Add(
-                        $"{recordValue.CkTypeId}@{document[IdField]}.{recordValue.RecordArrayAttribute}[{recordIndex}].{recordValue.RecordAttribute}");
-                }
-            }
+            var database = GetDatabase(databaseName);
+            await database.Client.DropDatabaseAsync(database.DatabaseNamespace.DatabaseName, CancellationToken.None);
         }
-
-        if (documents.Count > 0)
+        catch (Exception exception)
         {
-            var update = Builders<BsonDocument>.Update.Unset($"{arrayField}.$[].{AttributesField}.{recordField}");
-            await collection.UpdateManyAsync(filter, update, cancellationToken: cancellationToken);
+            logger.LogError(exception,
+                "The restored database '{DatabaseName}' could not be dropped after the platform-only values could not be removed; drop it by hand before anyone attaches it",
+                databaseName);
         }
-
-        return removedPaths;
     }
 
-    private static async Task<IReadOnlyList<string>> RemoveAttributeValuesAsync(
-        IMongoCollection<BsonDocument> collection, PlatformOnlyAttributeValue attributeValue,
-        CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> RemoveFromDocumentAsync(IMongoCollection<BsonDocument> collection,
+        BsonDocument candidate, IReadOnlyList<TypedRemoval> removals, CancellationToken cancellationToken)
     {
-        var valueField = $"{AttributesField}.{attributeValue.Attribute.ToCamelCase()}";
-        var filter = Builders<BsonDocument>.Filter.Eq(CkTypeIdField, attributeValue.CkTypeId) &
-                     Builders<BsonDocument>.Filter.Exists(valueField);
-        var documentIds = await collection.Find(filter).Project(Builders<BsonDocument>.Projection.Include(IdField))
-            .ToListAsync(cancellationToken);
-        if (documentIds.Count == 0)
+        var ckTypeId = candidate[CkTypeIdField].AsString;
+        if (!candidate.TryGetValue(AttributesField, out var attributesValue) ||
+            attributesValue is not BsonDocument attributes)
         {
             return [];
         }
 
-        await collection.UpdateManyAsync(filter, Builders<BsonDocument>.Update.Unset(valueField),
-            cancellationToken: cancellationToken);
-        return documentIds
-            .Select(document => $"{attributeValue.CkTypeId}@{document[IdField]}.{attributeValue.Attribute}")
-            .ToList();
-    }
-
-    private static BsonArray ReadArray(BsonDocument document, string dottedField)
-    {
-        BsonValue current = document;
-        foreach (var fieldName in dottedField.Split('.'))
+        var removedPaths = new List<string>();
+        var storedFieldPaths = new List<string>();
+        foreach (var removal in removals.Where(removal => removal.CkTypeIds.Contains(ckTypeId)))
         {
-            if (current is not BsonDocument currentDocument || !currentDocument.TryGetValue(fieldName, out current))
+            foreach (var (storedFieldPath, reportedPath) in removal.Value.FindStoredValues(attributes))
             {
-                return [];
+                storedFieldPaths.Add($"{AttributesField}.{storedFieldPath}");
+                removedPaths.Add($"{ckTypeId}@{candidate[IdField]}.{reportedPath}");
             }
         }
 
-        return current as BsonArray ?? [];
+        if (storedFieldPaths.Count > 0)
+        {
+            var update = Builders<BsonDocument>.Update.Combine(
+                storedFieldPaths.Select(fieldPath => Builders<BsonDocument>.Update.Unset(fieldPath)));
+            await collection.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq(IdField, candidate[IdField]), update,
+                cancellationToken: cancellationToken);
+        }
+
+        return removedPaths;
     }
 
     private IMongoDatabase GetDatabase(string databaseName)
@@ -128,4 +113,6 @@ internal class RestoredPlatformOnlyValueRemover(IAdminRepositoryAccess adminRepo
         var client = adminRepositoryAccess.GetRepositoryClient(normalizedName);
         return ((MongoRepository)client.GetRepository(normalizedName)).Database;
     }
+
+    private sealed record TypedRemoval(IPlatformOnlyValue Value, IReadOnlySet<string> CkTypeIds);
 }

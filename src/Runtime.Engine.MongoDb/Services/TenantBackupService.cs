@@ -529,8 +529,21 @@ internal class TenantBackupService(
 
         // The values only the platform may hold never reach the tenant, also from an older or edited archive.
         // Removed before the attach, so no service reads them in between.
-        var removedPlatformOnlyValues = await platformOnlyValueRemover.RemoveAsync(databaseName,
-            cancellationToken ?? CancellationToken.None);
+        IReadOnlyList<string> removedPlatformOnlyValues;
+        try
+        {
+            removedPlatformOnlyValues = await platformOnlyValueRemover.RemoveAsync(databaseName,
+                cancellationToken ?? CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception,
+                "Restore of tenant '{TenantId}' failed: the platform-only values could not be removed; the restored database '{DatabaseName}' is dropped",
+                tenantId, databaseName);
+            await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
+            throw;
+        }
+
         result.RemovedPlatformOnlyValues = removedPlatformOnlyValues;
         if (removedPlatformOnlyValues.Count > 0)
         {
