@@ -18,7 +18,9 @@
   reported. Existing tenants converge on the next index update or upgrade; no CK model, index shape or name changes.
   Side fix: a removed index state (an index replaced, dropped or no longer serving the type) is now removed from the
   stored states of the CK type too, not only from the states tracked in the run, so a `Failed` state an earlier run left
-  disappears once the type is served. Tests: `SharedIndexKeySpecTests`.
+  disappears once the type is served; an index the run recorded as `Applied` for the type keeps that state even when a
+  later definition of the type expected another index under its name (two definitions whose existing indexes hold each
+  other's keys). Tests: `SharedIndexKeySpecTests`.
 - AB#9250 Test: the integration test containers get a CPU limit next to their memory limit (mongod 4 CPUs, CrateDB 2 CPUs
   each; the CrateDB heap is set explicitly for every CrateDB fixture), xUnit runs at most 8 collections at once
   (`maxParallelThreads: 8`), and the CrateDB pool tests wait for their container and name it when it does not answer instead

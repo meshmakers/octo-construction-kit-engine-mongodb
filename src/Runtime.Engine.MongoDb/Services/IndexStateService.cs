@@ -223,13 +223,21 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
 
         /// <summary>
         /// Removes index states for a specific index name and collection: the state tracked in this run and the one
-        /// stored on the type (removed by <see cref="IndexStateService.BulkUpdateIndexStatesAsync" />, AB#9342)
+        /// stored on the type (removed by <see cref="IndexStateService.BulkUpdateIndexStatesAsync" />, AB#9342).
+        /// An index this run recorded as <see cref="IndexState.Applied" /> for the type is kept: it serves one of the
+        /// type's index definitions, whatever another definition processed later expected under that name (e.g. two
+        /// definitions of one type whose existing indexes hold each other's keys).
         /// </summary>
         public void RemoveIndexState(CkId<CkTypeId> typeId, string indexName, string collectionName)
         {
             if (_indexStatesByType.TryGetValue(typeId, out var states))
             {
                 var key = $"{indexName}_{collectionName}";
+                if (states.TryGetValue(key, out var tracked) && tracked.State == IndexState.Applied)
+                {
+                    return;
+                }
+
                 states.Remove(key);
             }
 

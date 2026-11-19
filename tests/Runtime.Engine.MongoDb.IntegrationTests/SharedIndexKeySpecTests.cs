@@ -38,6 +38,8 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
     private const string RootTypeName = "SharedRoot";
     private const string AlphaTypeName = "Alpha";
     private const string BetaTypeName = "Beta";
+    private const string OtherFieldName = "OtherField";
+    private const string OtherFieldPath = "attributes.otherField";
 
     private static readonly string[] LegacyKeys = ["ckTypeId", FieldPath, "rtState"];
     private static readonly string[] TiebreakKeys = ["ckTypeId", FieldPath, "_id", "rtState"];
@@ -257,6 +259,45 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
+    ///     Two Ascending definitions of one type whose existing indexes hold each other's keys (<c>T_0_id</c> has the
+    ///     keys of slot 1, <c>T_1_id</c> those of slot 0): each definition adopts the other slot's index. Both index
+    ///     names keep their <c>Applied</c> state - the later definition's removal of its expected name must not remove the
+    ///     state the earlier one recorded (CodeRabbit on PR #266). Both declaration orders; nothing is built or dropped.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TwoDefinitionsOfOneType_WithSwappedExistingIndexes_KeepBothAppliedStates(bool otherFirst)
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(SwapModel("SwapModel", "1.0.0", otherFirst));
+            var collection = Collection(tenant, "SwapModel");
+            var slot0 = IndexBaseName("SwapModel", RootTypeName, 0) + TiebreakIndexShape.NameSuffix;
+            var slot1 = IndexBaseName("SwapModel", RootTypeName, 1) + TiebreakIndexShape.NameSuffix;
+            string[] firstKeys = ["ckTypeId", otherFirst ? OtherFieldPath : FieldPath, "_id", "rtState"];
+            string[] secondKeys = ["ckTypeId", otherFirst ? FieldPath : OtherFieldPath, "_id", "rtState"];
+            await ReplaceIndexesAsync(collection, [FieldPath, OtherFieldPath], (slot0, secondKeys), (slot1, firstKeys));
+            var swapped = Describe(await IndexesAsync(collection));
+
+            await using (await ProfileIndexCommandsAsync(collection, commands => Assert.Empty(commands)))
+            {
+                using var adminSession = await systemContext.GetAdminSessionAsync();
+                await tenant.UpdateIndexesAsync(adminSession);
+            }
+
+            Assert.Equal(swapped, Describe(await IndexesAsync(collection)));
+            var repository = tenant.GetTenantRepository();
+            var ckType = Assert.Single((await repository.GetCkTypeAsync(repository.GetSession(),
+                [new CkId<CkTypeId>($"SwapModel-1.0.0/{RootTypeName}")], RtEntityQueryOptions.Create())).Items);
+            var states = ckType.IndexStates ?? [];
+            Assert.DoesNotContain(states, s => s.State == IndexState.Failed);
+            Assert.Contains(states, s => s.State == IndexState.Applied && s.Name == slot0);
+            Assert.Contains(states, s => s.State == IndexState.Applied && s.Name == slot1);
+        });
+    }
+
+    /// <summary>
     ///     AC 5: unique indexes keep their per-type partial filter (AB#8960) - two types with a Unique index on the same
     ///     attribute get one index each, filtering their own type, and no failed state.
     /// </summary>
@@ -364,9 +405,59 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
         };
     }
 
-    /// <summary>The engine's name of the first index a type declares: its collection name and <c>_0</c>.</summary>
-    private static string IndexBaseName(string modelName, string typeName) =>
-        new RtCkId<CkTypeId>($"{modelName}/{typeName}").GetCkTypeCollectionName() + "_0";
+    /// <summary>The engine's name of the index a type declares in <paramref name="slot" />: its collection name and the slot.</summary>
+    private static string IndexBaseName(string modelName, string typeName, int slot = 0) =>
+        new RtCkId<CkTypeId>($"{modelName}/{typeName}").GetCkTypeCollectionName() + "_" + slot;
+
+    /// <summary>
+    ///     A collection root with two Ascending indexes, one on <see cref="FieldName" /> and one on
+    ///     <see cref="OtherFieldName" />; <paramref name="otherFirst" /> swaps their declaration order.
+    /// </summary>
+    private static CkCompiledModelRoot SwapModel(string modelName, string version, bool otherFirst)
+    {
+        var modelVersion = $"{modelName}-{version}";
+        CkTypeIndexDto On(string attribute) => new()
+        {
+            IndexType = IndexTypeDto.Ascending, Fields = [new() { AttributePaths = [attribute] }]
+        };
+
+        return new CkCompiledModelRoot
+        {
+            ModelId = new CkModelId(modelVersion),
+            Dependencies = [SystemCkIds.CkModelId],
+            Attributes =
+            [
+                new CkAttributeDto { AttributeId = new CkAttributeId(FieldName), ValueType = AttributeValueTypesDto.String },
+                new CkAttributeDto
+                {
+                    AttributeId = new CkAttributeId(OtherFieldName), ValueType = AttributeValueTypesDto.String
+                }
+            ],
+            Types =
+            [
+                new()
+                {
+                    TypeId = new CkTypeId(RootTypeName),
+                    DerivedFromCkTypeId = SystemCkIds.CkEntityTypeId,
+                    IsCollectionRoot = true,
+                    Attributes =
+                    [
+                        new()
+                        {
+                            CkAttributeId = new CkId<CkAttributeId>($"{modelVersion}/{FieldName}"),
+                            AttributeName = FieldName
+                        },
+                        new()
+                        {
+                            CkAttributeId = new CkId<CkAttributeId>($"{modelVersion}/{OtherFieldName}"),
+                            AttributeName = OtherFieldName
+                        }
+                    ],
+                    Indexes = otherFirst ? [On(OtherFieldName), On(FieldName)] : [On(FieldName), On(OtherFieldName)]
+                }
+            ]
+        };
+    }
 
     private static IMongoCollection<BsonDocument> Collection(ITenantContext tenant, string modelName)
     {
@@ -378,10 +469,15 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>Replaces every index on <see cref="FieldPath" /> with the given ones (name, keys).</summary>
-    private static async Task ReplaceFieldIndexesAsync(IMongoCollection<BsonDocument> collection,
+    private static Task ReplaceFieldIndexesAsync(IMongoCollection<BsonDocument> collection,
+        params (string Name, string[] Keys)[] indexes) =>
+        ReplaceIndexesAsync(collection, [FieldPath], indexes);
+
+    /// <summary>Replaces every index on one of <paramref name="paths" /> with the given ones (name, keys).</summary>
+    private static async Task ReplaceIndexesAsync(IMongoCollection<BsonDocument> collection, string[] paths,
         params (string Name, string[] Keys)[] indexes)
     {
-        foreach (var index in (await IndexesAsync(collection)).Where(i => KeysOf(i).Contains(FieldPath)))
+        foreach (var index in (await IndexesAsync(collection)).Where(i => KeysOf(i).Intersect(paths).Any()))
         {
             await collection.Indexes.DropOneAsync(index["name"].AsString);
         }
