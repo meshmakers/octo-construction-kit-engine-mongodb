@@ -18,6 +18,13 @@ public class CommandResult
     /// </summary>
     public bool TenantCreatedNotificationFailed { get; set; }
 
+    /// <summary>
+    ///     A restore: the platform-only values it left out of the restored tenant, as paths
+    ///     (<c>&lt;CK type&gt;@&lt;rtId&gt;.&lt;attribute path&gt;</c>), never the values. An operator enters these
+    ///     values again (for example by redeploying the Application). Empty for every other command.
+    /// </summary>
+    public IReadOnlyList<string> RemovedPlatformOnlyValues { get; set; } = [];
+
     public static CommandResult Failure(string error)
     {
         return new CommandResult

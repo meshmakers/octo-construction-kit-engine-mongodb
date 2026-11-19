@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -23,6 +24,7 @@ internal class TenantBackupService(
     TenantOwnershipStore tenantOwnershipStore,
     TenantDatabaseRegistrationLookup registrationLookup,
     SystemDatabaseMarkerStore systemDatabaseMarkerStore,
+    RestoredPlatformOnlyValueRemover platformOnlyValueRemover,
     ITenantLifecycleStore? tenantLifecycleStore = null,
     IOptions<OctoSystemConfiguration>? systemConfiguration = null) : ITenantBackupService
 {
@@ -479,7 +481,11 @@ internal class TenantBackupService(
             // AB#8672: the archive carries the ownership markers of the instance it was dumped from. They are never
             // restored: the claim of this restore stays in place, and a restored copy never looks like a database
             // of the source instance (its tenant marker or its system-database marker).
-            NsExclude = [$"*.{TenantOwnershipStore.CollectionName}", $"*.{SystemDatabaseMarkerStore.CollectionName}"]
+            NsExclude =
+            [
+                $"*.{TenantOwnershipStore.CollectionName}", $"*.{SystemDatabaseMarkerStore.CollectionName}",
+                .. PlatformOnlyRestoreValues.LeftOutCollections.Select(collectionName => $"*.{collectionName}")
+            ]
         };
 
         // Enable namespace mapping if restoring to a different database name
@@ -520,6 +526,18 @@ internal class TenantBackupService(
         // instance's system database. The marker collection is excluded from the restore above; this removes one an
         // older mongorestore without namespace exclusion may still have written.
         await systemDatabaseMarkerStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
+
+        // The values only the platform may hold never reach the tenant, also from an older or edited archive.
+        // Removed before the attach, so no service reads them in between.
+        var removedPlatformOnlyValues = await platformOnlyValueRemover.RemoveAsync(databaseName,
+            cancellationToken ?? CancellationToken.None);
+        result.RemovedPlatformOnlyValues = removedPlatformOnlyValues;
+        if (removedPlatformOnlyValues.Count > 0)
+        {
+            logger.LogWarning(
+                "Restore of tenant '{TenantId}' left out {Count} platform-only value(s); enter them again: {Paths}",
+                tenantId, removedPlatformOnlyValues.Count, string.Join(", ", removedPlatformOnlyValues));
+        }
 
         logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",
             databaseName, tenantId);

@@ -147,6 +147,15 @@ Custom BSON serializers for OCTO types:
 
 ## Key Features
 
+### Tenant restore leaves out platform-only values
+
+A restore never brings a value into a tenant that only the platform may hold: the secret defaults collection, the
+`SecretValue` of an Application's `SecretDefaults` and the sealed caller of a pipeline execution. The tenant's own secrets are
+restored unchanged. The list (`Services/Restore/PlatformOnlyRestoreValues.cs`) mirrors `PlatformOnlySecrets.cs` of the mesh
+adapter SDK (the values `RevealSecret@1` refuses to tenant identities). The restore result names the removed values
+(`CommandResult.RemovedPlatformOnlyValues`, paths only); an operator enters them again, for example by redeploying the
+Application. Details: `CLAUDE.md`, "Restore leaves out platform-only values".
+
 ### Construction Kit Model Management
 
 The engine handles importing, storing, and querying CK models in MongoDB. CK models define the schema for runtime entities including:

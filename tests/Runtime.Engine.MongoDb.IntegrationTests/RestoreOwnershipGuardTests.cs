@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -553,7 +554,7 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
     private TenantBackupService CreateBackupServiceOfA(IRepositoryOpsService repositoryOps) => new(
         InstanceA, repositoryOps, fixture.GetService<ILogger<TenantBackupService>>(), OwnershipStoreA,
         fixture.GetService<TenantDatabaseRegistrationLookup>(), fixture.GetService<SystemDatabaseMarkerStore>(),
-        fixture.GetService<ITenantLifecycleStore>(), fixture.GetService<IOptions<OctoSystemConfiguration>>());
+        fixture.GetService<RestoredPlatformOnlyValueRemover>(), fixture.GetService<ITenantLifecycleStore>(), fixture.GetService<IOptions<OctoSystemConfiguration>>());
 
     [Fact]
     public async Task RestoreClaim_TakesOverTheApprovedForeignMarker_WhileItIsUnchanged()

@@ -459,7 +459,9 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
         return new TenantBackupService(fixture.GetSystemContext(), repositoryOps,
             NullLogger<TenantBackupService>.Instance, provider.GetRequiredService<TenantOwnershipStore>(),
             provider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
-            provider.GetRequiredService<SystemDatabaseMarkerStore>(), provider.GetService<ITenantLifecycleStore>(),
+            provider.GetRequiredService<SystemDatabaseMarkerStore>(),
+            provider.GetRequiredService<Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore.RestoredPlatformOnlyValueRemover>(),
+            provider.GetService<ITenantLifecycleStore>(),
             provider.GetService<IOptions<OctoSystemConfiguration>>());
     }
 

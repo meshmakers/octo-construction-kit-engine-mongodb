@@ -125,6 +125,9 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services
             .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.SystemDatabaseMarkerStore>();
 
+        // A restore removes the platform-only values before the attach.
+        builder.Services.AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore.RestoredPlatformOnlyValueRemover>();
+
         // AB#8796 ownership conflicts seen on tenant resolve (a marker of another instance); the
         // system context health check reports Degraded while there is one.
         builder.Services
