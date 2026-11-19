@@ -13,7 +13,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 ///     from it) in any entity collection, and the platform-only attributes. CK types are matched with their derived types
 ///     (read from the restored inheritance rows), and attribute keys ignoring case, because the engine reads a stored key
 ///     in any first-letter case. A candidate whose attributes are stored in another form than a document (the engine also
-///     reads an array of key-value pairs) fails the removal, so the restore fails closed.
+///     reads an array of key-value pairs) or with an attribute name that is not ASCII (the engine may read it as a
+///     platform-only key) fails the removal, so the restore fails closed.
 /// </summary>
 internal class RestoredPlatformOnlyValueRemover(
     IAdminRepositoryAccess adminRepositoryAccess,
@@ -58,7 +59,10 @@ internal class RestoredPlatformOnlyValueRemover(
         return removedPaths;
     }
 
-    /// <summary>Drops a restored database whose platform-only values could not be removed; never throws.</summary>
+    /// <summary>
+    ///     Drops a restored database whose platform-only values could not be removed, or whose restore was interrupted;
+    ///     never throws.
+    /// </summary>
     public virtual async Task DropRestoredDatabaseAsync(string databaseName)
     {
         try
@@ -69,7 +73,7 @@ internal class RestoredPlatformOnlyValueRemover(
         catch (Exception exception)
         {
             logger.LogError(exception,
-                "The restored database '{DatabaseName}' could not be dropped after the platform-only values could not be removed; drop it by hand before anyone attaches it",
+                "The restored database '{DatabaseName}' could not be dropped after a failed restore; drop it by hand before anyone attaches it",
                 databaseName);
         }
     }
@@ -140,6 +144,13 @@ internal class RestoredPlatformOnlyValueRemover(
         }
 
         var storedAttributeNames = candidate[AttributeNamesField].AsBsonArray.Select(name => name.AsString).ToList();
+        if (storedAttributeNames.Any(IsNotAscii))
+        {
+            throw new InvalidOperationException(
+                $"The restored entity {ckTypeId}@{candidate[IdField]} in '{collection.CollectionNamespace.CollectionName}' " +
+                "holds an attribute name that is not ASCII; its platform-only values cannot be removed safely.");
+        }
+
         var storedFieldPaths = new List<string>();
         foreach (var removal in removals.Where(removal => removal.CkTypeIds.Contains(ckTypeId)))
         {

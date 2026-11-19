@@ -6,7 +6,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore;
 
 /// <summary>
 ///     The aggregation that finds the restored entities of the given CK types that hold a platform-only attribute (any
-///     first-letter case) or store their attributes in another form than a document. It returns the id, the CK type, the
+///     first-letter case), hold an attribute name that is not ASCII (the engine upper-cases the first letter, and a
+///     non-ASCII letter can become an ASCII one) or store their attributes in another form than a document. It returns the id, the CK type, the
 ///     stored form of the attributes and their names, never a value.
 /// </summary>
 internal static class PlatformOnlyCandidatePipeline
@@ -17,10 +18,14 @@ internal static class PlatformOnlyCandidatePipeline
     public const string AttributeNamesField = "attributeNames";
 
     private const string AttributesField = Constants.AttributesName;
+    private const string NonAsciiCharacterPattern = "[^\\x00-\\x7F]";
 
     /// <summary>The stored forms of the attributes the removal can work on: a document, or none at all.</summary>
     public static readonly IReadOnlySet<string> ReadableAttributesTypes =
         new HashSet<string>(StringComparer.Ordinal) { "object", "missing", "null" };
+
+    /// <summary>Whether a stored attribute name holds a character outside ASCII.</summary>
+    public static bool IsNotAscii(string attributeName) => !attributeName.All(char.IsAscii);
 
     public static PipelineDefinition<BsonDocument, BsonDocument> Create(IEnumerable<string> ckTypeIds,
         IEnumerable<string> attributeNames)
@@ -44,6 +49,17 @@ internal static class PlatformOnlyCandidatePipeline
                 { "input", $"${AttributeNamesField}" }, { "as", "name" }, { "in", nameIsPlatformOnly }
             })
         });
+        var nameIsNotAscii = new BsonDocument("$regexMatch", new BsonDocument
+        {
+            { "input", "$$name" }, { "regex", NonAsciiCharacterPattern }
+        });
+        var holdsANonAsciiName = new BsonDocument("$anyElementTrue", new BsonArray
+        {
+            new BsonDocument("$map", new BsonDocument
+            {
+                { "input", $"${AttributeNamesField}" }, { "as", "name" }, { "in", nameIsNotAscii }
+            })
+        });
         var isUnreadableForm = new BsonDocument("$not", new BsonArray
         {
             new BsonDocument("$in", new BsonArray { $"${AttributesTypeField}", new BsonArray(ReadableAttributesTypes) })
@@ -62,7 +78,7 @@ internal static class PlatformOnlyCandidatePipeline
             }),
             new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$or", new BsonArray
             {
-                isUnreadableForm, holdsAPlatformOnlyName
+                isUnreadableForm, holdsAPlatformOnlyName, holdsANonAsciiName
             }))));
     }
 }

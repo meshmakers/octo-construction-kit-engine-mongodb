@@ -438,7 +438,8 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
                 dropExistingTenant: true, attachTenant: true);
 
             Assert.False(result.Success);
-            Assert.Equal("Exception during restore: mongorestore crashed (test)", result.Error);
+            Assert.StartsWith("Exception during restore: mongorestore crashed (test)", result.Error, StringComparison.Ordinal);
+            Assert.Contains($"The target database '{tenantId}' was dropped", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("ClearCache", result.Output, StringComparison.Ordinal);
         }
         finally

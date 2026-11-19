@@ -360,17 +360,25 @@ internal class TenantBackupService(
             }
 
             var restored = false;
+            var mongoRestoreMayStillWrite = false;
             try
             {
                 var result = await RestoreClaimedTargetAsync(tenantId, databaseName, archiveFilePath,
                     effectiveSourceDatabaseName, detectedDatabases, dropExistingTenant, attachTenant,
                     overrideForeignOwnership, claim, timeout, cancellationToken);
                 restored = result.Success;
+                mongoRestoreMayStillWrite = result.ProcessMayStillRun;
                 return result;
             }
             finally
             {
-                if (!restored || !attachTenant)
+                if (mongoRestoreMayStillWrite)
+                {
+                    logger.LogError(
+                        "Restore of tenant '{TenantId}': mongorestore may still write into '{DatabaseName}'; the claim is not released. Drop the database by hand if it reappears",
+                        tenantId, databaseName);
+                }
+                else if (!restored || !attachTenant)
                 {
                     // Failed: release the claim (and the database the claim materialized, when nothing else got into
                     // it). Restored without attach: the database stays unowned like any detached database.
@@ -507,15 +515,22 @@ internal class TenantBackupService(
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "mongorestore of tenant '{TenantId}' into database '{DatabaseName}' failed",
+            logger.LogError(exception,
+                "mongorestore of tenant '{TenantId}' into database '{DatabaseName}' threw; it may still write, the database is dropped",
                 tenantId, databaseName);
-            await RemovePlatformOnlyValuesAfterFailedRestoreAsync(tenantId, databaseName);
-            throw;
+            result = CommandResult.Failure($"Exception during restore: {exception.Message}");
+            result.ProcessMayStillRun = true;
         }
 
         if (!result.Success)
         {
             logger.LogError("Restore failed for tenant '{TenantId}': {Error}", tenantId, result.Error);
+            if (result.Cancelled || result.ProcessMayStillRun)
+            {
+                await DropInterruptedRestoreTargetAsync(tenantId, databaseName, result);
+                return result;
+            }
+
             await RemovePlatformOnlyValuesAfterFailedRestoreAsync(tenantId, databaseName);
             return result;
         }
@@ -638,6 +653,22 @@ internal class TenantBackupService(
         }
 
         result.Output = string.IsNullOrEmpty(result.Output) ? warning : result.Output + Environment.NewLine + warning;
+    }
+
+    /// <summary>
+    ///     A cancelled mongorestore, or one that may still run, leaves a database whose content nobody can vouch for: it is
+    ///     dropped, never cleaned while it may still be written.
+    /// </summary>
+    private async Task DropInterruptedRestoreTargetAsync(string tenantId, string databaseName, CommandResult result)
+    {
+        logger.LogError(
+            "Restore of tenant '{TenantId}' was interrupted (cancelled: {Cancelled}, process may still run: {ProcessMayStillRun}); the target database '{DatabaseName}' is dropped",
+            tenantId, result.Cancelled, result.ProcessMayStillRun, databaseName);
+        await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
+        var dropNote = result.ProcessMayStillRun
+            ? $"The target database '{databaseName}' was dropped, but mongorestore may still be running: make sure it has stopped and drop the database by hand if it reappears."
+            : $"The target database '{databaseName}' was dropped.";
+        result.Error = string.IsNullOrEmpty(result.Error) ? dropNote : result.Error + Environment.NewLine + dropNote;
     }
 
     /// <summary>

@@ -3599,10 +3599,18 @@ could move the ciphertext into any other attribute.
     `ToPascalCase`), so an edited archive cannot hide a value behind `SealedCaller` instead of `sealedCaller`.
   - a candidate whose `attributes` is stored in another form than a document (an array of key-value pairs, which the
     engine also deserializes) fails the removal: the restore **fails closed** instead of leaving a value it cannot unset.
+    So does a candidate with an attribute name that is not ASCII: the engine upper-cases the first letter of a stored key
+    (`ToPascalCase`), and `ſealedCaller` (U+017F) is read as `SealedCaller`, while the server-side `$toLower` is ASCII-only.
   - When the removal fails, the restored (still unattached) database is dropped and the restore fails, so no database with
     the values is left on the server for a later attach.
-  - When mongorestore fails or throws after it wrote documents, the removal runs on the partly restored database (dropped
+  - When mongorestore fails after it wrote documents, the removal runs on the partly restored database (dropped
     when that fails too) before the claim is released, because such a database stays on the server and can be attached later.
+  - **A cancelled restore stops mongorestore and drops the target database.** On cancellation, a timeout or an exception
+    `RepositoryOpsService` kills the whole process tree and waits up to 30 s for it to exit (`CommandResult.Cancelled`).
+    A cancelled mongorestore, one that may still run (`CommandResult.ProcessMayStillRun`: the kill failed or it did not exit
+    in time) and one that threw get no clean-up on a database that may still be written: the target is dropped, and a
+    restore whose mongorestore may still run releases no claim and tells the operator to drop the database by hand if it
+    reappears.
   - The database is opened under the name mongorestore and the claim use, never a normalized one.
 - **Result**: `CommandResult.RemovedPlatformOnlyValues` lists every removed value as `<CK type>@<rtId>.<attribute path>` and every
   deleted secret default entity as `<CK type>@<rtId>` (never the value); the restore logs them as a warning, and
@@ -3624,7 +3632,10 @@ could move the ciphertext into any other attribute.
   removes nothing; the list is pinned), `RestorePlatformOnlyValuesEditedArchiveTests` (keys in another case, with the
   secret default value kept, a type derived from `PipelineExecution` through two inheritance rows, a failing removal drops the
   restored database and fails the restore), `RestorePlatformOnlyValuesFailClosedTests` (attributes stored as an array in both
-  forms fail the restore and drop the database; a mongorestore that fails after writing leaves no sealed caller) and
+  forms fail the restore and drop the database; a mongorestore that fails after writing leaves no sealed caller),
+  `RestoreInterruptedTests` (a mongorestore cancelled, possibly still running or throwing after it wrote drops the target),
+  `RestorePlatformOnlyNonAsciiKeyTests` (the engine reads `ſealedCaller` as `SealedCaller`; such a key fails the restore),
+  `RepositoryOpsServiceTests` (cancel and timeout stop the child of the command too) and
   `RestoreLeavesOutSecretDefaultsTests` (a restore into the same tenant, secret defaults in another collection and under a
   derived type, a clone that reports the removed values).
 

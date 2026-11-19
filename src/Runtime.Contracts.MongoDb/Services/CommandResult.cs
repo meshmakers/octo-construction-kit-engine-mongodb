@@ -26,6 +26,15 @@ public class CommandResult
     /// </summary>
     public IReadOnlyList<string> RemovedPlatformOnlyValues { get; set; } = [];
 
+    /// <summary>The command was cancelled before it finished; its process was stopped.</summary>
+    public bool Cancelled { get; set; }
+
+    /// <summary>
+    ///     The command's process could not be confirmed stopped (the kill failed or it did not exit in time): it may still
+    ///     write. A restore drops its target database and keeps no claim on it.
+    /// </summary>
+    public bool ProcessMayStillRun { get; set; }
+
     public static CommandResult Failure(string error)
     {
         return new CommandResult
