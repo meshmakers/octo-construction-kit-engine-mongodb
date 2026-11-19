@@ -1040,10 +1040,13 @@ as 300 items of which only 35 were distinct. Rules:
   key spec and options (a second one under another name is refused with 85). `UpdateIndexesForCollectionRoot` keeps a
   per-collection-run record of the Ascending indexes kept or built (`SharedIndexKeySpecs`, key spec -> name): the first
   type keeps or builds the index, every later type with the same keys is served by it (no createIndexes, state `Applied`
-  under the shared name, its own expected name's state removed, one information line), whatever the order. A legacy
-  index kept by an update without the upgrade is recorded too, so the second type keeps it as well instead of building a
-  tiebreak index next to it (that mixed state left the legacy index forever: the upgrade's build of the other type's
-  tiebreak index failed with 85). Unique/UniqueNotDeleted (per-type partial filter) and text indexes (merged) are never
+  under the shared name, its own expected name's state removed, one information line). A legacy index kept by an update
+  without the upgrade is recorded too and serves every type with its keys (state `Applied` under its name), so the second
+  type no longer builds a tiebreak index next to it (that mixed state left the legacy index forever: the upgrade's build of
+  the other type's tiebreak index failed with 85). A legacy index is kept only while no tiebreak index with its keys is
+  held in the run: on a collection that holds both the legacy index of one type and the tiebreak index of the other, the
+  tiebreak index serves both types and the cleanup drops the legacy index, also in an update without the upgrade (as for a
+  single type whose tiebreak index exists; nothing is built). The result does not depend on the order of the types. Unique/UniqueNotDeleted (per-type partial filter) and text indexes (merged) are never
   recorded, nor indexes with foreign options. `IndexStateService.RemoveIndexState` removes the stored state of the type
   too, not only the one tracked in the run. Tests: `SharedIndexKeySpecTests` (fresh tenant, mixed legacy/tiebreak state,
   shared legacy index, a stored `Failed` state removed, unique indexes of two types; each in both type orders).

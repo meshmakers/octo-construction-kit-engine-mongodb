@@ -11,6 +11,10 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+
+using Microsoft.Extensions.Options;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -59,8 +63,9 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
             await AssertAppliedUnderAsync(tenant, "ShareModel-1.0.0", sharedName);
 
             var afterImport = Describe(await IndexesAsync(collection));
-            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            await using (await ProfileIndexCommandsAsync(collection, commands => Assert.Empty(commands)))
             {
+                using var adminSession = await systemContext.GetAdminSessionAsync();
                 await tenant.UpdateIndexesAsync(adminSession);
                 Assert.Equal(afterImport, Describe(await IndexesAsync(collection)));
                 await tenant.UpdateIndexesAsync(adminSession);
@@ -114,6 +119,46 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
+    ///     The mixed state in an update without the upgrade: the tiebreak index <c>B_n_id</c> serves both types and the
+    ///     cleanup drops A's legacy index (as for a single type whose tiebreak index exists), whatever the order; nothing
+    ///     is built.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MixedState_UpdateWithoutUpgrade_TheTiebreakIndexServesBoth_AndTheLegacyIndexIsDropped(bool betaFirst)
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(Model("MixUpd", "1.0.0", betaFirst));
+            var collection = Collection(tenant, "MixUpd");
+            var legacyName = IndexBaseName("MixUpd", AlphaTypeName);
+            var tiebreakName = IndexBaseName("MixUpd", BetaTypeName) + TiebreakIndexShape.NameSuffix;
+            await ReplaceFieldIndexesAsync(collection,
+                (legacyName, LegacyKeys), (tiebreakName, TiebreakKeys));
+
+            await using (await ProfileIndexCommandsAsync(collection,
+                             commands =>
+                             {
+                                 // The profiler sees index commands: the cleanup's drop of the legacy index is there.
+                                 Assert.Contains(commands, c => c.Contains("dropIndexes") && c.Contains(legacyName));
+                                 Assert.DoesNotContain(commands, c => c.Contains("createIndexes"));
+                             }))
+            {
+                using var adminSession = await systemContext.GetAdminSessionAsync();
+                await tenant.UpdateIndexesAsync(adminSession);
+            }
+
+            var updated = await IndexesAsync(collection);
+            var shared = Assert.Single(updated, i => KeysOf(i).Contains(FieldPath));
+            Assert.Equal(tiebreakName, shared["name"].AsString);
+            Assert.DoesNotContain(updated, i => KeysOf(i).SequenceEqual(LegacyKeys));
+            await AssertNoFailedStateAsync(tenant, "MixUpd-1.0.0");
+            await AssertAppliedUnderAsync(tenant, "MixUpd-1.0.0", tiebreakName, AlphaTypeName);
+        });
+    }
+
+    /// <summary>
     ///     AC 3: one legacy index serving both types (built by an engine before AB#8960). An index update without the
     ///     upgrade keeps it for both types and builds no tiebreak index for the second one; the upgrade then builds
     ///     exactly one tiebreak index and drops the legacy one.
@@ -137,7 +182,7 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
             }
 
             Assert.Equal(legacyOnly, Describe(await IndexesAsync(collection)));
-            await AssertNoFailedStateAsync(tenant, "LegModel-1.0.0");
+            await AssertAppliedUnderAsync(tenant, "LegModel-1.0.0", legacyName);
 
             using (var adminSession = await systemContext.GetAdminSessionAsync())
             {
@@ -389,6 +434,53 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
             Assert.DoesNotContain(states, s => s.State == IndexState.Failed);
             Assert.Contains(states, s => s.State == IndexState.Applied && s.Name == sharedName);
         }
+    }
+
+    /// <summary>
+    ///     Records every createIndexes / dropIndexes command on <paramref name="collection" /> (database profiler, level 2)
+    ///     until the returned scope is disposed; then hands them to <paramref name="assert" /> as JSON and switches the
+    ///     profiler off again. The profiler needs the admin user (the tenant user may not run <c>profile</c>).
+    /// </summary>
+    private async Task<IAsyncDisposable> ProfileIndexCommandsAsync(IMongoCollection<BsonDocument> collection,
+        Action<List<string>> assert)
+    {
+        var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
+        var urlBuilder = new MongoUrlBuilder
+        {
+            Server = MongoServerAddress.Parse(config.DatabaseHost),
+            Username = config.AdminUser,
+            Password = config.AdminUserPassword,
+            AuthenticationSource = config.AuthenticationDatabaseName,
+            DatabaseName = config.AuthenticationDatabaseName,
+            DirectConnection = config.UseDirectConnection
+        };
+        var database = new MongoClient(urlBuilder.ToMongoUrl())
+            .GetDatabase(collection.Database.DatabaseNamespace.DatabaseName);
+        var name = collection.CollectionNamespace.CollectionName;
+        var from = DateTime.UtcNow.AddSeconds(-1);
+        await database.RunCommandAsync<BsonDocument>(new BsonDocument("profile", 2));
+        return new AsyncScope(async () =>
+        {
+            await database.RunCommandAsync<BsonDocument>(new BsonDocument("profile", 0));
+            var filter = new BsonDocument
+            {
+                { "ts", new BsonDocument("$gte", from) },
+                {
+                    "$or", new BsonArray
+                    {
+                        new BsonDocument("command.createIndexes", name),
+                        new BsonDocument("command.dropIndexes", name)
+                    }
+                }
+            };
+            var entries = await database.GetCollection<BsonDocument>("system.profile").Find(filter).ToListAsync();
+            assert(entries.Select(e => e["command"].ToJson()).ToList());
+        });
+    }
+
+    private sealed class AsyncScope(Func<Task> onDispose) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync() => await onDispose();
     }
 
     private static async Task<List<BsonDocument>> IndexesAsync(IMongoCollection<BsonDocument> collection)

@@ -1172,8 +1172,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 // AB#8960: kept under its name. Dropping it to rebuild it under the expected name would leave the
                 // collection without the index for the time of the build.
                 _logger.LogInformation(
-                    "Index '{ActualName}' of '{CollectionName}' has the definition of '{ExpectedName}' and is kept under its name",
-                    repositoryIndex.Name, collectionName, indexName);
+                    "Index '{ActualName}' of '{CollectionName}' has the definition of '{ExpectedName}' of type '{CkTypeId}' " +
+                    "and is kept under its name; it serves that type (AB#9342)",
+                    repositoryIndex.Name, collectionName, indexName,
+                    indexDefiningType?.CkTypeId.ToString() ?? "(system)");
                 return new IndexCreation(repositoryIndex.Name, [], Built: false);
             }
 
@@ -1415,13 +1417,33 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             !repositoryIndices.Any(i => !i.HasForeignOptions && SameDefinition(i, ckTypeIndex)))
         {
             legacy = FindMatchingIndex(repositoryIndices, legacyRule.LegacyIndex, baseName);
-            if (legacy != null && !legacyRule.Upgrade)
+
+            // AB#9342: when an index in the tiebreak shape with these keys was kept or built earlier in this run (for
+            // another type), it serves this type; the legacy index stays in the list and the cleanup drops it after the
+            // collection's other indexes - as for a single type whose tiebreak index already exists. Nothing is built.
+            if (legacy != null && !legacyRule.Upgrade && keySpecs?.Holder(ckTypeIndex) == null)
             {
-                _logger.LogDebug(
-                    "Keeping legacy index '{IndexName}' of '{CollectionName}' until the tiebreak index upgrade (AB#8960)",
-                    legacy.Name, collection.CollectionName);
+                var ownLegacy = string.Equals(legacy.Name, baseName, StringComparison.Ordinal);
+                if (ownLegacy)
+                {
+                    _logger.LogDebug(
+                        "Keeping legacy index '{IndexName}' of '{CollectionName}' until the tiebreak index upgrade (AB#8960)",
+                        legacy.Name, collection.CollectionName);
+                }
+                else
+                {
+                    // AB#9342: the only legacy index with these keys carries the name of another type's slot; it serves
+                    // this type too (MongoDB holds one index per key spec).
+                    _logger.LogInformation(
+                        "Legacy index '{SharedName}' in '{CollectionName}' (built for another type) has the keys of the " +
+                        "index of type '{CkTypeId}'; it is kept and serves the type until the tiebreak index upgrade (AB#9342)",
+                        legacy.Name, collection.CollectionName, indexDefiningType?.CkTypeId.ToString() ?? "(system)");
+                }
+
                 repositoryIndices.Remove(legacy);
-                keySpecs?.Remember(legacyRule.LegacyIndex, legacy.Name, indexDefiningType?.CkTypeId);
+                // The holder's type is known only when the index is the type's own (its name is the slot's name).
+                keySpecs?.Remember(legacyRule.LegacyIndex, legacy.Name, ownLegacy ? indexDefiningType?.CkTypeId : null);
+                TrackServedBy(indexDefiningType, legacy.Name, indexName, collection.CollectionName);
                 return;
             }
 
@@ -1432,11 +1454,22 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             if (legacy == null && !legacyRule.Upgrade && keySpecs != null && keySpecs.Holder(ckTypeIndex) == null &&
                 keySpecs.Holder(legacyRule.LegacyIndex) is { } legacyHolder)
             {
-                _logger.LogInformation(
-                    "Legacy index '{SharedName}' of type '{HolderCkTypeId}' in '{CollectionName}' has the keys of the " +
-                    "index of type '{CkTypeId}'; the type is served by it until the tiebreak index upgrade (AB#9342)",
-                    legacyHolder.Name, legacyHolder.TypeId?.ToString() ?? "(system)", collection.CollectionName,
-                    indexDefiningType?.CkTypeId.ToString() ?? "(system)");
+                if (string.Equals(legacyHolder.Name, baseName, StringComparison.Ordinal))
+                {
+                    // The type's own legacy index, kept earlier in this run by another type that it serves too.
+                    _logger.LogDebug(
+                        "Keeping legacy index '{IndexName}' of '{CollectionName}' until the tiebreak index upgrade (AB#8960)",
+                        legacyHolder.Name, collection.CollectionName);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Legacy index '{SharedName}' of type '{HolderCkTypeId}' in '{CollectionName}' has the keys of the " +
+                        "index of type '{CkTypeId}'; the type is served by it until the tiebreak index upgrade (AB#9342)",
+                        legacyHolder.Name, legacyHolder.TypeId?.ToString() ?? "(another type)", collection.CollectionName,
+                        indexDefiningType?.CkTypeId.ToString() ?? "(system)");
+                }
+
                 TrackServedBy(indexDefiningType, legacyHolder.Name, indexName, collection.CollectionName);
                 return;
             }

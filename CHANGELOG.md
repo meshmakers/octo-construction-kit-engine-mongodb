@@ -11,7 +11,9 @@
   test-2 `octosystem`). The index update now dedupes per collection on the key spec: the index that holds it (existing,
   or built earlier in the same collection run, also a legacy index kept without the upgrade) serves every type with
   those keys, whatever the order of the types - no createIndexes call, state `Applied` under the shared index name, one
-  information line per type naming both types. Unique and UniqueNotDeleted indexes keep their per-type filter, text
+  information line per type. On a collection that holds both the legacy index of one type and the tiebreak index of the
+  other, an update without the upgrade now drops the legacy index after the other indexes (the tiebreak index serves
+  both types, nothing is built), as it already did for a single type whose tiebreak index exists. Unique and UniqueNotDeleted indexes keep their per-type filter, text
   indexes are merged per collection as before; an index with foreign options (sparse, hidden) is still kept and
   reported. Existing tenants converge on the next index update or upgrade; no CK model, index shape or name changes.
   Side fix: a removed index state (an index replaced, dropped or no longer serving the type) is now removed from the
