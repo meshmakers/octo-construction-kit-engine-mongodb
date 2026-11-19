@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- AB#9342 Fix: two CK types of one collection with an Ascending index on the same attributes share one index. Both
+  produce the key spec `{ckTypeId, attr..., _id, rtState}` and MongoDB holds one non-unique index per key spec, so the
+  index update of the second type failed with MongoDB 85 ("Index already exists with a different name"), logged a warning
+  and stored a `Failed` index state on every update; on a collection with one legacy index shared by both types the
+  normal update built the tiebreak index of one type next to the legacy index of the other, which the tiebreak upgrade
+  (AB#8960) could then never replace (`UpgradeTiebreakIndexesAsync` left the legacy index and ended incomplete, seen on
+  test-2 `octosystem`). The index update now dedupes per collection on the key spec: the index that holds it (existing,
+  or built earlier in the same collection run, also a legacy index kept without the upgrade) serves every type with
+  those keys, whatever the order of the types - no createIndexes call, state `Applied` under the shared index name, one
+  information line per type naming both types. Unique and UniqueNotDeleted indexes keep their per-type filter, text
+  indexes are merged per collection as before; an index with foreign options (sparse, hidden) is still kept and
+  reported. Existing tenants converge on the next index update or upgrade; no CK model, index shape or name changes.
+  Side fix: a removed index state (an index replaced, dropped or no longer serving the type) is now removed from the
+  stored states of the CK type too, not only from the states tracked in the run, so a `Failed` state an earlier run left
+  disappears once the type is served. Tests: `SharedIndexKeySpecTests`.
 - AB#9250 Test: the integration test containers get a CPU limit next to their memory limit (mongod 4 CPUs, CrateDB 2 CPUs
   each; the CrateDB heap is set explicitly for every CrateDB fixture), xUnit runs at most 8 collections at once
   (`maxParallelThreads: 8`), and the CrateDB pool tests wait for their container and name it when it does not answer instead

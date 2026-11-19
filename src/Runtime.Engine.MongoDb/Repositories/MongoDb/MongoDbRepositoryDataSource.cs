@@ -739,6 +739,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // Now, we compare the existing indexes with the defined indexes in the CK model.
             var repositoryIndices = await collection.GetIndexListAsync();
 
+            // AB#9342: the indexes kept or built in this collection run, by key spec. Two types of the collection that
+            // index the same attributes share one index (see SharedIndexKeySpecs).
+            var keySpecs = new SharedIndexKeySpecs();
+
             foreach (var keyValuePair in regularIndices)
             {
                 int uniqueIndexNumber = 0;
@@ -747,7 +751,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 {
                     await PrepareAndCreateIndex(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
                         uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes,
-                        upgradeTiebreakIndexes);
+                        upgradeTiebreakIndexes, keySpecs);
                     uniqueIndexNumber++;
                 }
 
@@ -758,7 +762,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     {
                         await PrepareAndCreateIndex(keyValuePair.Key, textIndex, repositoryIndices, collection,
                             uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes,
-                            upgradeTiebreakIndexes);
+                            upgradeTiebreakIndexes, keySpecs);
                     }
                     else
                     {
@@ -790,7 +794,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 ]
             };
             await CreateOrUpdateIndex(collection.CollectionName, rtStateIndex, repositoryIndices, collection,
-                uniqueIndexNumber: 9000);
+                uniqueIndexNumber: 9000, keySpecs: keySpecs);
 
             // System-level compound index for (ckTypeId, rtCreatedBy) — supports the OwnedOnly
             // data-permission filter (AB#4971)
@@ -810,7 +814,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 ]
             };
             await CreateOrUpdateIndex(collection.CollectionName, rtCreatedByIndex, repositoryIndices, collection,
-                uniqueIndexNumber: 9001);
+                uniqueIndexNumber: 9001, keySpecs: keySpecs);
 
             // Drop any remaining indexes that are no longer needed. A legacy index replaced by its tiebreak-shape
             // successor (AB#8960) is among them: it is dropped only now, after the successor was built.
@@ -857,13 +861,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <param name="collection">The MongoDB collection</param>
     /// <param name="uniqueIndexNumber">Unique number for index naming</param>
     /// <param name="collectionRootType">Optional collection root type info</param>
+    /// <param name="keySpecs">The indexes kept or built in this collection run (AB#9342)</param>
     private async Task PrepareAndCreateIndex(CkType indexDefiningType, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
         int uniqueIndexNumber, CkTypeInfo? collectionRootType = null,
         IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute>? allCkAttributes = null,
         IReadOnlyDictionary<CkId<CkRecordId>, CkRecord>? allCkRecords = null,
-        IReadOnlyCollection<CkType>? collectionTypes = null, bool upgradeTiebreakIndexes = false)
+        IReadOnlyCollection<CkType>? collectionTypes = null, bool upgradeTiebreakIndexes = false,
+        SharedIndexKeySpecs? keySpecs = null)
     {
         if (ckTypeIndex.IndexType == IndexTypes.None)
         {
@@ -1026,13 +1032,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 group.AttributeNames = TiebreakIndexShape.WithIdTiebreak(group.AttributeNames)!;
                 await CreateOrUpdateIndexWithTracking(collection.CollectionName, localIndex, repositoryIndices,
                     collection, uniqueIndexNumber, collectionRootType, indexDefiningType,
-                    new LegacyIndexRule(legacyIndex, upgradeTiebreakIndexes));
+                    new LegacyIndexRule(legacyIndex, upgradeTiebreakIndexes), keySpecs);
                 return;
             }
         }
 
         await CreateOrUpdateIndexWithTracking(collection.CollectionName, localIndex, repositoryIndices,
-            collection, uniqueIndexNumber, collectionRootType, indexDefiningType);
+            collection, uniqueIndexNumber, collectionRootType, indexDefiningType, keySpecs: keySpecs);
     }
 
     /// <summary>
@@ -1042,12 +1048,53 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private sealed record LegacyIndexRule(CkTypeIndex LegacyIndex, bool Upgrade);
 
     /// <summary>
-    ///     The outcome of <see cref="CreateOrUpdateIndex{TKey,TDocument}" /> when it built an index: the name it was built
-    ///     under and the existing indexes it replaces (AB#8960: the one with the expected name, the slot's index under its
-    ///     alternate name, a unique index with another type set) - dropped by the cleanup at the end of the collection,
-    ///     after the build.
+    ///     The outcome of <see cref="CreateOrUpdateIndex{TKey,TDocument}" /> when the definition is served by an index
+    ///     other than an existing one under the expected name: the name of that index and the existing indexes it replaces
+    ///     (AB#8960: the one with the expected name, the slot's index under its alternate name, a unique index with another
+    ///     type set) - dropped by the cleanup at the end of the collection, after the build.
     /// </summary>
-    private sealed record IndexCreation(string Name, IReadOnlyList<string> Replaces);
+    /// <param name="Name">The index that serves the definition.</param>
+    /// <param name="Replaces">The existing indexes the build replaces (empty when nothing was built).</param>
+    /// <param name="Built">
+    ///     True when the index was built now; false when an existing index under another name (adopted) or an index
+    ///     kept or built earlier in the same collection run for another type (shared, AB#9342) serves it.
+    /// </param>
+    private sealed record IndexCreation(string Name, IReadOnlyList<string> Replaces, bool Built = true);
+
+    /// <summary>
+    ///     AB#9342: the non-unique Ascending indexes kept or built in one collection run, by key spec. A CK Ascending
+    ///     index has the keys <c>{ckTypeId, attr…, _id, rtState}</c> - the field <c>ckTypeId</c>, not the type value -,
+    ///     so two types of one collection that index the same attributes produce the same key spec, and MongoDB holds
+    ///     only one non-unique index per key spec and options (a second one under another name is refused with 85
+    ///     "Index already exists with a different name"). One index serves both types: queries filter
+    ///     <c>ckTypeId $in</c>, the paging gate and the index hint decide by keys. The first type of the run keeps or
+    ///     builds the index; every later definition with the same keys is served by it, whatever the order of the types.
+    ///     The same holds for a legacy index (AB#8960) kept by an update without the upgrade. Unique and UniqueNotDeleted
+    ///     indexes keep their per-type partial filter and text indexes are merged per collection: neither is recorded.
+    ///     Indexes with options the engine never sets are never recorded either (they are not ours).
+    /// </summary>
+    private sealed class SharedIndexKeySpecs
+    {
+        private readonly Dictionary<string, (string Name, CkId<CkTypeId>? TypeId)> _holders =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private static string? KeySpec(CkTypeIndex index) => index.IndexType == IndexTypes.Ascending
+            ? string.Join("\u0001", index.Fields.SelectMany(f => f.AttributeNames))
+            : null;
+
+        /// <summary>Records that <paramref name="name" /> holds the keys of <paramref name="index" />; the first wins.</summary>
+        public void Remember(CkTypeIndex index, string name, CkId<CkTypeId>? typeId)
+        {
+            if (KeySpec(index) is { } keySpec)
+            {
+                _holders.TryAdd(keySpec, (name, typeId));
+            }
+        }
+
+        /// <summary>The index of this run that holds the keys of <paramref name="index" />, or null.</summary>
+        public (string Name, CkId<CkTypeId>? TypeId)? Holder(CkTypeIndex index) =>
+            KeySpec(index) is { } keySpec && _holders.TryGetValue(keySpec, out var holder) ? holder : null;
+    }
 
     private const int IndexOptionsConflictCode = 85;
     private const int IndexKeySpecsConflictCode = 86;
@@ -1060,6 +1107,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     ///     <item>an existing index with the expected name but another definition stays until the end of the collection:
     ///     the new index is built next to it under <see cref="AlternateIndexName" />, the cleanup drops the old one
     ///     after the build. If the build fails, the old index stays.</item>
+    ///     <item>AB#9342: a non-unique Ascending definition whose keys an index kept or built earlier in the same
+    ///     collection run holds (another type of the collection indexes the same attributes) is served by that index:
+    ///     no createIndexes call, the shared index name is returned (<see cref="SharedIndexKeySpecs" />).</item>
     /// </list>
     /// </summary>
     /// <param name="collectionName">Name of the MongoDB collection</param>
@@ -1070,15 +1120,32 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <param name="collectionRootType">Optional collection root type info (required for Unique/UniqueNotDeleted)</param>
     /// <param name="indexDefiningType">Optional type that defines this index (required for Unique/UniqueNotDeleted)</param>
     /// <param name="nameSuffix">Appended to the index name (AB#8960: <see cref="TiebreakIndexShape.NameSuffix" />)</param>
-    /// <returns>The index built, or null when an existing index has the definition.</returns>
+    /// <param name="keySpecs">The indexes kept or built in this collection run (AB#9342); null: no sharing</param>
+    /// <returns>
+    ///     The index built, adopted under another name or shared with another type of the collection; null when an
+    ///     existing index under the expected name has the definition.
+    /// </returns>
     private async Task<IndexCreation?> CreateOrUpdateIndex<TKey, TDocument>(string collectionName,
         CkTypeIndex ckTypeIndex, ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber,
-        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null, string nameSuffix = "")
+        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null, string nameSuffix = "",
+        SharedIndexKeySpecs? keySpecs = null)
         where TDocument : class, new()
         where TKey : notnull
     {
         var indexName = IndexBaseName(collectionName, uniqueIndexNumber, indexDefiningType) + nameSuffix;
+
+        // AB#9342: another type of the collection indexes the same attributes, and its index (kept or built earlier in
+        // this run) holds these keys. MongoDB holds one non-unique index per key spec; it serves this type too.
+        if (keySpecs?.Holder(ckTypeIndex) is { } holder)
+        {
+            _logger.LogInformation(
+                "Index '{IndexName}' of type '{CkTypeId}' in '{CollectionName}' has the keys of index '{SharedName}' of " +
+                "type '{HolderCkTypeId}'; the type is served by that index (AB#9342)",
+                indexName, indexDefiningType?.CkTypeId.ToString() ?? "(system)", collectionName, holder.Name,
+                holder.TypeId?.ToString() ?? "(system)");
+            return new IndexCreation(holder.Name, [], Built: false);
+        }
 
         // We check if the index already exists in the repository,
         // by comparing type, the fields' weight and the attribute paths
@@ -1098,6 +1165,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         {
             // Remove the matching index from the list so it won't be dropped later
             repositoryIndices.Remove(repositoryIndex);
+            keySpecs?.Remember(ckTypeIndex, repositoryIndex.Name, indexDefiningType?.CkTypeId);
 
             if (repositoryIndex.Name != indexName)
             {
@@ -1106,13 +1174,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 _logger.LogInformation(
                     "Index '{ActualName}' of '{CollectionName}' has the definition of '{ExpectedName}' and is kept under its name",
                     repositoryIndex.Name, collectionName, indexName);
-            }
-            else
-            {
-                _logger.LogDebug("Index '{IndexName}' already exists for '{CollectionName}', skipping creation",
-                    indexName, collectionName);
+                return new IndexCreation(repositoryIndex.Name, [], Built: false);
             }
 
+            _logger.LogDebug("Index '{IndexName}' already exists for '{CollectionName}', skipping creation",
+                indexName, collectionName);
             return null;
         }
 
@@ -1208,6 +1274,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             throw;
         }
 
+        keySpecs?.Remember(ckTypeIndex, targetName, indexDefiningType?.CkTypeId);
         return new IndexCreation(targetName,
             new[] { occupant, previous, replaced }.OfType<CkTypeIndexWithName>().Select(i => i.Name).Distinct().ToList());
     }
@@ -1261,6 +1328,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     ///     otherwise the only one with that definition (several types of one collection can declare the same index),
     ///     otherwise null. With <paramref name="typeIds" /> (a unique index) its partial filter must name exactly these
     ///     types.
+    ///     <para>
+    ///         Sharing rule (AB#9342): a non-unique index is defined by its keys, and MongoDB holds one per key spec. The
+    ///         first type of a collection run that finds (or builds) the index takes it out of
+    ///         <paramref name="repositoryIndices" />; every later type with the same keys is served by that index through
+    ///         <see cref="SharedIndexKeySpecs" />, not by this lookup, so the result does not depend on the order of the
+    ///         types.
+    ///     </para>
     /// </summary>
     private static CkTypeIndexWithName? FindMatchingIndex(IEnumerable<CkTypeIndexWithName> repositoryIndices,
         CkTypeIndex definition, string expectedName, IReadOnlySet<string>? typeIds = null)
@@ -1319,10 +1393,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     ///     that the cleanup at the end of the collection drops it after the build (upgrade). If the build fails, the
     ///     legacy index stays.
     /// </param>
+    /// <param name="keySpecs">
+    ///     AB#9342: the indexes kept or built in this collection run. A type whose index another type of the collection
+    ///     already holds (same keys) is served by it - also a legacy index kept by an update without the upgrade - and
+    ///     gets the state <c>Applied</c> under that index's name; the state under its own name is removed.
+    /// </param>
     private async Task CreateOrUpdateIndexWithTracking<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber,
-        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null, LegacyIndexRule? legacyRule = null)
+        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null, LegacyIndexRule? legacyRule = null,
+        SharedIndexKeySpecs? keySpecs = null)
         where TDocument : class, new()
         where TKey : notnull
     {
@@ -1341,6 +1421,23 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     "Keeping legacy index '{IndexName}' of '{CollectionName}' until the tiebreak index upgrade (AB#8960)",
                     legacy.Name, collection.CollectionName);
                 repositoryIndices.Remove(legacy);
+                keySpecs?.Remember(legacyRule.LegacyIndex, legacy.Name, indexDefiningType?.CkTypeId);
+                return;
+            }
+
+            // AB#9342: another type of the collection kept the legacy index with these keys in this run (an update
+            // without the upgrade) and no index in the tiebreak shape is there for them: the legacy index serves this
+            // type too, until the upgrade replaces it by one tiebreak index. Building a tiebreak index for this type
+            // here would create the mixed state the upgrade could not resolve.
+            if (legacy == null && !legacyRule.Upgrade && keySpecs != null && keySpecs.Holder(ckTypeIndex) == null &&
+                keySpecs.Holder(legacyRule.LegacyIndex) is { } legacyHolder)
+            {
+                _logger.LogInformation(
+                    "Legacy index '{SharedName}' of type '{HolderCkTypeId}' in '{CollectionName}' has the keys of the " +
+                    "index of type '{CkTypeId}'; the type is served by it until the tiebreak index upgrade (AB#9342)",
+                    legacyHolder.Name, legacyHolder.TypeId?.ToString() ?? "(system)", collection.CollectionName,
+                    indexDefiningType?.CkTypeId.ToString() ?? "(system)");
+                TrackServedBy(indexDefiningType, legacyHolder.Name, indexName, collection.CollectionName);
                 return;
             }
         }
@@ -1349,14 +1446,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         {
             // Call the original method and check if index was actually created
             var created = await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection,
-                uniqueIndexNumber, collectionRootType, indexDefiningType, nameSuffix);
+                uniqueIndexNumber, collectionRootType, indexDefiningType, nameSuffix, keySpecs);
 
-            // Only track if the index was actually created (not if it already existed), under the name it was built
-            // under; an index it replaces is dropped by the cleanup after the build (AB#8960).
+            // Track only a change (not an index that already existed under its expected name), under the name of the
+            // index that serves the definition; an index it replaces is dropped by the cleanup after the build (AB#8960).
             if (created != null && indexDefiningType != null)
             {
-                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, created.Name,
-                    collection.CollectionName, IndexState.Applied);
+                TrackServedBy(indexDefiningType, created.Name, indexName, collection.CollectionName);
                 foreach (var replacedName in created.Replaces)
                 {
                     _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, replacedName,
@@ -1367,9 +1463,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             if (legacy != null)
             {
                 _logger.LogInformation(
-                    "Built index '{IndexName}' of '{CollectionName}' in the tiebreak shape; the legacy index '{LegacyName}' " +
+                    "Index '{IndexName}' of '{CollectionName}' is in the tiebreak shape; the legacy index '{LegacyName}' " +
                     "is dropped after the collection's other indexes (AB#8960)",
-                    indexName, collection.CollectionName, legacy.Name);
+                    created?.Name ?? indexName, collection.CollectionName, legacy.Name);
                 if (indexDefiningType != null)
                 {
                     _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, legacy.Name,
@@ -1404,6 +1500,26 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 indexName, ckTypeIndex.IndexType, collection.CollectionName, ex.Message);
 
             // Don't rethrow - continue with other indexes
+        }
+    }
+
+    /// <summary>
+    ///     Records that <paramref name="servedBy" /> serves the index of <paramref name="indexDefiningType" />: state
+    ///     <c>Applied</c> under that name. When it is not the type's own expected name (adopted under another name, or
+    ///     shared with another type of the collection, AB#9342), the state under the expected name is removed - also a
+    ///     <c>Failed</c> one an earlier run left there.
+    /// </summary>
+    private void TrackServedBy(CkType? indexDefiningType, string servedBy, string expectedName, string collectionName)
+    {
+        if (indexDefiningType == null)
+        {
+            return;
+        }
+
+        _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, servedBy, collectionName, IndexState.Applied);
+        if (!string.Equals(servedBy, expectedName, StringComparison.Ordinal))
+        {
+            _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, expectedName, collectionName);
         }
     }
 

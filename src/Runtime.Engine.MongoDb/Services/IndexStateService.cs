@@ -72,16 +72,19 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
         }
 
         var indexStatesByType = _currentTracker.GetIndexStatesByType();
+        var removedByType = _currentTracker.GetRemovedStatesByType();
 
-        if (!indexStatesByType.Any())
+        if (!indexStatesByType.Any() && !removedByType.Any())
         {
             return;
         }
 
         var typesToUpdate = new List<CkType>();
 
-        foreach (var (typeId, newStates) in indexStatesByType)
+        foreach (var typeId in indexStatesByType.Keys.Union(removedByType.Keys))
         {
+            var newStates = indexStatesByType.GetValueOrDefault(typeId) ?? [];
+            var removedStateKeys = removedByType.GetValueOrDefault(typeId) ?? [];
             try
             {
                 var ckType = await ckTypes.DocumentAsync(session, typeId);
@@ -91,10 +94,17 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
                     var existingStates = ckType.IndexStates?.ToList() ?? new List<CkIndexState>();
                     var hadStates = ckType.IndexStates != null;
 
-                    // Remove only states that will be replaced by new states (match by name + collection)
+                    // Remove the states that will be replaced by new states and the ones removed in this run (an index
+                    // replaced, dropped or no longer serving the type, AB#9342) - match by name + collection
                     var newStateKeys = newStates.Select(s => (s.Name, s.CollectionName)).ToHashSet();
-                    existingStates.RemoveAll(existing =>
-                        newStateKeys.Contains((existing.Name, existing.CollectionName)));
+                    var removedCount = existingStates.RemoveAll(existing =>
+                        newStateKeys.Contains((existing.Name, existing.CollectionName)) ||
+                        removedStateKeys.Contains((existing.Name, existing.CollectionName)));
+                    if (newStates.Count == 0 && removedCount == 0)
+                    {
+                        // Nothing removed in this run is stored on the type: no write.
+                        continue;
+                    }
 
                     // Add new states
                     existingStates.AddRange(newStates);
@@ -186,6 +196,10 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
     {
         private readonly Dictionary<CkId<CkTypeId>, Dictionary<string, CkIndexState>> _indexStatesByType = new();
 
+        // AB#9342: the states removed in this run, so that a stored state (e.g. Failed from an earlier run) is removed
+        // from the type too, not only one tracked in this run.
+        private readonly Dictionary<CkId<CkTypeId>, HashSet<(string Name, string CollectionName)>> _removedByType = new();
+
         /// <summary>
         /// Adds or updates an index state for a specific CkType
         /// </summary>
@@ -200,10 +214,16 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
             // Use composite key of index name and collection name for uniqueness
             var key = $"{state.Name}_{state.CollectionName}";
             states[key] = state;
+
+            if (_removedByType.TryGetValue(typeId, out var removed))
+            {
+                removed.Remove((state.Name, state.CollectionName));
+            }
         }
 
         /// <summary>
-        /// Removes index states for a specific index name and collection
+        /// Removes index states for a specific index name and collection: the state tracked in this run and the one
+        /// stored on the type (removed by <see cref="IndexStateService.BulkUpdateIndexStatesAsync" />, AB#9342)
         /// </summary>
         public void RemoveIndexState(CkId<CkTypeId> typeId, string indexName, string collectionName)
         {
@@ -212,7 +232,21 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
                 var key = $"{indexName}_{collectionName}";
                 states.Remove(key);
             }
+
+            if (!_removedByType.TryGetValue(typeId, out var removed))
+            {
+                removed = [];
+                _removedByType[typeId] = removed;
+            }
+
+            removed.Add((indexName, collectionName));
         }
+
+        /// <summary>
+        /// Gets the states removed in this run, grouped by CkType
+        /// </summary>
+        public Dictionary<CkId<CkTypeId>, HashSet<(string Name, string CollectionName)>> GetRemovedStatesByType() =>
+            _removedByType.Where(kvp => kvp.Value.Count > 0).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
         /// <summary>
         /// Gets all tracked index states grouped by CkType

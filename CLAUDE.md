@@ -1035,6 +1035,18 @@ as 300 items of which only 35 were distinct. Rules:
   (`TiebreakIndexShape.CkIndexName`). Tests: `TiebreakIndexUpgradeTests.CkUpdate_ChangingTheFieldsOfATiebreakIndex_*`
   (60,000 entities, two changes of one slot, listIndexes observed during each import), `..._IsKept_NotRebuilt`,
   `CkUpdate_FailedBuildOfTheChangedIndex_KeepsTheOldIndex`.
+- **Two types, one key spec (AB#9342).** A CK Ascending index holds the field `ckTypeId`, not the type value, so two types
+  of one collection that index the same attributes produce the same key spec, and MongoDB holds one non-unique index per
+  key spec and options (a second one under another name is refused with 85). `UpdateIndexesForCollectionRoot` keeps a
+  per-collection-run record of the Ascending indexes kept or built (`SharedIndexKeySpecs`, key spec -> name): the first
+  type keeps or builds the index, every later type with the same keys is served by it (no createIndexes, state `Applied`
+  under the shared name, its own expected name's state removed, one information line), whatever the order. A legacy
+  index kept by an update without the upgrade is recorded too, so the second type keeps it as well instead of building a
+  tiebreak index next to it (that mixed state left the legacy index forever: the upgrade's build of the other type's
+  tiebreak index failed with 85). Unique/UniqueNotDeleted (per-type partial filter) and text indexes (merged) are never
+  recorded, nor indexes with foreign options. `IndexStateService.RemoveIndexState` removes the stored state of the type
+  too, not only the one tracked in the run. Tests: `SharedIndexKeySpecTests` (fresh tenant, mixed legacy/tiebreak state,
+  shared legacy index, a stored `Failed` state removed, unique indexes of two types; each in both type orders).
 - **Not changed:** unpaged queries keep the caller's sort; the association navigations (`MultipleOrigin*`), whose
   entity-driven path (AB#4369) relies on an index-backed `$sort` with a `$lookup` between `$sort` and `$limit`; the cached
   navigation path (page membership comes from the cached id list). Interface queries already break ties by rtId in their
