@@ -1057,15 +1057,20 @@ as 300 items of which only 35 were distinct. Rules:
   - **Reconcile.** After the cleanup the run reads the final index list once (`Reconcile`): every `Applied` state of a type
     of the collection (base chain, root, descendants) whose index is not in it is removed, stored or tracked - whatever
     dropped it (the cleanup's plain `DropIndexAsync`, a replaced text index, an earlier run aborted before it persisted its
-    states). Without the list (read failed) the states are persisted as tracked. Every index that serves a definition is
-    recorded `Applied`, also one found under its expected name with the definition (built by an earlier run, also one
-    aborted before it persisted its states), so the type keeps `Applied` under the index that serves it.
+    states). Without the list (read failed: a warning is logged) the states are persisted as tracked and a stale `Applied`
+    state can stay until the next run that reads the list. Every index that serves a definition is recorded `Applied`,
+    also one found under its expected name with the definition (built by an earlier run, also one aborted before it
+    persisted its states), and the legacy index that still serves a definition whose tiebreak build failed in the
+    upgrade (the type's own, or the one another type kept earlier in the run), so the type keeps `Applied` under the
+    index that serves it.
   - **A failure stays visible until the target shape exists.** `Failed` names the index a definition wants. An update that
     keeps a legacy index (`TrackServedBy(..., targetShape: false)`) removes only an `Applied` state under the expected name,
     so the `Failed` of an upgrade whose tiebreak build failed survives every CK import until a later build or upgrade
     succeeds, an index with the definition is found under the expected name, or an index in the target shape of another
-    type serves the definition (AB#9342). After a completed run a `Failed` state under a name no definition of the type
-    expected in that run (`ExpectIndex`) is removed (the definition is gone); after an aborted run the `Failed` states stay.
+    type serves the definition (AB#9342). Every definition expects its expected name and its alternate name
+    (`ExpectIndex`); after a completed run a `Failed` state under a name no definition of the type expected in that run is
+    removed (the definition is gone); after an aborted run the `Failed` states stay. A definition served in its target
+    shape removes a `Failed` state under its alternate name.
   - **A failure never replaces `Applied`.** The tracker keys by index name and collection; a `Failed` never overwrites an
     `Applied` the run recorded under that name. When another definition of the type is served by the index under this
     definition's expected name (two definitions whose existing indexes hold each other's keys) and its own build fails, the
@@ -1074,10 +1079,14 @@ as 300 items of which only 35 were distinct. Rules:
   - **No write without a change.** The merged states are compared with the stored ones by name, collection, state and
     error message; an unchanged run writes no CkType document (`AppliedAt` is ignored, an unchanged state keeps its stored
     `AppliedAt`). Before, every CK import rewrote the CkType documents of every type served by a kept, shared or adopted
-    index. The types are read with one query per collection run.
-  - **Log.** The sharing line of a legacy index built for another type names that type when a stored `Applied` state
-    identifies it (`FindStoredHolderAsync`: the type whose slot name the index carries, else the only type with such a
-    state), otherwise `(unknown)`; the stored states are read only for that line.
+    index. Only the `IndexStates` field is written (`$set`), never the whole document, so a CkType change committed
+    between the read and the write (a model import does not take `index_update_lock`) is not reverted. Persisting reads
+    the types of the collection with one query per collection run.
+  - **Log.** The sharing line of a legacy index built for another type names that type (`FindStoredHolderAsync`): the
+    type of the collection whose slot name the index carries, in every order of the types; for an index with another
+    name the only type with a stored `Applied` state under it, otherwise `(unknown)`. Only that last case reads the
+    stored types, once per collection run and separately from the read for persisting (another purpose, read at
+    another time).
   Tests: `SharedIndexKeySpecTests.IndexStates.cs` (upgrade dropping a shared legacy index, retry after an aborted upgrade,
   a failed tiebreak build through a normal update until the upgrade succeeds, a failed slot next to an adopted index, no
   write on an unchanged update and upgrade, holder identification; each in both orders). The failed builds are produced

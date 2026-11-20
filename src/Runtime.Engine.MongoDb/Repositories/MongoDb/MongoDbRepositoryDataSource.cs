@@ -1447,10 +1447,17 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var nameSuffix = legacyRule != null ? TiebreakIndexShape.NameSuffix : "";
         var indexName = baseName + nameSuffix;
 
-        // AB#9391: a Failed state under the expected name stays until an index in the target shape serves the definition.
+        // AB#9391: a Failed state of the definition - under the expected name, or under its alternate name when another
+        // definition of the type held the expected name (see the catch below) - stays until an index in the target shape
+        // serves the definition, also through runs that keep a legacy index.
+        var alternateName = indexDefiningType == null
+            ? indexName
+            : AlternateIndexName(indexName, ckTypeIndex,
+                UniqueTypeIdStrings(ckTypeIndex, collectionRootType, indexDefiningType));
         if (indexDefiningType != null)
         {
             _indexStateService.ExpectIndex(indexDefiningType.CkTypeId, indexName, collection.CollectionName);
+            _indexStateService.ExpectIndex(indexDefiningType.CkTypeId, alternateName, collection.CollectionName);
         }
 
         CkTypeIndexWithName? legacy = null;
@@ -1547,6 +1554,14 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 TrackServedBy(indexDefiningType, indexName, indexName, collection.CollectionName, targetShape: true);
             }
 
+            // AB#9391: the definition is served in its target shape: a failure an earlier run recorded under its
+            // alternate name is over (an Applied state there, the index built under that name, is kept).
+            if (indexDefiningType != null && created?.Name != alternateName)
+            {
+                _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, alternateName,
+                    collection.CollectionName, IndexState.Failed);
+            }
+
             if (legacy != null)
             {
                 _logger.LogInformation(
@@ -1576,17 +1591,28 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 // of the type is served by the index under this definition's expected name in this run (two definitions
                 // whose existing indexes hold each other's keys), the failure is recorded under the alternate name the
                 // definition's index gets while the expected name is taken - the name a later successful build uses.
-                var failedName = indexName;
-                if (_indexStateService.IsTrackedApplied(indexDefiningType.CkTypeId, indexName,
-                        collection.CollectionName))
+                var failedName = _indexStateService.IsTrackedApplied(indexDefiningType.CkTypeId, indexName,
+                    collection.CollectionName)
+                    ? alternateName
+                    : indexName;
+
+                // AB#9391: the legacy index the upgrade could not replace still serves the definition - the type's own
+                // or one another type kept earlier in this run after its build failed too: Applied under it, next to the
+                // failure of the build.
+                if (legacy != null && legacyRule != null)
                 {
-                    var uniqueTypeIds = ckTypeIndex.IndexType is IndexTypes.Unique or IndexTypes.UniqueNotDeleted
-                        ? CollectTypeIdsForIndex(collectionRootType, indexDefiningType,
-                                ckTypeIndex.IndexType.ToString())
-                            .Select(t => t.ToString()).ToHashSet(StringComparer.Ordinal)
-                        : null;
-                    failedName = AlternateIndexName(indexName, ckTypeIndex, uniqueTypeIds);
-                    _indexStateService.ExpectIndex(indexDefiningType.CkTypeId, failedName, collection.CollectionName);
+                    keySpecs?.Remember(legacyRule.LegacyIndex, legacy.Name,
+                        string.Equals(legacy.Name, baseName, StringComparison.Ordinal)
+                            ? SharedIndexKeySpecs.HolderOf(indexDefiningType)
+                            : SharedIndexKeySpecs.UnknownHolder);
+                }
+
+                var servingLegacy = legacy?.Name ??
+                                    (legacyRule != null ? keySpecs?.Holder(legacyRule.LegacyIndex)?.Name : null);
+                if (servingLegacy != null)
+                {
+                    TrackServedBy(indexDefiningType, servingLegacy, indexName, collection.CollectionName,
+                        targetShape: false);
                 }
 
                 _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, failedName,
@@ -1606,6 +1632,17 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // Don't rethrow - continue with other indexes
         }
     }
+
+    /// <summary>
+    ///     The types a Unique or UniqueNotDeleted index filters, as the strings <see cref="AlternateIndexName" /> hashes;
+    ///     null for every other index type.
+    /// </summary>
+    private HashSet<string>? UniqueTypeIdStrings(CkTypeIndex ckTypeIndex, CkTypeInfo? collectionRootType,
+        CkType? indexDefiningType) =>
+        ckTypeIndex.IndexType is IndexTypes.Unique or IndexTypes.UniqueNotDeleted
+            ? CollectTypeIdsForIndex(collectionRootType, indexDefiningType, ckTypeIndex.IndexType.ToString())
+                .Select(t => t.ToString()).ToHashSet(StringComparer.Ordinal)
+            : null;
 
     /// <summary>
     ///     AB#9391: the type a legacy index another type shares was built for, for the log line only: the type a stored

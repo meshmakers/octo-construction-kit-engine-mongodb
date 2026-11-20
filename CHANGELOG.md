@@ -16,20 +16,24 @@
   new child tenant run inside `Disable()`. Tests: `RuntimeQueryTimeLimitTests` (unit),
   `RuntimeQueryTimeLimitIntegrationTests` and `InterfaceQueryTimeLimitTests` (real MongoDB, including a query MongoDB
   stops with `MaxTimeMSExpired`).
-- AB#9391 Fix: the index states of the CK types (`CkType.IndexStates`) always name the indexes that exist. At the end of
+- AB#9391 Fix: the index states of the CK types (`CkType.IndexStates`) name the indexes that exist. At the end of
   every collection run of the index update and the tiebreak upgrade the states of all types of the collection are
-  reconciled with the final index list: an `Applied` state under an index that no longer exists is removed (the cleanup
+  reconciled with the final index list (when that list cannot be read, a warning is logged and the run persists only
+  the states it tracked; the next run that reads the list reconciles): an `Applied` state under an index that no longer exists is removed (the cleanup
   dropped a legacy index without removing its states, also when an earlier upgrade was aborted before it persisted them),
-  and every index that serves a definition is recorded `Applied`, also one found under its expected name.
+  and every index that serves a definition is recorded `Applied`, also one found under its expected name and the legacy
+  index that still serves a definition whose tiebreak build failed.
   A `Failed` tiebreak build of the upgrade stays visible through later CK imports that keep the legacy index (a normal
   update removed it) until an index in the target shape serves the definition; a `Failed` state no current definition
   expects is removed after a completed run. A failure never overwrites the `Applied` state of an existing index of the same
   name any more (two definitions of one type whose existing indexes hold each other's keys): it is recorded under the
-  alternate name of its slot. An index update or upgrade that changes no state writes no CkType document (before, every CK
-  import rewrote the CkType documents of types served by a kept, shared or adopted index); an unchanged state keeps its
-  `AppliedAt`. The log line of a legacy index built for another type names that type when a stored state identifies it,
-  otherwise `(unknown)`. No index is built or dropped differently; no CK model, index shape, name or public API change;
-  `CkIndexState` unchanged. Existing tenants converge on the next index update. Tests:
+  alternate name of its slot, which stays expected while a legacy index serves the slot. An index update or upgrade that
+  changes no state writes no CkType document (before, every CK import rewrote the CkType documents of types served by a
+  kept, shared or adopted index); an unchanged state keeps its `AppliedAt`, and a change writes only the `IndexStates`
+  field instead of replacing the CkType document. The log line of a legacy index built for another type names that type
+  (by the index's slot name, else by a stored state), otherwise `(unknown)`. No index is built or dropped differently; no
+  CK model, index shape, name or public API change; `CkIndexState` unchanged. Existing tenants converge on the next index
+  update that reads the final index list. Tests:
   `SharedIndexKeySpecTests.IndexStates.cs`.
 - AB#9342 Fix: two CK types of one collection with an Ascending index on the same attributes share one index. Both
   produce the key spec `{ckTypeId, attr..., _id, rtState}` and MongoDB holds one non-unique index per key spec, so the

@@ -5,6 +5,8 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 using Microsoft.Extensions.Logging;
 
+using MongoDB.Driver;
+
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 
 /// <summary>
@@ -24,7 +26,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 ///     name; the caller records a failure that collides with one under another name.</item>
 ///     <item>A run that changes nothing writes nothing: the merged states are compared with the stored ones by name,
 ///     collection, state and error message (not by <see cref="CkIndexState.AppliedAt" />); a state that is unchanged
-///     keeps its stored <c>AppliedAt</c>.</item>
+///     keeps its stored <c>AppliedAt</c>. A change writes only the <c>IndexStates</c> field of the CkType.</item>
 /// </list>
 /// </summary>
 internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> ckTypes, ILogger logger)
@@ -113,11 +115,11 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
     }
 
     /// <summary>
-    /// AB#9391: the stored state that names the type an index was built for, for the log of an index another type
-    /// shares: among the types of the collection with a stored <see cref="IndexState.Applied" /> state under
-    /// <paramref name="indexName" />, the one whose slot name (<c>&lt;collection name of the type&gt;_&lt;n&gt;</c>) the
-    /// index carries, else the only one; null when no stored state identifies it. The stored states are read once per
-    /// collection run, on the first call.
+    /// AB#9391: the type an index was built for, for the log of an index another type shares - the same in every order
+    /// of the types: the type of the collection whose slot name (<c>&lt;collection name of the type&gt;_&lt;n&gt;</c>) the
+    /// index carries; else, among the types of the collection with a stored <see cref="IndexState.Applied" /> state
+    /// under <paramref name="indexName" />, the only one; null when neither identifies it. The stored states are read
+    /// once per collection run, only when the name does not identify the type.
     /// </summary>
     public async Task<CkId<CkTypeId>?> FindStoredHolderAsync(IOctoSession session, string indexName,
         string collectionName)
@@ -127,14 +129,21 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
             return null;
         }
 
+        // The engine names a type's index after the type's slot: that type was it built for, whichever type of the
+        // collection processes the index first (no read).
+        var bySlotName = _currentTracker.CollectionTypeIds.Where(t => IsSlotNameOf(indexName, t)).ToList();
+        if (bySlotName.Count == 1)
+        {
+            return bySlotName[0];
+        }
+
         _currentTracker.StoredTypes ??= (await LoadTypesAsync(session, _currentTracker.CollectionTypeIds)).ToList();
         var candidates = _currentTracker.StoredTypes
             .Where(t => t.IndexStates?.Any(s => s.State == IndexState.Applied &&
                                                string.Equals(s.Name, indexName, StringComparison.Ordinal) &&
                                                SameCollection(s.CollectionName, collectionName)) == true)
             .ToList();
-        var owner = candidates.FirstOrDefault(t => IsSlotNameOf(indexName, t.CkTypeId));
-        return owner?.CkTypeId ?? (candidates.Count == 1 ? candidates[0].CkTypeId : null);
+        return candidates.Count == 1 ? candidates[0].CkTypeId : null;
     }
 
     /// <summary>
@@ -200,7 +209,14 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
         {
             try
             {
-                await ckTypes.ReplaceManyAsync(session, typesToUpdate);
+                // AB#9391: only the IndexStates field is written. Replacing the whole document would revert a CkType
+                // change (e.g. of a model import, which does not take the index update lock) committed between the
+                // read above and this write.
+                foreach (var ckType in typesToUpdate)
+                {
+                    await ckTypes.UpdateOneAsync(session, ckType.CkTypeId,
+                        Builders<CkType>.Update.Set(t => t.IndexStates, ckType.IndexStates));
+                }
             }
             catch (Exception ex)
             {
