@@ -8,7 +8,7 @@
   limit). **Opt-in per host:** `AddRuntimeQueryTimeLimit()` on the runtime engine builder; the host binds
   `RuntimeQueryOptions` (section `RuntimeQuery`, `MaxTimeMs`, default 120,000 ms, 0 = off). Without the call nothing
   changes. Covered: the queries by type, by id, by type with navigation and by CK interface, and their counts
-  (`SingleOriginQuery`, `RtInterfaceQueryExecutor`). Not covered yet: association and deep-graph queries
+  (`SingleOriginQuery`, `RtInterfaceQueryExecutor`), also the hinted deep page and the capped count of AB#9138. Not covered yet: association and deep-graph queries
   (`MultipleOrigin*`). A query that completes after more than 80 % of its limit is logged as a warning (tenant, CK type,
   duration, limit). Batch paths override the limit at the call site: `using (RuntimeQueryTimeLimit.Override(TimeSpan))`
   or `using (RuntimeQueryTimeLimit.Disable())`, an `AsyncLocal` scope that holds across `await` and for the tasks started

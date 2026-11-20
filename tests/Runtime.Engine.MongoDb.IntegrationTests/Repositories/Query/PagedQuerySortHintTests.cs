@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
+
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -8,6 +11,9 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
+
+using Microsoft.Extensions.Options;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -232,6 +238,62 @@ public class PagedQuerySortHintTests(ImportTestCkModelFixture fixture)
                               rejectedPlans: [ { stage: 'SORT', inputStage: { stage: 'IXSCAN', indexName: 'other' } } ] } }
             """);
         Assert.Equal(("test_name_legacy", false), Summarize(rejectedSort));
+    }
+
+    /// <summary>
+    ///     AB#8897 with AB#9138: the hinted page read and the capped count run under the runtime query time limit, and the
+    ///     page sends MongoDB both its hint and the limit as <c>maxTimeMS</c> (read back from the profiler).
+    /// </summary>
+    [Fact]
+    public async Task HintedPage_AndCappedCount_CarryTheTimeLimit_AndThePageKeepsItsHint()
+    {
+        await WithSeededContinentsAsync(async (repository, raw, names) =>
+        {
+            var limit = TimeSpan.FromSeconds(120);
+            var observed = new ConcurrentQueue<(string Operation, TimeSpan? MaxTime)>();
+            repository.QueryTimeLimitSettings = new RuntimeQueryTimeLimitSettings(limit);
+            repository.RuntimeQueryMaxTimeObserver = (operation, maxTime) => observed.Enqueue((operation, maxTime));
+            try
+            {
+                var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
+                IReadOnlyList<RtContinent>? items = null;
+                SingleOriginQuery<OctoObjectId, RtContinent>.ExecutedPipeline? executed = null;
+                var profiled = (await MongoProfiler.ProfileAggregatesAsync(config,
+                        raw.Database.DatabaseNamespace.DatabaseName,
+                        async () => (items, executed) = await PageAsync(repository, SortByName(), DeepSkip, 10)))
+                    .Where(op => op["ns"].AsString == raw.CollectionNamespace.FullName)
+                    .ToList();
+
+                Assert.NotNull(items);
+                Assert.NotNull(executed);
+                Assert.Equal(NameIndex, executed.Hint);
+                Assert.Equal(names.Skip(DeepSkip).Take(10), items.Select(c => c.Name));
+                var page = Assert.Single(profiled);
+                Assert.True(page["command"].AsBsonDocument.Contains("hint"));
+                Assert.Equal(120_000, page["command"]["maxTimeMS"].ToInt64());
+
+                // A filter with an index of its own: the capped count decides about the hint, also under the limit.
+                await raw.Indexes.CreateOneAsync(new CreateIndexModel<BsonDocument>(
+                        new BsonDocument { { "ckTypeId", 1 }, { "rtCreationDateTime", 1 }, { "rtState", 1 } },
+                        new CreateIndexOptions { Name = "test_created" }),
+                    cancellationToken: TestContext.Current.CancellationToken);
+                CollectionIndexCache.Invalidate(raw);
+                observed.Clear();
+                var (_, _, reads, _) = await PageWithReadsAsync(repository, SortByName()
+                        .FieldFilter("RtCreationDateTime", FieldFilterOperator.GreaterEqualThan,
+                            new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc)),
+                    DeepSkip, false);
+
+                Assert.Equal(new[] { "capped count", "page" }, reads);
+                Assert.Equal(new[] { "capped count", "page" }, observed.Select(o => o.Operation));
+                Assert.All(observed, o => Assert.Equal(limit, o.MaxTime));
+            }
+            finally
+            {
+                repository.QueryTimeLimitSettings = null;
+                repository.RuntimeQueryMaxTimeObserver = null;
+            }
+        });
     }
 
     // ---- helpers ------------------------------------------------------------------------------------------------

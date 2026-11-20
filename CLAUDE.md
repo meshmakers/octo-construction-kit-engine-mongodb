@@ -1223,7 +1223,8 @@ count of a paged query each get the full limit). Rules to keep:
 - **One path per operation.** `SingleOriginQuery.AggregateToListAsync` and `RtInterfaceQueryExecutor.RunLimitedAsync`
   run every pipeline and count of a runtime query through `RuntimeQueryTimeLimiter`, which puts the limit into
   `AggregateOptions` / `CountOptions`, turns `MongoExecutionTimeoutException` into `RuntimeQueryTimeoutException` and
-  logs a warning above 80 % of the limit. A new MongoDB call in these query classes goes through them too.
+  logs a warning above 80 % of the limit. A new MongoDB call in these query classes goes through them too; the hinted page read and the capped count of
+  AB#9138 do (hint and limit in one `AggregateOptions`, the retry without the hint as well).
 - **Opt-in per host.** `TenantRepository.CreateRuntimeQueryTimeLimiter` returns null (no limit, the code path of
   before) when the host did not register `RuntimeQueryTimeLimitSettings` and no override scope is active. CK queries
   never get a limiter.
