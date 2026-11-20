@@ -16,6 +16,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Defaults;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -323,6 +324,26 @@ public static class RuntimeEngineBuilderExtensions
     {
         builder.Services.AddOptions<Meshmakers.Octo.Runtime.Engine.MongoDb.DisplayRules.DisplayRuleSweepOptions>();
         builder.Services.AddHostedService<Meshmakers.Octo.Runtime.Engine.MongoDb.DisplayRules.DisplayRuleSweepHostedService>();
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Applies the server-side time limit to the runtime-entity queries of this host (AB#8897): every query and count
+    /// by type, by id, by type with navigation and by CK interface is sent to MongoDB with <c>maxTimeMS</c> =
+    /// <see cref="RuntimeQueryOptions.MaxTimeMs" /> (default 120 s, 0 = off). A query that exceeds it ends with
+    /// <see cref="RuntimeQueryTimeoutException" />; one that completes after more than 80 % of it is logged as a warning.
+    /// Batch paths override the limit at the call site with <see cref="RuntimeQueryTimeLimit" />.
+    /// </summary>
+    /// <remarks>
+    /// Without this call runtime queries run without a limit (opt-in per host). Bind the options from your
+    /// configuration, e.g. the <c>RuntimeQuery</c> section (<see cref="RuntimeQueryOptions.SectionName" />); unbound
+    /// they keep the default. Association and deep-graph queries are not covered yet.
+    /// </remarks>
+    public static IRuntimeEngineBuilder AddRuntimeQueryTimeLimit(this IRuntimeEngineBuilder builder)
+    {
+        builder.Services.AddOptions<RuntimeQueryOptions>();
+        builder.Services.TryAddSingleton<RuntimeQueryTimeLimitSettings>();
 
         return builder;
     }

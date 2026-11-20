@@ -3,6 +3,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 
 using MongoDB.Bson;
@@ -95,8 +96,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         meter.SetCheckpoint("collect ids pipeline created");
 
         var pipeline = PipelineDefinition<TEntity, BsonDocument>.Create(pipelineStageDefinitions);
-        var cursor = _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline);
-        var results = await cursor.ToListAsync();
+        var results = await AggregateToListAsync(octoSession, "collect ids", pipeline);
 
         meter.SetCheckpoint("collect ids executed");
 
@@ -140,7 +140,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
         meter.SetCheckpoint("count pipeline created");
 
-        var countResult = await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).FirstOrDefaultAsync();
+        var countResult = (await AggregateToListAsync(octoSession, "count", pipeline)).FirstOrDefault();
         Observe<AggregateCountResult>("count", stages, countResult == null ? 0 : 1);
 
         meter.SetCheckpoint("count executed");
@@ -181,7 +181,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         meter.SetCheckpoint("enrichment for ids pipeline created");
 
         var pipeline = PipelineDefinition<TEntity, TEntity>.Create(pipelineStages);
-        var result = await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync();
+        var result = await AggregateToListAsync(octoSession, "enrichment", pipeline);
 
         meter.SetCheckpoint("enrichment for ids executed");
 
@@ -253,6 +253,36 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
         /// <summary>The index of a hint the server refused before the read was repeated without it, or null.</summary>
         public string? RefusedHint { get; init; }
+    }
+
+    /// <summary>
+    ///     The time limit of the MongoDB operations of this query (AB#8897): every pipeline it runs carries the limit
+    ///     as <c>maxTimeMS</c>, a time-out ends as <see cref="RuntimeQueryTimeoutException" />. Null runs without a limit
+    ///     (CK queries, hosts without <c>AddRuntimeQueryTimeLimit</c>).
+    /// </summary>
+    internal RuntimeQueryTimeLimiter? TimeLimiter { get; set; }
+
+    /// <summary>
+    ///     Runs <paramref name="pipeline" /> and reads its result, under <see cref="TimeLimiter" /> when there is one,
+    ///     hinted by the key pattern <paramref name="hint" /> when given (AB#9138).
+    /// </summary>
+    private Task<List<TOutput>> AggregateToListAsync<TOutput>(IOctoSession octoSession, string operation,
+        PipelineDefinition<TEntity, TOutput> pipeline, BsonDocument? hint = null)
+    {
+        if (TimeLimiter == null)
+        {
+            return hint == null
+                ? _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync()
+                : _mongoDbDataSourceCollection
+                    .Aggregate(octoSession, pipeline, new AggregateOptions { Hint = hint }).ToListAsync();
+        }
+
+        return TimeLimiter.RunAsync(operation, maxTime =>
+        {
+            var options = RuntimeQueryTimeLimiter.CreateAggregateOptions(maxTime);
+            options.Hint = hint;
+            return _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline, options).ToListAsync();
+        });
     }
 
     private void Observe<TOutput>(string purpose, IReadOnlyList<IPipelineStageDefinition> stages, int documentCount,
@@ -360,9 +390,8 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     {
         var stages = CreateCountPipelineStageDefinitions().ToList();
         stages.Insert(stages.Count - 1, PipelineStageDefinitionBuilder.Limit<TEntity>(limit));
-        var countResult = await _mongoDbDataSourceCollection
-            .Aggregate(octoSession, PipelineDefinition<TEntity, AggregateCountResult>.Create(stages))
-            .FirstOrDefaultAsync();
+        var countResult = (await AggregateToListAsync(octoSession, "capped count",
+            PipelineDefinition<TEntity, AggregateCountResult>.Create(stages))).FirstOrDefault();
         Observe<AggregateCountResult>("capped count", stages, countResult == null ? 0 : 1);
         return countResult?.Count ?? 0;
     }
@@ -381,20 +410,17 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         var pipeline = PipelineDefinition<TEntity, TEntity>.Create(pageStages);
         if (hint == null)
         {
-            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync(), null, null);
+            return (await AggregateToListAsync(octoSession, "page", pipeline), null, null);
         }
 
         try
         {
-            var options = new AggregateOptions { Hint = hint.Value.Key };
-            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline, options).ToListAsync(),
-                hint.Value.Name, null);
+            return (await AggregateToListAsync(octoSession, "page", pipeline, hint.Value.Key), hint.Value.Name, null);
         }
         catch (MongoCommandException exception) when (IsUnusableHint(exception))
         {
             CollectionIndexCache.Invalidate(_mongoDbDataSourceCollection.GetMongoCollection());
-            return (await _mongoDbDataSourceCollection.Aggregate(octoSession, pipeline).ToListAsync(), null,
-                hint.Value.Name);
+            return (await AggregateToListAsync(octoSession, "page", pipeline), null, hint.Value.Name);
         }
     }
 
@@ -449,8 +475,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             meter.SetCheckpoint("definitions created");
 
             var pipelineDefinition = PipelineDefinition<TEntity, TEntity>.Create(pipelineStageDefinitions);
-            var resultNoTotalCount = await _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition)
-                .ToListAsync();
+            var resultNoTotalCount = await AggregateToListAsync(octoSession, "items", pipelineDefinition);
             Observe<TEntity>("items", pipelineStageDefinitions, resultNoTotalCount.Count);
 
             meter.SetCheckpoint("query executed");
@@ -490,9 +515,8 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             enrichmentPipelineStages.AddRange(CreatePageSortStageDefinitions(idTiebreak));
             enrichmentPipelineStages.AddRange(enrichmentStages);
 
-            pageEntities = await _mongoDbDataSourceCollection
-                .Aggregate(octoSession, PipelineDefinition<TEntity, TEntity>.Create(enrichmentPipelineStages))
-                .ToListAsync();
+            pageEntities = await AggregateToListAsync(octoSession, "enrichment",
+                PipelineDefinition<TEntity, TEntity>.Create(enrichmentPipelineStages));
             Observe<TEntity>("enrichment", enrichmentPipelineStages, pageEntities.Count);
 
             meter.SetCheckpoint("enrichment executed");

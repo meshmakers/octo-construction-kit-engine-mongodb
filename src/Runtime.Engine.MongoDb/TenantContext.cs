@@ -26,6 +26,7 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
@@ -275,7 +276,12 @@ public class TenantContext : ITenantContext
                 return BlueprintApplicationResult.Failed(operationResult);
             }
 
-            var result = await blueprintService.ApplyBlueprintAsync(tenantId, blueprintId);
+            BlueprintApplicationResult result;
+            // A blueprint install reads and writes whole types: no runtime query time limit (batch path).
+            using (RuntimeQueryTimeLimit.Disable())
+            {
+                result = await blueprintService.ApplyBlueprintAsync(tenantId, blueprintId);
+            }
 
             if (!result.IsSuccess)
             {
@@ -492,6 +498,8 @@ public class TenantContext : ITenantContext
             "Running CK model migrations for '{CkModelId}' in tenant '{TenantId}'",
             importedModelId, tenantId);
 
+        // A CK migration reads and rewrites whole types: no runtime query time limit (batch path).
+        using var noTimeLimit = RuntimeQueryTimeLimit.Disable();
         var result = await ckModelUpgradeService.UpgradeModelsAsync(
             tenantId,
             new[] { modelRange },
@@ -537,6 +545,8 @@ public class TenantContext : ITenantContext
         // Pass null for previousSchemaVersions so the upgrade service uses MigrationHistory
         // as the source of truth. If we passed the current schema version, it would override
         // the MigrationHistory version and skip the migration.
+        // A CK migration reads and rewrites whole types: no runtime query time limit (batch path).
+        using var noTimeLimit = RuntimeQueryTimeLimit.Disable();
         var result = await ckModelUpgradeService.UpgradeModelsAsync(
             TenantId,
             new[] { modelRange },
@@ -3797,7 +3807,8 @@ public class TenantContext : ITenantContext
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
             GetRepositoryAuditEventSink(),
-            _loggerFactory.CreateLogger<TenantRepository>());
+            _loggerFactory.CreateLogger<TenantRepository>(),
+            _serviceProvider.GetService<RuntimeQueryTimeLimitSettings>());
         return tenantRepository;
     }
 
@@ -3811,7 +3822,8 @@ public class TenantContext : ITenantContext
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
             GetRepositoryAuditEventSink(),
-            _loggerFactory.CreateLogger<TenantRepository>());
+            _loggerFactory.CreateLogger<TenantRepository>(),
+            _serviceProvider.GetService<RuntimeQueryTimeLimitSettings>());
         return tenantRepository;
     }
 

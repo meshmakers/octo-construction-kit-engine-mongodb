@@ -1213,6 +1213,31 @@ but **throws** for a dependency the tenant does not have, which becomes message 
 the caller). Consumer: asset repository `Models/ValidateCk` / MCP `validate_ck_model`. Tests: `CkModelImportGuard/ValidateCkModelTests` (valid model
 not imported and the CK collections unchanged, missing dependency, 91 with the import's text, 126).
 
+## Runtime query time limit (AB#8897)
+
+`RuntimeQueries/`: a host that calls `AddRuntimeQueryTimeLimit()` (the asset repository) sends every runtime-entity query
+and count by type, by id, by type with navigation and by CK interface to MongoDB with `maxTimeMS` =
+`RuntimeQueryOptions.MaxTimeMs` (section `RuntimeQuery`, default 120,000, 0 = off), per MongoDB operation (page and
+count of a paged query each get the full limit). Rules to keep:
+
+- **One path per operation.** `SingleOriginQuery.AggregateToListAsync` and `RtInterfaceQueryExecutor.RunLimitedAsync`
+  run every pipeline and count of a runtime query through `RuntimeQueryTimeLimiter`, which puts the limit into
+  `AggregateOptions` / `CountOptions`, turns `MongoExecutionTimeoutException` into `RuntimeQueryTimeoutException` and
+  logs a warning above 80 % of the limit. A new MongoDB call in these query classes goes through them too; the hinted page read and the capped count of
+  AB#9138 do (hint and limit in one `AggregateOptions`, the retry without the hint as well).
+- **Opt-in per host.** `TenantRepository.CreateRuntimeQueryTimeLimiter` returns null (no limit, the code path of
+  before) when the host did not register `RuntimeQueryTimeLimitSettings` and no override scope is active. CK queries
+  never get a limiter.
+- **Overrides are call-site scopes**, never a global switch: `RuntimeQueryTimeLimit.Override(TimeSpan)` /
+  `Disable()` (`AsyncLocal`, holds across `await` and for tasks started inside, restores the previous limit on dispose).
+  In this repository: the CK migrations of `TenantContext` (`RunCkModelMigrationsForImportAsync`,
+  `RetryPendingMigrationsAsync`) and the blueprint of a new child tenant run inside `Disable()`.
+- **Not covered yet**: the association and deep-graph queries (`MultipleOrigin*`), follow-up story under AB#8793.
+- Tests: `StreamData.UnitTests/RuntimeQueries/RuntimeQueryTimeLimitTests`,
+  `Repositories/Query/RuntimeQueryTimeLimitIntegrationTests` (a `$range`/`$unwind` fan-out that MongoDB stops with
+  `MaxTimeMSExpired`; server-side JavaScript is interrupted with another error and is not a valid fixture),
+  `InterfaceQuery/InterfaceQueryTimeLimitTests`.
+
 ## Key Classes
 
 - `TenantRepository` - Main repository for tenant-specific data operations

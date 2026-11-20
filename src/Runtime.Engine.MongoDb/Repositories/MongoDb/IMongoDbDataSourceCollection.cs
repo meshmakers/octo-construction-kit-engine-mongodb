@@ -51,6 +51,9 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
     IAsyncCursor<TOutput> Aggregate<TOutput>(IOctoSession session,
         PipelineDefinition<TDocument, TOutput> pipelineDefinition);
 
+    /// <summary>
+    ///     Runs the pipeline with <paramref name="options" />, e.g. the <c>maxTimeMS</c> of a runtime query (AB#8897).
+    /// </summary>
     IAsyncCursor<TOutput> Aggregate<TOutput>(IOctoSession session,
         PipelineDefinition<TDocument, TOutput> pipelineDefinition, AggregateOptions? options);
 
