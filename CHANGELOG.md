@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins the persisted answers of the engine change "a missing
+  record answers not found before its payload is validated" (engine PR 383): with the new engine a missing rtId with
+  an invalid payload, a missing association origin and a record addressed under a sibling type answer
+  `EntityNotFoundException` (before: a validation error, the rule engine's `RuntimeRepositoryException`, or for a sibling
+  type no not-found answer at all), and a delete by an abstract type of a missing rtId answers not found instead of returning. No
+  code change in this repository; the test needs the engine version that contains PR 383.
 - AB#9594 Chore: NuGet packages raised to the newest versions within the .NET 10 line: MongoDB.Driver and MongoDB.Bson
   3.14.1 (same as the engine), Npgsql 10.0.4 (11.x moves with the .NET 11 line, AB#9580), Dapper 2.1.100, Polly.Core
   8.9.1, Snappier 1.3.2, Microsoft.OpenApi 2.13.1, NLog.Web.AspNetCore 6.3.0, Swashbuckle.AspNetCore.SwaggerUI 11.0.1,
