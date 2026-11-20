@@ -793,6 +793,13 @@ public class TenantContext : ITenantContext
                     "the database concurrently, after the namespace check of this attach");
             }
 
+            if (claim.Quarantined)
+            {
+                throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                    "the database is quarantined by a restore that did not complete (it may hold data the restore " +
+                    "never cleaned); an operator must drop it before it can be attached");
+            }
+
             claimedByThisCall = transactionSession == null && !hadOwnMarkerBefore;
 
             // Add the new tenant as child tenant of the current one
@@ -834,7 +841,7 @@ public class TenantContext : ITenantContext
             if (claimedByThisCall)
             {
                 await GetTenantOwnershipStore().TryRemoveClaimAsync(normalizedDatabaseName, OwnerInstanceIdentity,
-                    normalizedTenantId, claimTime);
+                    normalizedTenantId, claimTime, claimId: null);
             }
 
             // Attach reuses an already existing database, so it is never dropped here; only the

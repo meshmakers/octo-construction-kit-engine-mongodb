@@ -18,6 +18,29 @@ public class CommandResult
     /// </summary>
     public bool TenantCreatedNotificationFailed { get; set; }
 
+    /// <summary>
+    ///     A restore: the platform-only values it left out of the restored tenant, as paths
+    ///     (<c>&lt;CK type&gt;@&lt;rtId&gt;.&lt;attribute path&gt;</c> for an attribute, <c>&lt;CK type&gt;@&lt;rtId&gt;</c>
+    ///     for a deleted entity), never the values. A queued pipeline execution
+    ///     that lost its sealed caller fails when it is leased. Empty for every other command.
+    /// </summary>
+    public IReadOnlyList<string> RemovedPlatformOnlyValues { get; set; } = [];
+
+    /// <summary>
+    ///     The command was cancelled before it finished and its process was told to stop; whether it stopped is
+    ///     <see cref="ProcessMayStillRun" />. Only a cancellation sets it, a timeout or an exception does not.
+    /// </summary>
+    public bool Cancelled { get; set; }
+
+    /// <summary>
+    ///     The command's process could not be confirmed stopped (the kill failed or it did not exit in time): it may still
+    ///     write. A restore drops its target database and claims it again, quarantined, so no attach accepts it.
+    /// </summary>
+    public bool ProcessMayStillRun { get; set; }
+
+    /// <summary>The command's process was never started, so it wrote nothing. A restore leaves its target as it was.</summary>
+    public bool ProcessNeverStarted { get; set; }
+
     public static CommandResult Failure(string error)
     {
         return new CommandResult

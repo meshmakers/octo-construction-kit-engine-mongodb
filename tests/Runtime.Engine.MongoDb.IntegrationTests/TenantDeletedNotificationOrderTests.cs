@@ -5,6 +5,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 
@@ -438,7 +439,8 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
                 dropExistingTenant: true, attachTenant: true);
 
             Assert.False(result.Success);
-            Assert.Equal("Exception during restore: mongorestore crashed (test)", result.Error);
+            Assert.StartsWith("Exception during restore: mongorestore crashed (test)", result.Error, StringComparison.Ordinal);
+            Assert.Contains($"The target database '{tenantId}' was dropped", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("ClearCache", result.Output, StringComparison.Ordinal);
         }
         finally
@@ -459,7 +461,9 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
         return new TenantBackupService(fixture.GetSystemContext(), repositoryOps,
             NullLogger<TenantBackupService>.Instance, provider.GetRequiredService<TenantOwnershipStore>(),
             provider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
-            provider.GetRequiredService<SystemDatabaseMarkerStore>(), provider.GetService<ITenantLifecycleStore>(),
+            provider.GetRequiredService<SystemDatabaseMarkerStore>(),
+            provider.GetRequiredService<Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Restore.RestoredPlatformOnlyValueRemover>(),
+            provider.GetService<ITenantLifecycleStore>(),
             provider.GetService<IOptions<OctoSystemConfiguration>>());
     }
 
@@ -541,6 +545,15 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
         {
             // Cleanup only.
         }
+
+        await DropLeftoverDatabaseAsync(tenantId);
+    }
+
+    /// <summary>A restore that did not complete leaves its quarantined target database unregistered.</summary>
+    private async Task DropLeftoverDatabaseAsync(string databaseName)
+    {
+        var adminRepositoryAccess = fixture.Provider!.GetRequiredService<IAdminRepositoryAccess>();
+        await adminRepositoryAccess.GetRepositoryClient(databaseName).DropRepositoryAsync(databaseName);
     }
 
     private static void DeleteFile(string path)

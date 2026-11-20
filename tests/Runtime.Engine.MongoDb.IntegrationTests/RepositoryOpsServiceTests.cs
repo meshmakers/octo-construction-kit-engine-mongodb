@@ -169,5 +169,134 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture)
         }
     }
 
+    [Fact]
+    public async Task ExecuteCommandAsync_WhenTheProgramCannotStart_ReportsThatTheProcessNeverStarted()
+    {
+        var missingProgram = $"octo-missing-program-{Guid.NewGuid():N}";
+
+        var result = await _service.ExecuteCommandAsync(missingProgram, ["--version"]);
+
+        result.Success.Should().BeFalse();
+        result.ProcessNeverStarted.Should().BeTrue();
+        result.ProcessMayStillRun.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteCommandAsync_WhenTheProgramRan_DoesNotReportThatItNeverStarted()
+    {
+        var result = await _service.ExecuteCommandAsync("bash", ["-c", "exit 3"]);
+        Assert.SkipWhen(result.ProcessNeverStarted, "bash is not available on this host");
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(3);
+        result.ProcessNeverStarted.Should().BeFalse();
+    }
+
+    #endregion
+
+    #region Stopping a running process
+
+    [Fact]
+    public async Task ExecuteCommandAsync_WhenCancelled_StopsTheWholeProcessTree()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Reads the process state from /proc");
+        var childPidFile = Path.Combine(Path.GetTempPath(), $"ops_cancel_{Guid.NewGuid():N}.pid");
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var commandTask = _service.ExecuteCommandAsync("bash",
+                ["-c", $"sleep 120 & echo $! > '{childPidFile}'; wait"], timeout: TimeSpan.FromMinutes(5),
+                cancellationToken: cancellation.Token);
+            var childPid = await WaitForChildPidAsync(childPidFile);
+
+            await cancellation.CancelAsync();
+            var result = await commandTask.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+
+            result.Success.Should().BeFalse();
+            result.Cancelled.Should().BeTrue();
+            result.ProcessMayStillRun.Should().BeFalse();
+            (await IsStoppedAsync(childPid)).Should().BeTrue("the child of the cancelled command must not keep running");
+        }
+        finally
+        {
+            File.Delete(childPidFile);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteCommandAsync_WhenTimedOut_StopsTheWholeProcessTree()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Reads the process state from /proc");
+        var childPidFile = Path.Combine(Path.GetTempPath(), $"ops_timeout_{Guid.NewGuid():N}.pid");
+        try
+        {
+            var result = await _service.ExecuteCommandAsync("bash",
+                ["-c", $"sleep 120 & echo $! > '{childPidFile}'; wait"], timeout: TimeSpan.FromSeconds(2));
+
+            var childPid = await WaitForChildPidAsync(childPidFile);
+            result.Success.Should().BeFalse();
+            result.Cancelled.Should().BeFalse();
+            result.ProcessMayStillRun.Should().BeFalse();
+            result.Error.Should().Contain("timed out");
+            (await IsStoppedAsync(childPid)).Should().BeTrue("the child of the timed-out command must not keep running");
+        }
+        finally
+        {
+            File.Delete(childPidFile);
+        }
+    }
+
+    private static async Task<int> WaitForChildPidAsync(string childPidFile)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(childPidFile) &&
+                int.TryParse((await File.ReadAllTextAsync(childPidFile)).Trim(), out var childPid))
+            {
+                return childPid;
+            }
+
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException($"The command did not write its child's pid to {childPidFile}");
+    }
+
+    private static async Task<bool> IsStoppedAsync(int processId)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            var statLine = await TryReadProcessStatAsync(processId);
+            if (statLine is null)
+            {
+                return true;
+            }
+
+            var processState = statLine[(statLine.LastIndexOf(')') + 2)..].Split(' ')[0];
+            if (processState == "Z" || processState == "X")
+            {
+                return true;
+            }
+
+            await Task.Delay(100);
+        }
+
+        return false;
+    }
+
+    private static async Task<string?> TryReadProcessStatAsync(int processId)
+    {
+        try
+        {
+            return await File.ReadAllTextAsync($"/proc/{processId}/stat");
+        }
+        catch (Exception readException) when (readException is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
     #endregion
 }

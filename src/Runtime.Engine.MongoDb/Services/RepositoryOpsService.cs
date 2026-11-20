@@ -16,6 +16,8 @@ public class RepositoryOpsService(
     ILogger<RepositoryOpsService> logger)
     : IRepositoryOpsService
 {
+    private static readonly TimeSpan ProcessExitWaitTimeout = TimeSpan.FromSeconds(30);
+
     private readonly Guid _instanceId = Guid.NewGuid();
 
     #region MongoDB Shell Operations
@@ -73,10 +75,24 @@ public class RepositoryOpsService(
     public async Task<CommandResult> ExecuteMongoRestoreAsync(MongoRestoreOptions options, TimeSpan? timeout = null,
         CancellationToken? cancellationToken = null)
     {
-        var args = MongoToolArguments.BuildMongoRestoreArguments(options,
-            GetConnectionString(options.Database).ToString(),
-            systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword,
-            systemConfigurationOptions.Value.MongoRestoreBatchSize);
+        IReadOnlyList<string> args;
+        try
+        {
+            args = MongoToolArguments.BuildMongoRestoreArguments(options,
+                GetConnectionString(options.Database).ToString(),
+                systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword,
+                systemConfigurationOptions.Value.MongoRestoreBatchSize);
+        }
+        catch (Exception argumentException)
+        {
+            logger.LogError(argumentException,
+                "The mongorestore arguments for database '{DatabaseName}' could not be built; mongorestore was not started",
+                options.Database);
+            var notStartedResult =
+                CommandResult.Failure($"mongorestore was not started: {argumentException.Message}");
+            notStartedResult.ProcessNeverStarted = true;
+            return notStartedResult;
+        }
 
         logger.LogInformation("Executing mongorestore with options: {Options}",
             MongoToolArguments.ToDisplayString("mongorestore", args));
@@ -180,12 +196,14 @@ public class RepositoryOpsService(
             }
         };
 
+        var processStarted = false;
         try
         {
             logger.LogDebug("Starting process: {Command} (Timeout: {TimeoutMs}ms)",
                 displayCommand, timeoutMs);
 
             process.Start();
+            processStarted = true;
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
@@ -200,19 +218,7 @@ public class RepositoryOpsService(
             {
                 logger.LogWarning("Process timed out after {TimeoutMs}ms: {Command}",
                     timeoutMs, displayCommand);
-
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(true); // Kill the entire process tree
-                        await process.WaitForExitAsync(); // Wait for cleanup
-                    }
-                }
-                catch (Exception killEx)
-                {
-                    logger.LogError(killEx, "Error killing timed out process");
-                }
+                var stoppedAfterTimeout = await StopProcessTreeAsync(process, displayCommand);
 
                 return new CommandResult
                 {
@@ -221,7 +227,8 @@ public class RepositoryOpsService(
                     Output = output.ToString(),
                     Error = error + $"\nProcess timed out after {timeoutMs}ms",
                     Duration = duration,
-                    Command = displayCommand
+                    Command = displayCommand,
+                    ProcessMayStillRun = !stoppedAfterTimeout
                 };
             }
 
@@ -240,12 +247,83 @@ public class RepositoryOpsService(
                 Command = displayCommand
             };
         }
+        catch (OperationCanceledException) when (processStarted)
+        {
+            logger.LogWarning("Process cancelled, stopping its process tree: {Command}", displayCommand);
+            var stoppedAfterCancellation = await StopProcessTreeAsync(process, displayCommand);
+            var cancelledResult = CommandResult.Failure($"Process '{fileName}' was cancelled").WithCommand(displayCommand);
+            cancelledResult.Cancelled = true;
+            cancelledResult.ProcessMayStillRun = !stoppedAfterCancellation;
+            return cancelledResult;
+        }
+        catch (Exception ex) when (processStarted)
+        {
+            logger.LogError(ex, "Failed while running command, stopping its process tree: {Command}", displayCommand);
+            var stoppedAfterFailure = await StopProcessTreeAsync(process, displayCommand);
+            var failedResult = CommandResult.Failure($"Failed while running process '{fileName}': {ex.Message}")
+                .WithCommand(displayCommand);
+            failedResult.ProcessMayStillRun = !stoppedAfterFailure;
+            return failedResult;
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to execute command: {Command}", displayCommand);
 
-            return CommandResult.Failure($"Failed to start process '{fileName}': {ex.Message}")
+            var notStartedResult = CommandResult.Failure($"Failed to start process '{fileName}': {ex.Message}")
                 .WithCommand(displayCommand);
+            notStartedResult.ProcessNeverStarted = true;
+            return notStartedResult;
+        }
+    }
+
+    /// <summary>
+    ///     Kills the process with its whole tree and waits a bounded time for it to exit.
+    /// </summary>
+    /// <returns>
+    ///     <c>true</c> when the whole tree was killed and the process exited, <c>false</c> when the process or one of
+    ///     its descendants may still run.
+    /// </returns>
+    private async Task<bool> StopProcessTreeAsync(Process process, string displayCommand)
+    {
+        var processTreeKilled = TryKillProcessTree(process, displayCommand);
+
+        using var exitWait = new CancellationTokenSource(ProcessExitWaitTimeout);
+        try
+        {
+            await process.WaitForExitAsync(exitWait.Token);
+            if (!processTreeKilled)
+            {
+                logger.LogError(
+                    "The process exited, but the kill of its tree failed, so a descendant may still run: {Command}",
+                    displayCommand);
+            }
+
+            return processTreeKilled;
+        }
+        catch (Exception waitException)
+        {
+            logger.LogError(waitException,
+                "The process did not exit within {ExitWaitTimeout} after the kill and may still run: {Command}",
+                ProcessExitWaitTimeout, displayCommand);
+            return false;
+        }
+    }
+
+    private bool TryKillProcessTree(Process process, string displayCommand)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            return true;
+        }
+        catch (Exception killException)
+        {
+            logger.LogError(killException, "Could not kill the process tree of: {Command}", displayCommand);
+            return false;
         }
     }
 

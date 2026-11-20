@@ -3463,7 +3463,7 @@ replaced, and a successful attach would register one database in two instances. 
 checked target only: with `dropExistingTenant`, the existing tenant's database is dropped under the override only
 when it IS the target; a different existing database goes through the delete guard without it.
 The check only reads, so before the first destructive step the restore **claims** the target (`RestoreClaim`:
-insert-if-absent marker of this instance with a claim token; under a granted override the foreign marker is taken
+insert-if-absent quarantined marker of this instance with a claim time and a random claim id; under a granted override the foreign marker is taken
 over, only while it is still the one the check saw) and holds the claim through the whole restore: another
 instance can neither attach nor restore the database in between (a claim it won in between refuses this restore
 with the uniform conflict before anything is dropped). A target that is the dropped existing tenant's database is
@@ -3563,6 +3563,132 @@ anything is written, restore over a legacy tenant keeps its name), `TwoInstanceT
 instances on one server, `TwoInstanceCollection`: different prefixes create the same tenant id with the default name;
 without prefixes the second is refused) and `StreamData.UnitTests/TenantDatabaseNamesTests` (naming, validation,
 exemption scope).
+
+### Restore leaves out platform-only values (AB#9228)
+
+A restore (`TenantBackupService.RestoreTenantAsync`, also the restore step of `CloneTenantToTempAsync`) never brings a value
+into a tenant that only the platform may hold, whatever archive it restores (own, foreign, older or edited). The tenant's
+own secrets are restored unchanged. The list is `Services/Restore/PlatformOnlyRestoreValues.cs`, pinned by
+`RestorePlatformOnlyValuesTests.PlatformOnlyValues_AreTheSecretDefaultCollectionAndTheSealedCaller`.
+
+| Left out | How | Why |
+| --- | --- | --- |
+| Collection `RtEntity_SystemCommunicationSecretDefault` (`MongoDumpOptions.PlatformOnlyTenantCollections`) | `--nsExclude`, and dropped after mongorestore for an older mongorestore | the communication controller projects the secret defaults; it projects them again when the tenant is set up after the attach (controller `DefaultConfigurationCreatorService.StartTenantAsync` -> `EnsureSecretDefaultsAsync`) |
+| Entities of `System.Communication/SecretDefault` or a type derived from it in any other `RtEntity_*` collection (`PlatformOnlyRestoreValues.LeftOutCkTypeIds`) | deleted | an edited archive could put a secret default where the dropped collection does not reach, e.g. under a derived type that is its own collection root |
+| `System.Communication/PipelineExecution.SealedCaller` and `.CallerAccessToken` | `$unset` | the sealed caller carries the invoker's bearer token until the lease. A restored queued execution without it has no provenance: the lease service fails it with a reason (`QueuedProvenanceInvalid`, "not queued by the controller (no provenance)"); it is not the `QueuedProvenanceUnverifiable` path, which keeps an execution queued only for a missing key |
+
+**`System.Communication/Application.SecretDefaults[].SecretValue` is restored**, like every tenant secret, although
+`RevealSecret@1` refuses it to tenant identities (`PlatformOnlySecrets.cs` of the mesh adapter SDK; the restore list does
+**not** mirror that list for this value). It is the hosting tenant's own input, and the controller needs it: an Application
+whose declaration has no value is `ValueMissing` (controller `SecretDefaultDeclarationValidator`), a redeploy fails with
+`WorkloadSecretDefaultValueMissing`, and tenants created or restored later get no default (for EnergyCommunity the CAPTCHA
+default would be frozen after a legitimate restore of the management tenant). Removing it at its known place would not stop an
+edit either: the dump carries the value anyway (it leaves out only the secret defaults collection), and an edited archive
+could move the ciphertext into any other attribute.
+
+- **Where**: `RestoredPlatformOnlyValueRemover.RemoveAsync`, called in `RestoreClaimedTargetCoreAsync` after mongorestore and
+  before the attach, so no service reads the values in between. It works on the stored documents of every `RtEntity_*`
+  collection, whatever the stored form of the value (an `OctoSecret` sub-document, an `enc:` string or plain text). The
+  server returns only the candidates and only their attribute names (`PlatformOnlyCandidatePipeline`, an aggregation), the
+  removal streams them and unsets in bulk, so a tenant with many executions is not loaded into memory:
+  - the CK type (field `ckTypeId`) is matched together with every type derived from it, read from the restored
+    `CkTypeInheritance` rows (`RestoredCkTypeFamilies`, the rows the engine builds its CK cache from), because
+    `PipelineExecution` is derivable. When the restored database holds no inheritance row, a derived type is not known:
+    every entity of any CK type that holds a platform-only attribute name (or a non-ASCII name, or attributes in another
+    form than a document) then fails the removal, so the restore fails closed and drops the target (AB#9420);
+  - attribute keys (under `attributes`) are matched **ignoring case**:
+    the engine reads a stored key in any first-letter case (`RtAttributeDictionarySerializer` maps keys through
+    `ToPascalCase`), so an edited archive cannot hide a value behind `SealedCaller` instead of `sealedCaller`.
+  - a candidate whose `attributes` is stored in another form than a document (an array of key-value pairs, which the
+    engine also deserializes) fails the removal: the restore **fails closed** instead of leaving a value it cannot unset.
+    So does a candidate with an attribute name that is not ASCII: the engine upper-cases the first letter of a stored key
+    (`ToPascalCase`), and `ſealedCaller` (U+017F) is read as `SealedCaller`, while the server-side `$toLower` is ASCII-only.
+  - **Fail closed after mongorestore wrote**: every exit between a successful mongorestore and the finished removal (the
+    check for an empty restore, the removal of a system-database marker, the removal itself; a cancellation or a MongoDB
+    error in any of them) drops the restored (still unattached) database and fails the restore, so no database with the
+    values is left on the server for a later attach. When that drop fails, the claim of this instance on the database is
+    kept (not released), so no other instance attaches it, and the error log asks to drop it by hand.
+  - **Every restore that does not complete after mongorestore started drops the target database** (AB#9420): a non-zero
+    exit, a timeout (also when the kill was confirmed), a cancellation, an exception, a failed attach. The drop runs only
+    while the marker on the target is still this restore's own claim (`RestoreClaim.IsOnTargetAsync`); when another
+    operation replaced or removed it, or it cannot be read, the database is left unchanged, the restore fails and its error
+    tells the operator to check which operation holds it before dropping it by hand. A partly restored
+    database is never only cleaned: the clean-up would read `CkTypeInheritance` from the same partial database, and an
+    execution of a derived type would keep its sealed caller when that collection was not written yet. A failed restore
+    over a detached database drops its earlier content too.
+  - **Timeout versus cancellation.** On cancellation, a timeout or an exception while the process runs,
+    `RepositoryOpsService` kills the whole process tree and waits up to 30 s for it to exit. Only a cancellation sets
+    `CommandResult.Cancelled`; a timeout and an exception return a plain failure. All three set
+    `CommandResult.ProcessMayStillRun` when the kill failed (also when the parent exited afterwards: a descendant may
+    still run) or the process did not exit in time. The drop removes the claim
+    marker with the database, so a restore whose mongorestore may still run (or threw) then claims the empty target again
+    and **keeps that claim, quarantined**: the database holds only the claim marker plus whatever mongorestore still
+    writes, no attach and no restore accepts it, and the error tells the operator to make sure mongorestore has stopped and
+    drop the database by hand.
+  - **Quarantine** (`TenantOwnershipRecord.Quarantined`): the claim of a restore is inserted quarantined
+    (`TenantOwnershipStore.ClaimForRestoreAsync`) and stays so until the restore's own attach lifts it in its transaction.
+    `TenantOwnershipStore.ClaimAsync` never restamps a quarantined marker and `AttachChildTenantAsync` refuses one, so a
+    restore that does not complete (a failed drop, a mongorestore that may still run, a crash) leaves a database that no
+    attach path accepts - also not a plain attach of the same instance. A restore refuses a quarantined target, and the
+    override never takes over a quarantined foreign marker. Only a drop by an operator clears it. A restore that completes
+    without attach releases its claim, so the database is unowned like any detached database.
+  - **A mongorestore that never started** (`CommandResult.ProcessNeverStarted`: the arguments could not be built or the
+    program could not be started) wrote nothing: the restore fails without a drop of the target; only the claim is
+    released (and a database the claim alone materialized is dropped). An exception thrown out of
+    `ExecuteMongoRestoreAsync` is treated as "may still run".
+  - **The restore claim is exclusive per target database while the target is not a registered tenant** (AB#9420): a marker
+    of this instance that is not this restore's own claim refuses the restore before anything is dropped or written, so a
+    second restore of the same target (a job submitted twice) cannot write while the first one attaches. Over a registered
+    tenant of this instance the existing marker is accepted, and mongorestore runs only after the restore dropped that
+    tenant and claimed the target again (`RestoreClaim.IsHeld`). A claim is identified by owner, tenant, claim time and a
+    random claim id (`TenantOwnershipRecord.ClaimId`), so two restores that claim in the same millisecond never both count
+    as owner. The attach transaction first lifts the quarantine of exactly this claim
+    (`RestoreClaim.TryLiftQuarantineAsync`): when it is no longer this restore's claim, the transaction is aborted, the
+    target is left unchanged (it may hold the other operation's data) and the restore fails; a change after that write
+    collides with it. The refusal of a quarantined or claimed target is logged as "another restore holds or quarantined
+    the database ... may still be running": the operator waits for that restore, or confirms that none runs, before
+    dropping the database by hand. The session and the notification
+    scope of the attach are opened inside the guarded block, so their failure drops the target too. A stale claim of this
+    instance on an unregistered database (a restore that kept its claim, a release that failed) therefore blocks later
+    restores of that database until it is dropped by hand.
+  - The database is opened under the name mongorestore and the claim use, never a normalized one.
+- **Result**: `CommandResult.RemovedPlatformOnlyValues` lists every removed value as `<CK type>@<rtId>.<attribute path>` and every
+  deleted secret default entity as `<CK type>@<rtId>` (never the value); the restore logs them as a warning, and
+  `CloneTenantToTempAsync` passes the list on, and on a failure `Cancelled`, `ProcessMayStillRun` and `ProcessNeverStarted`. The secret defaults collection is always left out and is not listed.
+- **Dumps are unchanged**: they still leave out only the secret defaults collection; `SecretValue` stays in a dump as ciphertext
+  and comes back with the restore.
+- **Known limitations**: dumps made before the secret defaults exclusion still contain that collection (left out on restore
+  now); a removal on restore cannot stop an edited archive that moves a ciphertext (a secret default value included) into
+  another attribute of the same tenant - only location-bound envelopes (enc:v3, a later stage) close that;
+  a foreign archive carries its tenant's secrets readable for the restoring tenant; a restore bypasses the write rules and
+  carries identity data (Bug AB#9381). The restore result is not yet shown in the bot-services job result; the warning
+  log names the removed values. When the drop after a failed removal fails as well, the database stays quarantined (no
+  attach accepts it) and the error log asks to drop it by hand.
+- **Purpose binding and upgrade steps**: the purpose-bound protection of sealed execution values and the operator steps for
+  executions queued or interrupted at the upgrade are documented in octo-communication-controller-services (`CLAUDE.md`, AB#9228).
+- Tests: `RestorePlatformOnlyValuesTests` (an archive dumped without any exclusion restores without the collection, the
+  Application keeps every member and its `SecretValue` reads as a `Protected` secret, the execution loses both caller
+  attributes, the tenant's own secret stays, the result lists the paths and never an envelope; an archive without such values
+  removes nothing; the list is pinned), `RestorePlatformOnlyValuesEditedArchiveTests` (keys in another case, with the
+  secret default value kept, a type derived from `PipelineExecution` through two inheritance rows, a failing removal drops the
+  restored database and fails the restore), `RestorePlatformOnlyValuesFailClosedTests` (attributes stored as an array in both
+  forms fail the restore and drop the database; a mongorestore that fails after writing drops the target),
+  `RestoreWithoutCkTypeInheritanceTests` (a non-zero exit before the inheritance was written drops the target; a completed
+  restore without inheritance and an execution of an unknown type fails and drops it), `RestoreConcurrentSameTargetTests`
+  (of two concurrent restores of the same target only one attaches, the second is refused at the claim before its
+  mongorestore runs, and no sealed caller survives; a claim replaced or removed before the attach, also by a claim of the
+  same millisecond, fails the restore and leaves the target with the other claim unchanged; a mongorestore that fails
+  after its claim was replaced leaves the target too),
+  `RestoreInterruptedTests` (a mongorestore cancelled, possibly still running or throwing after it wrote drops the target; the
+  last two keep the re-claimed target quarantined), `RestoreFailsClosedAfterMongoRestoreTests` (a cancellation after a
+  successful mongorestore drops the database, a failed drop keeps it quarantined and a plain attach is refused, a clone
+  reports the process flags of its restore, a mongorestore that never started leaves an
+  existing detached database as it was),
+  `RestorePlatformOnlyNonAsciiKeyTests` (the engine reads `ſealedCaller` as `SealedCaller`; such a key fails the restore),
+  `RepositoryOpsServiceTests` (cancel and timeout stop the child of the command too; a program that cannot start reports
+  `ProcessNeverStarted`) and
+  `RestoreLeavesOutSecretDefaultsTests` (a restore into the same tenant, secret defaults in another collection and under a
+  derived type, a clone that reports the removed values).
 
 ### Tenant-created notification after the commit (AB#9177)
 

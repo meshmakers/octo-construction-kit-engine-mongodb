@@ -34,4 +34,16 @@ internal sealed class TenantOwnershipRecord
     ///     the database again. Null outside a drop.
     /// </summary>
     public DateTime? DropReservedUntilUtc { get; set; }
+
+    /// <summary>
+    ///     The random id of a restore's claim: two restores that claim in the same millisecond still tell their claims
+    ///     apart. Null on every other marker.
+    /// </summary>
+    public string? ClaimId { get; set; }
+
+    /// <summary>
+    ///     Set from the claim of a restore until its attach: a restore that does not complete leaves the database
+    ///     quarantined, and no attach accepts it until an operator drops the database.
+    /// </summary>
+    public bool Quarantined { get; set; }
 }
