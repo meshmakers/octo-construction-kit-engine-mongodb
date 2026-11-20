@@ -27,14 +27,14 @@ public class CommandResult
     public IReadOnlyList<string> RemovedPlatformOnlyValues { get; set; } = [];
 
     /// <summary>
-    ///     The command was cancelled before it finished; its process was stopped. Only a cancellation sets it, a timeout
-    ///     or an exception does not.
+    ///     The command was cancelled before it finished and its process was told to stop; whether it stopped is
+    ///     <see cref="ProcessMayStillRun" />. Only a cancellation sets it, a timeout or an exception does not.
     /// </summary>
     public bool Cancelled { get; set; }
 
     /// <summary>
     ///     The command's process could not be confirmed stopped (the kill failed or it did not exit in time): it may still
-    ///     write. A restore drops its target database, claims it again for this instance and keeps that claim.
+    ///     write. A restore drops its target database and claims it again, quarantined, so no attach accepts it.
     /// </summary>
     public bool ProcessMayStillRun { get; set; }
 

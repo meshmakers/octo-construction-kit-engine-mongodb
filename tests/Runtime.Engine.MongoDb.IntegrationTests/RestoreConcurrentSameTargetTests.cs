@@ -95,6 +95,36 @@ public class RestoreConcurrentSameTargetTests(SystemFixture systemFixture)
         });
     }
 
+    [Fact]
+    public async Task ARestoreWhoseClaimWasReplacedByAClaimOfTheSameMillisecond_DropsTheTarget_AndFails()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await WithSealedArchiveAsync(async (sourceTenantId, targetTenantId, archivePath) =>
+        {
+            var ownershipStore = systemFixture.Provider!.GetRequiredService<TenantOwnershipStore>();
+            var remover = new RemoverWithHookAfterRemoval(AdminRepositoryAccess, async () =>
+            {
+                var runningClaim = await ownershipStore.GetAsync(targetTenantId, cancellationToken);
+                Assert.NotNull(runningClaim);
+                var sameMillisecond = runningClaim.AttachedAtUtc.ToUniversalTime();
+                await ownershipStore.RemoveAsync(targetTenantId, cancellationToken);
+                await ownershipStore.ClaimForRestoreAsync(targetTenantId, targetTenantId, OwnerSystemDatabaseName,
+                    sameMillisecond, Guid.NewGuid().ToString("N"), cancellationToken);
+            });
+            var backupService = RestoreBackupServiceFactory.Create(systemFixture,
+                (repositoryOps, restoreOptions) =>
+                    repositoryOps.ExecuteMongoRestoreAsync(restoreOptions, TimeSpan.FromMinutes(5)),
+                remover);
+
+            var restoreResult = await backupService.RestoreTenantAsync(targetTenantId, targetTenantId, archivePath,
+                sourceTenantId, dropExistingTenant: false, attachTenant: true);
+
+            Assert.False(restoreResult.Success);
+            Assert.Null(await systemFixture.GetSystemContext().TryFindTenantContextAsync(targetTenantId));
+            Assert.False(await _support.DatabaseExistsAsync(targetTenantId, cancellationToken));
+        });
+    }
+
     private IAdminRepositoryAccess AdminRepositoryAccess =>
         systemFixture.Provider!.GetRequiredService<IAdminRepositoryAccess>();
 

@@ -131,7 +131,7 @@ internal class TenantBackupService(
                 detachTenant: false, timeout, cancellationToken);
             if (!backupResult.Success)
             {
-                return CommandResult.Failure(
+                return FailureKeepingProcessState(backupResult,
                     $"Clone failed at backup step for source tenant '{sourceTenantId}': {backupResult.Error}");
             }
 
@@ -139,7 +139,7 @@ internal class TenantBackupService(
                 sourceDatabaseName, dropExistingTenant: false, attachTenant: true, timeout, cancellationToken);
             if (!restoreResult.Success)
             {
-                return CommandResult.Failure(
+                return FailureKeepingProcessState(restoreResult,
                     $"Clone failed at restore step (temp tenant '{tempTenantId}'): {restoreResult.Error}");
             }
 
@@ -377,7 +377,7 @@ internal class TenantBackupService(
                 if (claim.IsKept)
                 {
                     logger.LogError(
-                        "Restore of tenant '{TenantId}': the claim on database '{DatabaseName}' is kept, so no other instance attaches it; make sure mongorestore has stopped, then drop the database by hand",
+                        "Restore of tenant '{TenantId}': database '{DatabaseName}' stays quarantined, so no attach accepts it; make sure mongorestore has stopped, then drop the database by hand",
                         tenantId, databaseName);
                 }
                 else if (!restored || !attachTenant)
@@ -599,30 +599,11 @@ internal class TenantBackupService(
         {
             logger.LogInformation("Attaching tenant '{TenantId}' to database '{DatabaseName}'",
                 tenantId, databaseName);
-            // The tenant-created notification is published here, after the commit: the services set the tenant up
-            // when they receive it and must find it registered. A failed publish does not fail the restore (the data is
-            // restored and attached); it is reported on the result, so the caller can surface it.
-            using var session = await systemContext.GetAdminSessionAsync();
-            using var notification = TenantNotificationScope.Begin(session);
-            await AttachUnderOwnClaimAsync(tenantId, databaseName, claim, session);
-
-            logger.LogInformation(
-                "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
-                tenantId, databaseName);
-
-            try
+            var notificationWarning = await AttachUnderOwnClaimAsync(tenantId, databaseName, claim);
+            if (notificationWarning != null)
             {
-                await notification.PublishAsync();
-            }
-            catch (Exception ex)
-            {
-                var warning =
-                    $"Tenant '{tenantId}' was restored and attached to database '{databaseName}', but the " +
-                    $"tenant-created notification failed ({ex.Message}). The services have not set the tenant up: " +
-                    "run ClearCache for the tenant.";
-                logger.LogWarning(ex, "Restore of tenant '{TenantId}': {Warning}", tenantId, warning);
                 result.TenantCreatedNotificationFailed = true;
-                result.Output = string.IsNullOrEmpty(result.Output) ? warning : result.Output + Environment.NewLine + warning;
+                AppendWarning(result, notificationWarning);
             }
         }
 
@@ -653,6 +634,15 @@ internal class TenantBackupService(
         }
     }
 
+    private static CommandResult FailureKeepingProcessState(CommandResult failedStep, string error)
+    {
+        var failure = CommandResult.Failure(error);
+        failure.Cancelled = failedStep.Cancelled;
+        failure.ProcessMayStillRun = failedStep.ProcessMayStillRun;
+        failure.ProcessNeverStarted = failedStep.ProcessNeverStarted;
+        return failure;
+    }
+
     private static void AppendWarning(CommandResult result, string? warning)
     {
         if (warning == null)
@@ -664,25 +654,15 @@ internal class TenantBackupService(
     }
 
     /// <summary>
-    ///     Attaches the restored database in one transaction that first reads the claim: when it is no longer this
-    ///     restore's own claim, another operation claimed the database and its content is not attached. A change of the
-    ///     claim after that read collides with the attach's write of the marker. A failed attach drops the target.
+    ///     Attaches the restored database (see <see cref="AttachInOneTransactionAsync" />). A failed attach drops the
+    ///     target after its transaction was aborted.
     /// </summary>
-    private async Task AttachUnderOwnClaimAsync(string tenantId, string databaseName, RestoreClaim claim,
-        IOctoAdminSession session)
+    /// <returns>The warning of a tenant-created notification that could not be published, else null.</returns>
+    private async Task<string?> AttachUnderOwnClaimAsync(string tenantId, string databaseName, RestoreClaim claim)
     {
         try
         {
-            session.StartTransaction();
-            if (!await claim.IsStillOwnClaimAsync(session))
-            {
-                throw new InvalidOperationException(
-                    $"The claim of this restore on database '{databaseName}' was replaced by another operation before " +
-                    "the attach; the restored database is not attached.");
-            }
-
-            await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
-            await session.CommitTransactionAsync();
+            return await AttachInOneTransactionAsync(tenantId, databaseName, claim);
         }
         catch (Exception exception)
         {
@@ -695,9 +675,48 @@ internal class TenantBackupService(
     }
 
     /// <summary>
+    ///     One transaction that first lifts the quarantine of this restore's own claim: when the claim is no longer its
+    ///     own, another operation claimed the database and its content is not attached. A change of the claim after that
+    ///     write collides with it. The tenant-created notification is published after the commit: the services set the
+    ///     tenant up when they receive it and must find it registered. A failed publish does not fail the restore.
+    /// </summary>
+    private async Task<string?> AttachInOneTransactionAsync(string tenantId, string databaseName, RestoreClaim claim)
+    {
+        using var session = await systemContext.GetAdminSessionAsync();
+        using var notification = TenantNotificationScope.Begin(session);
+        session.StartTransaction();
+        if (!await claim.TryLiftQuarantineAsync(session))
+        {
+            throw new InvalidOperationException(
+                $"The claim of this restore on database '{databaseName}' was replaced by another operation before " +
+                "the attach; the restored database is not attached.");
+        }
+
+        await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
+        await session.CommitTransactionAsync();
+        logger.LogInformation("Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
+            tenantId, databaseName);
+
+        try
+        {
+            await notification.PublishAsync();
+            return null;
+        }
+        catch (Exception exception)
+        {
+            var warning =
+                $"Tenant '{tenantId}' was restored and attached to database '{databaseName}', but the " +
+                $"tenant-created notification failed ({exception.Message}). The services have not set the tenant up: " +
+                "run ClearCache for the tenant.";
+            logger.LogWarning(exception, "Restore of tenant '{TenantId}': {Warning}", tenantId, warning);
+            return warning;
+        }
+    }
+
+    /// <summary>
     ///     A mongorestore that started and did not complete leaves a database whose content nobody can vouch for: it is
-    ///     dropped, never cleaned. While mongorestore may still run, the dropped target is claimed again for this
-    ///     instance and the claim is kept, so no other instance attaches what it writes.
+    ///     dropped, never cleaned. While mongorestore may still run, the dropped target is claimed again and stays
+    ///     quarantined, so no attach accepts what it writes.
     /// </summary>
     private async Task DropFailedRestoreTargetAsync(string tenantId, string databaseName, CommandResult result,
         RestoreClaim claim)
@@ -708,12 +727,12 @@ internal class TenantBackupService(
         var dropped = await DropRestoredTargetAsync(tenantId, databaseName, claim);
         var dropNote = dropped
             ? $"The target database '{databaseName}' was dropped."
-            : $"The target database '{databaseName}' could not be dropped; the claim of this instance on it is kept. Drop it by hand.";
+            : $"The target database '{databaseName}' could not be dropped; it stays quarantined and no attach accepts it. Drop it by hand.";
         if (dropped && result.ProcessMayStillRun)
         {
             var claimKept = await KeepClaimWhileMongoRestoreMayRunAsync(tenantId, databaseName, claim);
             dropNote = claimKept
-                ? $"The target database '{databaseName}' was dropped, but mongorestore may still be running: the database is claimed again for this instance and the claim is kept, so no other instance attaches it. Make sure mongorestore has stopped, then drop the database by hand."
+                ? $"The target database '{databaseName}' was dropped, but mongorestore may still be running: the database is claimed again and stays quarantined, so no attach accepts it. Make sure mongorestore has stopped, then drop the database by hand."
                 : $"The target database '{databaseName}' was dropped, but mongorestore may still be running and the database could not be claimed again: make sure mongorestore has stopped and drop the database by hand if it reappears.";
         }
 
@@ -748,14 +767,14 @@ internal class TenantBackupService(
         }
     }
 
-    /// <summary>Drops the restored target; when the drop fails, the claim is kept so no other instance attaches it.</summary>
+    /// <summary>Drops the restored target; when the drop fails, it stays quarantined so no attach accepts it.</summary>
     private async Task<bool> DropRestoredTargetAsync(string tenantId, string databaseName, RestoreClaim claim)
     {
         var dropped = await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
         if (!dropped)
         {
             logger.LogError(
-                "Restore of tenant '{TenantId}': the restored database '{DatabaseName}' could not be dropped; the claim on it is kept",
+                "Restore of tenant '{TenantId}': the restored database '{DatabaseName}' could not be dropped; it stays quarantined",
                 tenantId, databaseName);
             claim.Keep();
         }
@@ -765,13 +784,16 @@ internal class TenantBackupService(
 
     /// <summary>
     ///     The ownership claim a restore holds on its target from before the first destructive step until the attach
-    ///     (AB#8672). Only a claim THIS restore inserted is ever released; a marker of this instance that was there
-    ///     before (a restore over the instance's own tenant) is left alone.
+    ///     (AB#8672). The claim is quarantined: no attach accepts the target until this restore's own attach lifts the
+    ///     quarantine, so a restore that does not complete leaves it quarantined. Only a claim THIS restore inserted is
+    ///     ever released; a marker of this instance that was there before (a restore over the instance's own tenant) is
+    ///     left alone.
     /// </summary>
     internal sealed class RestoreClaim(TenantOwnershipStore store, string databaseName, string tenantId,
         string ownerSystemDatabaseName, bool databaseExistedBefore)
     {
         private readonly DateTime _claimTime = TenantOwnershipStore.NewClaimTime();
+        private readonly string _claimId = Guid.NewGuid().ToString("N");
         private bool _inserted;
         private bool _materializedByClaim = !databaseExistedBefore;
 
@@ -787,12 +809,13 @@ internal class TenantBackupService(
         /// <summary>Whether the marker on the target is this restore's own claim (inserted or taken over).</summary>
         public bool IsHeld => _inserted;
 
-        /// <summary>Whether the marker, read in <paramref name="session" />, is still this restore's own claim.</summary>
-        public async Task<bool> IsStillOwnClaimAsync(IOctoAdminSession session)
-        {
-            var marker = await store.GetAsync(databaseName, ((IOctoSessionInternal)session).SessionHandle);
-            return marker != null && TenantOwnershipStore.IsClaim(marker, ownerSystemDatabaseName, tenantId, _claimTime);
-        }
+        /// <summary>
+        ///     Lifts the quarantine in the transaction of <paramref name="session" />, while the marker is still this
+        ///     restore's own claim; false when another operation replaced it.
+        /// </summary>
+        public Task<bool> TryLiftQuarantineAsync(IOctoAdminSession session) =>
+            store.TryLiftRestoreQuarantineAsync(databaseName, ((IOctoSessionInternal)session).SessionHandle,
+                ownerSystemDatabaseName, tenantId, _claimTime, _claimId);
 
         /// <summary>
         ///     Claims the target; returns the logged refusal reason when another instance holds it, or another operation
@@ -803,16 +826,23 @@ internal class TenantBackupService(
         public async Task<string?> AcquireAsync(TenantOwnershipMarkerIdentity? approvedForeignMarker,
             bool targetIsRegisteredTenant, CancellationToken cancellationToken)
         {
-            var marker = await store.StampIfAbsentAndGetAsync(databaseName, tenantId, ownerSystemDatabaseName,
-                cancellationToken, _claimTime);
+            var marker = await store.ClaimForRestoreAsync(databaseName, tenantId, ownerSystemDatabaseName, _claimTime,
+                _claimId, cancellationToken);
+            if (TenantOwnershipStore.IsClaim(marker, ownerSystemDatabaseName, tenantId, _claimTime, _claimId))
+            {
+                _inserted = true;
+                return null;
+            }
+
+            if (marker.Quarantined)
+            {
+                return $"a restore that did not complete quarantined the database (owner system database " +
+                       $"'{marker.OwnerSystemDatabaseName}', tenant '{marker.TenantId}'); an operator must drop it " +
+                       "first; nothing was dropped or written by the restore";
+            }
+
             if (string.Equals(marker.OwnerSystemDatabaseName, ownerSystemDatabaseName, StringComparison.Ordinal))
             {
-                if (TenantOwnershipStore.IsClaim(marker, ownerSystemDatabaseName, tenantId, _claimTime))
-                {
-                    _inserted = true;
-                    return null;
-                }
-
                 return targetIsRegisteredTenant
                     ? null
                     : $"another restore or operation of this instance (tenant '{marker.TenantId}', claimed " +
@@ -828,7 +858,7 @@ internal class TenantBackupService(
                     StringComparison.Ordinal) &&
                 marker.AttachedAtUtc == approvedForeignMarker.StampedAtUtc &&
                 await store.TryTakeOverMarkerAsync(databaseName, marker, tenantId, ownerSystemDatabaseName,
-                    _claimTime, cancellationToken))
+                    _claimTime, _claimId, cancellationToken))
             {
                 _inserted = true;
                 return null;
@@ -852,12 +882,13 @@ internal class TenantBackupService(
             }
 
             if (dropIfOnlyTheClaim && _materializedByClaim &&
-                await store.TryDropIfOnlyClaimAsync(databaseName, ownerSystemDatabaseName, tenantId, _claimTime))
+                await store.TryDropIfOnlyClaimAsync(databaseName, ownerSystemDatabaseName, tenantId, _claimTime,
+                    _claimId))
             {
                 return;
             }
 
-            await store.TryRemoveClaimAsync(databaseName, ownerSystemDatabaseName, tenantId, _claimTime);
+            await store.TryRemoveClaimAsync(databaseName, ownerSystemDatabaseName, tenantId, _claimTime, _claimId);
         }
     }
 

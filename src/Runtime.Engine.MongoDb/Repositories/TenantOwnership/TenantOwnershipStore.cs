@@ -106,9 +106,8 @@ internal sealed class TenantOwnershipStore
     /// <param name="ownerSystemDatabaseName">The claiming instance.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="claimTime">
-    ///     The stamp time to write on insert, default now. The restore and the database drop pass a claim token
-    ///     (<see cref="NewClaimTime" />): the returned marker is <see cref="IsClaim" /> of it only when THIS call
-    ///     inserted it, and only then do they release it again (<see cref="TryRemoveClaimAsync" />).
+    ///     The stamp time to write on insert, default now. The database drop passes a claim token
+    ///     (<see cref="NewClaimTime" />) and compares it with the returned marker.
     /// </param>
     public async Task<TenantOwnershipRecord> StampIfAbsentAndGetAsync(string databaseName, string tenantId,
         string ownerSystemDatabaseName, CancellationToken cancellationToken = default, DateTime? claimTime = null)
@@ -128,10 +127,50 @@ internal sealed class TenantOwnershipStore
     }
 
     /// <summary>
+    ///     The claim of a restore (AB#8672): inserts a quarantined marker with <paramref name="claimTime" /> and
+    ///     <paramref name="claimId" /> when none exists and returns the marker as it is afterwards. The claim is the
+    ///     caller's exactly when the returned marker <see cref="IsClaim" /> of it. Never overwrites.
+    /// </summary>
+    public async Task<TenantOwnershipRecord> ClaimForRestoreAsync(string databaseName, string tenantId,
+        string ownerSystemDatabaseName, DateTime claimTime, string claimId, CancellationToken cancellationToken)
+    {
+        var collection = GetCollection(databaseName);
+        var update = Builders<TenantOwnershipRecord>.Update
+            .SetOnInsert(r => r.OwnerSystemDatabaseName, ownerSystemDatabaseName)
+            .SetOnInsert(r => r.TenantId, tenantId)
+            .SetOnInsert(r => r.AttachedAtUtc, claimTime)
+            .SetOnInsert(r => r.ClaimId, claimId)
+            .SetOnInsert(r => r.Quarantined, true);
+
+        return await collection.FindOneAndUpdateAsync<TenantOwnershipRecord>(
+            r => r.Id == TenantOwnershipRecord.DocumentId, update,
+            new FindOneAndUpdateOptions<TenantOwnershipRecord>
+            {
+                IsUpsert = true, ReturnDocument = ReturnDocument.After
+            }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Lifts the quarantine of exactly the restore claim given (owner, tenant, claim time and claim id), inside the
+    ///     transaction of <paramref name="session" />. False when the marker is not that quarantined claim any more.
+    /// </summary>
+    public async Task<bool> TryLiftRestoreQuarantineAsync(string databaseName, IClientSessionHandle session,
+        string ownerSystemDatabaseName, string tenantId, DateTime claimTime, string claimId)
+    {
+        var collection = GetCollection(databaseName);
+        var lifted = await collection.UpdateOneAsync(session,
+            r => r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == ownerSystemDatabaseName &&
+                 r.TenantId == tenantId && r.AttachedAtUtc == claimTime && r.ClaimId == claimId && r.Quarantined,
+            Builders<TenantOwnershipRecord>.Update.Set(r => r.Quarantined, false)).ConfigureAwait(false);
+        return lifted.ModifiedCount == 1;
+    }
+
+    /// <summary>
     ///     Claims the database for <paramref name="ownerSystemDatabaseName" /> with a claim token (AB#8796, AB#8672):
     ///     a marker of this instance is re-stamped with <paramref name="tenantId" /> and <paramref name="claimTime" />,
     ///     a missing marker is inserted with them, and the marker of another instance is returned untouched. The
-    ///     claim is the caller's exactly when the returned marker is <see cref="IsClaim" /> of it.
+    ///     claim is the caller's exactly when the returned marker is <see cref="IsClaim" /> of it. A quarantined marker
+    ///     is returned untouched, so the caller sees <see cref="TenantOwnershipRecord.Quarantined" /> and refuses.
     /// </summary>
     /// <remarks>
     ///     The claim always WRITES when it succeeds (also over an own marker), so inside a transaction
@@ -147,9 +186,12 @@ internal sealed class TenantOwnershipStore
         var collection = GetCollection(databaseName);
         var restamp = Builders<TenantOwnershipRecord>.Update
             .Set(r => r.TenantId, tenantId)
-            .Set(r => r.AttachedAtUtc, claimTime);
-        var ownMarker = Builders<TenantOwnershipRecord>.Filter.Where(r =>
-            r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == ownerSystemDatabaseName);
+            .Set(r => r.AttachedAtUtc, claimTime)
+            .Unset(r => r.ClaimId);
+        var ownMarker = Builders<TenantOwnershipRecord>.Filter.And(
+            Builders<TenantOwnershipRecord>.Filter.Where(r =>
+                r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == ownerSystemDatabaseName),
+            Builders<TenantOwnershipRecord>.Filter.Ne(r => r.Quarantined, true));
         var restamped = session != null
             ? await collection.UpdateOneAsync(session, ownMarker, restamp, cancellationToken: cancellationToken)
                 .ConfigureAwait(false)
@@ -182,10 +224,11 @@ internal sealed class TenantOwnershipStore
     /// <summary>
     ///     The deliberate ownership override of a restore or a delete (AB#8672, AB#8807): replaces exactly the
     ///     foreign marker <paramref name="foreignMarker" /> the guard saw (owner and stamp time) by a claim of this
-    ///     instance. False when the marker changed in between - then nobody's claim is overwritten.
+    ///     instance, quarantined like every restore claim. False when the marker changed in between or is quarantined -
+    ///     then nobody's claim is overwritten.
     /// </summary>
     public async Task<bool> TryTakeOverMarkerAsync(string databaseName, TenantOwnershipRecord foreignMarker,
-        string tenantId, string ownerSystemDatabaseName, DateTime claimTime,
+        string tenantId, string ownerSystemDatabaseName, DateTime claimTime, string claimId,
         CancellationToken cancellationToken = default)
     {
         var collection = GetCollection(databaseName);
@@ -194,10 +237,16 @@ internal sealed class TenantOwnershipStore
         var update = Builders<TenantOwnershipRecord>.Update
             .Set(r => r.OwnerSystemDatabaseName, ownerSystemDatabaseName)
             .Set(r => r.TenantId, tenantId)
-            .Set(r => r.AttachedAtUtc, claimTime);
-        var result = await collection.UpdateOneAsync(
-            r => r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == expectedOwner &&
-                 r.AttachedAtUtc == expectedStamp, update, cancellationToken: cancellationToken).ConfigureAwait(false);
+            .Set(r => r.AttachedAtUtc, claimTime)
+            .Set(r => r.ClaimId, claimId)
+            .Set(r => r.Quarantined, true);
+        var unchangedForeignMarker = Builders<TenantOwnershipRecord>.Filter.And(
+            Builders<TenantOwnershipRecord>.Filter.Where(r =>
+                r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == expectedOwner &&
+                r.AttachedAtUtc == expectedStamp),
+            Builders<TenantOwnershipRecord>.Filter.Ne(r => r.Quarantined, true));
+        var result = await collection.UpdateOneAsync(unchangedForeignMarker, update,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         return result.ModifiedCount == 1;
     }
 
@@ -266,20 +315,21 @@ internal sealed class TenantOwnershipStore
         return new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
     }
 
-    /// <summary>Whether <paramref name="marker" /> is exactly the claim one call made (see <see cref="ClaimAsync" />).</summary>
+    /// <summary>Whether <paramref name="marker" /> is exactly the claim one restore made (see <see cref="ClaimForRestoreAsync" />).</summary>
     public static bool IsClaim(TenantOwnershipRecord marker, string ownerSystemDatabaseName, string tenantId,
-        DateTime claimTime) =>
+        DateTime claimTime, string claimId) =>
         string.Equals(marker.OwnerSystemDatabaseName, ownerSystemDatabaseName, StringComparison.Ordinal) &&
         string.Equals(marker.TenantId, tenantId, StringComparison.Ordinal) &&
-        marker.AttachedAtUtc.ToUniversalTime() == claimTime;
+        marker.AttachedAtUtc.ToUniversalTime() == claimTime &&
+        string.Equals(marker.ClaimId, claimId, StringComparison.Ordinal);
 
     /// <summary>
     ///     Releases a claim made without a transaction (AB#8796, AB#8672): removes the marker only while it is still
-    ///     exactly that claim (owner, tenant and claim time). A claim another operation - of this or another
-    ///     instance - made since is never removed. Best effort.
+    ///     exactly that claim (owner, tenant, claim time and claim id; an attach has none). A claim another operation -
+    ///     of this or another instance - made since is never removed. Best effort.
     /// </summary>
     public async Task TryRemoveClaimAsync(string databaseName, string ownerSystemDatabaseName, string tenantId,
-        DateTime claimTime)
+        DateTime claimTime, string? claimId)
     {
         try
         {
@@ -287,7 +337,7 @@ internal sealed class TenantOwnershipStore
             await collection.DeleteOneAsync(
                 r => r.Id == TenantOwnershipRecord.DocumentId &&
                      r.OwnerSystemDatabaseName == ownerSystemDatabaseName && r.TenantId == tenantId &&
-                     r.AttachedAtUtc == claimTime).ConfigureAwait(false);
+                     r.AttachedAtUtc == claimTime && r.ClaimId == claimId).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -303,12 +353,12 @@ internal sealed class TenantOwnershipStore
     ///     else is in it or the marker is not that claim any more. Best effort.
     /// </summary>
     public async Task<bool> TryDropIfOnlyClaimAsync(string databaseName, string ownerSystemDatabaseName,
-        string tenantId, DateTime claimTime)
+        string tenantId, DateTime claimTime, string claimId)
     {
         try
         {
             var marker = await GetAsync(databaseName).ConfigureAwait(false);
-            if (marker == null || !IsClaim(marker, ownerSystemDatabaseName, tenantId, claimTime) ||
+            if (marker == null || !IsClaim(marker, ownerSystemDatabaseName, tenantId, claimTime, claimId) ||
                 !await HoldsOnlyMarkersAsync(databaseName).ConfigureAwait(false))
             {
                 return false;

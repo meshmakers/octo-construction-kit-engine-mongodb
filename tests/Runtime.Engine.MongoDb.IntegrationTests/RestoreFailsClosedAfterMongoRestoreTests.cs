@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
@@ -70,6 +71,73 @@ public class RestoreFailsClosedAfterMongoRestoreTests(SystemFixture systemFixtur
                 .GetAsync(targetTenantId, cancellationToken);
             Assert.NotNull(keptMarker);
             Assert.Equal(OwnerSystemDatabaseName, keptMarker.OwnerSystemDatabaseName);
+            Assert.True(keptMarker.Quarantined);
+        });
+    }
+
+    [Fact]
+    public async Task ARestoreWhoseDropFailed_QuarantinesTheTarget_SoAPlainAttachOfThisInstanceIsRefused()
+    {
+        await WithSealedArchiveAsync(async (sourceTenantId, targetTenantId, archivePath) =>
+        {
+            var systemContext = systemFixture.GetSystemContext();
+            var backupService = RestoreBackupServiceFactory.Create(systemFixture,
+                (repositoryOps, restoreOptions) =>
+                    repositoryOps.ExecuteMongoRestoreAsync(restoreOptions, TimeSpan.FromMinutes(5)),
+                new RemoverThatCannotRemoveOrDrop(systemFixture.Provider!.GetRequiredService<IAdminRepositoryAccess>()));
+            var restoreResult = await backupService.RestoreTenantAsync(targetTenantId, targetTenantId, archivePath,
+                sourceTenantId, dropExistingTenant: false, attachTenant: true);
+            Assert.False(restoreResult.Success);
+
+            using var attachSession = await systemContext.GetAdminSessionAsync();
+            attachSession.StartTransaction();
+            await Assert.ThrowsAsync<TenantException>(() =>
+                systemContext.AttachChildTenantAsync(attachSession, targetTenantId, targetTenantId));
+
+            Assert.Null(await systemContext.TryFindTenantContextAsync(targetTenantId));
+        });
+    }
+
+    [Fact]
+    public async Task ACloneWhoseMongoRestoreMayStillRun_ReportsTheProcessFlagsOfTheRestore()
+    {
+        await WithSealedArchiveAsync(async (sourceTenantId, targetTenantId, _) =>
+        {
+            var backupService = RestoreBackupServiceFactory.Create(systemFixture, (_, _) =>
+            {
+                var unconfirmedKillResult = CommandResult.Failure("mongorestore was cancelled; the kill failed");
+                unconfirmedKillResult.Cancelled = true;
+                unconfirmedKillResult.ProcessMayStillRun = true;
+                return Task.FromResult(unconfirmedKillResult);
+            });
+
+            var cloneResult = await backupService.CloneTenantToTempAsync(sourceTenantId, targetTenantId,
+                targetTenantId);
+
+            Assert.False(cloneResult.Success);
+            Assert.True(cloneResult.Cancelled);
+            Assert.True(cloneResult.ProcessMayStillRun);
+            Assert.False(cloneResult.ProcessNeverStarted);
+        });
+    }
+
+    [Fact]
+    public async Task ACloneWhoseMongoRestoreNeverStarted_ReportsIt()
+    {
+        await WithSealedArchiveAsync(async (sourceTenantId, targetTenantId, _) =>
+        {
+            var backupService = RestoreBackupServiceFactory.Create(systemFixture, (_, _) =>
+            {
+                var notStartedResult = CommandResult.Failure("Failed to start process 'mongorestore'");
+                notStartedResult.ProcessNeverStarted = true;
+                return Task.FromResult(notStartedResult);
+            });
+
+            var cloneResult = await backupService.CloneTenantToTempAsync(sourceTenantId, targetTenantId,
+                targetTenantId);
+
+            Assert.False(cloneResult.Success);
+            Assert.True(cloneResult.ProcessNeverStarted);
         });
     }
 

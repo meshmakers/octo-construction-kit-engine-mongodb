@@ -12,7 +12,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// <summary>
 ///     A restore whose mongorestore was cancelled, may still run or threw drops its target database after the data was
 ///     written: no attachable database with a sealed caller is left, and the tenant is not attached. While mongorestore
-///     may still run, the dropped target is claimed again for this instance and the claim is kept.
+///     may still run, the dropped target is claimed again and stays quarantined.
 /// </summary>
 [Collection(SystemCollection.Name)]
 public class RestoreInterruptedTests(SystemFixture systemFixture)
