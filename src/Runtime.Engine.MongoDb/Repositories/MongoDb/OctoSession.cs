@@ -159,13 +159,36 @@ internal abstract class OctoSession : IOctoSessionInternal
         // server while the call throws). Rollback side effects are never run after a commit attempt: deleting
         // the staged bytes of a transaction that did commit would leave the entity without its bytes.
         _commitAttempted = true;
-        await SessionHandle.CommitTransactionAsync();
+        try
+        {
+            await SessionHandle.CommitTransactionAsync();
+        }
+        catch
+        {
+            // AB#9561: after a commit attempt the transaction must never be aborted. The driver refuses it
+            // ("Cannot call AbortTransaction after calling CommitTransaction"), and that exception would replace the
+            // real commit error (a write concern timeout, a cancelled token, ...) in a caller's catch-abort-rethrow.
+            // So the session stops counting as active: AbortTransactionAsync and Dispose skip the abort, and the
+            // original exception propagates unchanged. Staged side effects are kept (see RunRollbackCallbacksAsync).
+            _isSessionActive = false;
+            await RunRollbackCallbacksAsync().ConfigureAwait(false);
+            throw;
+        }
+
         _isSessionActive = false;
         await RunCallbacksAsync(TakeCallbacks(_afterCommit), "commit").ConfigureAwait(false);
     }
 
     public async Task AbortTransactionAsync()
     {
+        if (_commitAttempted)
+        {
+            // AB#9561: a commit was attempted (it may even have succeeded on the server); the driver refuses an abort
+            // now. Skipping it keeps the caller's original commit exception visible in a catch-abort-rethrow block.
+            _logger.LogDebug("[{ApplicationName}] Abort requested after a commit attempt, skipping", ApplicationName);
+            return;
+        }
+
         if (!_isSessionActive)
         {
             _logger.LogWarning("[{ApplicationName}] Abort requested but session is not active, skipping", ApplicationName);

@@ -1141,6 +1141,19 @@ answers such a call `METHOD_OUTCOME_UNKNOWN` instead of `METHOD_HANDLER_FAILED` 
 wrapped by `OperationFailedException.BulkImportError`) and commands/commits (`MongoWriteConcernException`, not wrapped) kept their
 cause already. Test: `StreamData.UnitTests/MongoDbWriteExceptionMappingTests`.
 
+## A failed commit is never masked by an abort (AB#9561)
+
+`OctoSession.CommitTransactionAsync` sets `_commitAttempted` before it calls the driver. When the driver commit throws (a
+`w:majority` wtimeout under load, a write concern error, a cancelled token), the session stops counting as active, the
+rollback side effects are kept (outcome unknown, see AB#6248) and the **original exception is rethrown unchanged** (type,
+message, error labels such as `UnknownTransactionCommitResult`). After a commit attempt `AbortTransactionAsync` returns
+without calling the driver (Debug log) and `Dispose` does not abort either: the driver refuses an abort after a commit
+("Cannot call AbortTransaction after calling CommitTransaction"), and in the usual caller block
+`try { ...; Commit } catch { Abort; throw; }` (e.g. `TenantContext.EnableStreamDataAsync`) that `InvalidOperationException`
+used to replace the real commit error. Callers therefore need no guard of their own. `IsTransactionActive` is `false` after a
+failed commit; a retry starts a new session (`DatabaseCkModelRepository.RunInTransactionWithRetryAsync` does). Tests:
+`StreamData.UnitTests/OctoSessionTransactionCallbackTests` (`Commit_ThatThrows_*`, `Abort_AfterASuccessfulCommit_*`).
+
 ## Re-importing an archived entity (AB#7018)
 
 The default delete (GraphQL `deleteEntities`, `DeleteOptions` default) is `DeleteStrategies.Archive`: the document

@@ -81,9 +81,79 @@ public class OctoSessionTransactionCallbackTests
         A.CallTo(() => _handle.AbortTransaction(A<CancellationToken>._)).Throws(new InvalidOperationException("after commit"));
 
         await Assert.ThrowsAsync<IOException>(() => _session.CommitTransactionAsync());
+        await _session.AbortTransactionAsync();
         _session.Dispose();
 
         Assert.Equal(0, _afterCommit);
+        Assert.Equal(0, _afterRollback);
+        A.CallTo(() => _handle.AbortTransaction(A<CancellationToken>._)).MustNotHaveHappened();
+        A.CallTo(() => _handle.AbortTransactionAsync(A<CancellationToken>._)).MustNotHaveHappened();
+    }
+
+    [Fact]
+    public async Task Commit_ThatThrows_PropagatesTheOriginalException_ThroughACatchAbortRethrowBlock()
+    {
+        // AB#9561: the caller pattern of TenantContext (EnableStreamDataAsync, DisableStreamDataAsync,
+        // IsStreamDataEnabledAsync). The driver refuses an abort after a commit attempt; before the fix that
+        // InvalidOperationException replaced the real commit error.
+        var commitError = new TimeoutException("waiting for replication timed out (wtimeout 30000 ms)");
+        A.CallTo(() => _handle.CommitTransactionAsync(A<CancellationToken>._)).Throws(commitError);
+        A.CallTo(() => _handle.AbortTransactionAsync(A<CancellationToken>._))
+            .Throws(new InvalidOperationException("Cannot call AbortTransaction after calling CommitTransaction."));
+        A.CallTo(() => _handle.AbortTransaction(A<CancellationToken>._))
+            .Throws(new InvalidOperationException("Cannot call AbortTransaction after calling CommitTransaction."));
+
+        var thrown = await Assert.ThrowsAsync<TimeoutException>(async () =>
+        {
+            using var session = _session;
+            try
+            {
+                await session.CommitTransactionAsync();
+            }
+            catch
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
+        });
+
+        Assert.Same(commitError, thrown);
+        Assert.Equal("waiting for replication timed out (wtimeout 30000 ms)", thrown.Message);
+        Assert.False(_session.IsTransactionActive);
+        A.CallTo(() => _handle.AbortTransactionAsync(A<CancellationToken>._)).MustNotHaveHappened();
+        A.CallTo(() => _handle.AbortTransaction(A<CancellationToken>._)).MustNotHaveHappened();
+        A.CallTo(() => _handle.Dispose()).MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    public async Task Commit_ThatThrowsAMongoException_KeepsTypeMessageAndErrorLabels()
+    {
+        // The retry of DatabaseCkModelRepository.RunInTransactionWithRetryAsync reads the error labels of the
+        // commit exception; they must reach it unchanged.
+        var commitError = new MongoException("commit failed with an unknown result");
+        commitError.AddErrorLabel("UnknownTransactionCommitResult");
+        A.CallTo(() => _handle.CommitTransactionAsync(A<CancellationToken>._)).Throws(commitError);
+
+        var thrown = await Assert.ThrowsAsync<MongoException>(() => _session.CommitTransactionAsync());
+        await _session.AbortTransactionAsync();
+        _session.Dispose();
+
+        Assert.Same(commitError, thrown);
+        Assert.Equal("commit failed with an unknown result", thrown.Message);
+        Assert.True(thrown.HasErrorLabel("UnknownTransactionCommitResult"));
+        A.CallTo(() => _handle.AbortTransactionAsync(A<CancellationToken>._)).MustNotHaveHappened();
+        A.CallTo(() => _handle.AbortTransaction(A<CancellationToken>._)).MustNotHaveHappened();
+    }
+
+    [Fact]
+    public async Task Abort_AfterASuccessfulCommit_DoesNotCallTheDriver()
+    {
+        await _session.CommitTransactionAsync();
+
+        await _session.AbortTransactionAsync();
+
+        A.CallTo(() => _handle.AbortTransactionAsync(A<CancellationToken>._)).MustNotHaveHappened();
+        Assert.Equal(1, _afterCommit);
         Assert.Equal(0, _afterRollback);
     }
 
