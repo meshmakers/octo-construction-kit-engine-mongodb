@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- AB#9561 Fix: a failed transaction commit is no longer masked by "Cannot call AbortTransaction after calling
+  CommitTransaction". After a commit attempt `OctoSession` never aborts the transaction (`AbortTransactionAsync` and
+  `Dispose` skip the driver call), so the original commit exception (a `w:majority` wtimeout, a write concern error, a
+  cancelled token) reaches the caller unchanged, also through `try { ... Commit } catch { Abort; throw; }` blocks such as
+  `TenantContext.EnableStreamDataAsync`. After a failed commit the session is no longer active. Tests:
+  `OctoSessionTransactionCallbackTests`.
 - AB#8897 New: a runtime-entity query that runs too long is stopped by MongoDB (`maxTimeMS`) and ends with
   `RuntimeQueryTimeoutException` (tenant, CK type, limit, elapsed time) instead of keeping the database and the service
   busy. The limit applies to each MongoDB operation of a query (page and count of a paged query each get the full
