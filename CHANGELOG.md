@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins the persisted answers of the engine change "a missing
+  record answers not found before its payload is validated" (engine PR 383): with the new engine a missing rtId with
+  an invalid payload, a missing association origin and a record addressed under a sibling type answer
+  `EntityNotFoundException` (before: a validation error, the rule engine's `RuntimeRepositoryException`, or for a sibling
+  type no not-found answer at all), and a delete by an abstract type of a missing rtId answers not found instead of returning. No
+  code change in this repository; the test needs the engine version that contains PR 383.
 - AB#9342 Fix: two CK types of one collection with an Ascending index on the same attributes share one index. Both
   produce the key spec `{ckTypeId, attr..., _id, rtState}` and MongoDB holds one non-unique index per key spec, so the
   index update of the second type failed with MongoDB 85 ("Index already exists with a different name"), logged a warning
