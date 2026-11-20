@@ -31,7 +31,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 ///     with both declaration orders of the two types.
 /// </summary>
 [Collection(ImportTestCkModelCollection.Name)]
-public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
+public partial class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
 {
     private const string FieldName = "SimpleField";
     private const string FieldPath = "attributes.simpleField";
@@ -537,8 +537,22 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
     ///     until the returned scope is disposed; then hands them to <paramref name="assert" /> as JSON and switches the
     ///     profiler off again. The profiler needs the admin user (the tenant user may not run <c>profile</c>).
     /// </summary>
-    private async Task<IAsyncDisposable> ProfileIndexCommandsAsync(IMongoCollection<BsonDocument> collection,
-        Action<List<string>> assert)
+    private Task<IAsyncDisposable> ProfileIndexCommandsAsync(IMongoCollection<BsonDocument> collection,
+        Action<List<string>> assert) =>
+        ProfileAsync(collection,
+            name => new BsonDocument("$or", new BsonArray
+            {
+                new BsonDocument("command.createIndexes", name), new BsonDocument("command.dropIndexes", name)
+            }),
+            assert);
+
+    /// <summary>
+    ///     Records every profiler entry of <paramref name="collection" />'s database that matches the filter
+    ///     <paramref name="match" /> builds from the collection name (database profiler, level 2) until the returned scope
+    ///     is disposed; see <see cref="ProfileIndexCommandsAsync" />.
+    /// </summary>
+    private async Task<IAsyncDisposable> ProfileAsync<TDocument>(IMongoCollection<TDocument> collection,
+        Func<string, BsonDocument> match, Action<List<string>> assert)
     {
         var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
         var urlBuilder = new MongoUrlBuilder
@@ -558,19 +572,9 @@ public class SharedIndexKeySpecTests(ImportTestCkModelFixture fixture)
         return new AsyncScope(async () =>
         {
             await database.RunCommandAsync<BsonDocument>(new BsonDocument("profile", 0));
-            var filter = new BsonDocument
-            {
-                { "ts", new BsonDocument("$gte", from) },
-                {
-                    "$or", new BsonArray
-                    {
-                        new BsonDocument("command.createIndexes", name),
-                        new BsonDocument("command.dropIndexes", name)
-                    }
-                }
-            };
+            var filter = new BsonDocument("ts", new BsonDocument("$gte", from)).AddRange(match(name));
             var entries = await database.GetCollection<BsonDocument>("system.profile").Find(filter).ToListAsync();
-            assert(entries.Select(e => e["command"].ToJson()).ToList());
+            assert(entries.Select(e => e.GetValue("command", e.GetValue("op", BsonNull.Value)).ToJson()).ToList());
         });
     }
 
