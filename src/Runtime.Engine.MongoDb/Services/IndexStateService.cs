@@ -302,6 +302,10 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
         return true;
     }
 
+    /// <summary>Index name and collection; the collection compared without case, as everywhere in this service.</summary>
+    private static (string Name, string Collection) Key(string indexName, string collectionName) =>
+        (indexName, collectionName.ToLowerInvariant());
+
     private static (string Name, string Collection, IndexState State, string? Error) StateKey(CkIndexState s) =>
         (s.Name, s.CollectionName.ToLowerInvariant(), s.State, s.ErrorMessage);
 
@@ -345,7 +349,7 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
             }
 
             // Use composite key of index name and collection name for uniqueness
-            var key = (state.Name, state.CollectionName);
+            var key = Key(state.Name, state.CollectionName);
             if (state.State == IndexState.Failed && states.TryGetValue(key, out var tracked) &&
                 tracked.State == IndexState.Applied)
             {
@@ -356,7 +360,7 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
 
             if (_removedByType.TryGetValue(typeId, out var removed))
             {
-                removed.RemoveWhere(r => r.Name == state.Name && r.Collection == state.CollectionName);
+                removed.RemoveWhere(r => (r.Name, r.Collection) == key);
             }
 
             return true;
@@ -364,7 +368,7 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
 
         public bool IsTrackedApplied(CkId<CkTypeId> typeId, string indexName, string collection) =>
             _indexStatesByType.TryGetValue(typeId, out var states) &&
-            states.TryGetValue((indexName, collection), out var tracked) && tracked.State == IndexState.Applied;
+            states.TryGetValue(Key(indexName, collection), out var tracked) && tracked.State == IndexState.Applied;
 
         public void ExpectIndex(CkId<CkTypeId> typeId, string indexName, string collection)
         {
@@ -374,7 +378,7 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
                 _expectedByType[typeId] = expected;
             }
 
-            expected.Add((indexName, collection));
+            expected.Add(Key(indexName, collection));
         }
 
         /// <summary>
@@ -387,7 +391,7 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
         public void RemoveIndexState(CkId<CkTypeId> typeId, string indexName, string collection,
             IReadOnlyCollection<IndexState> states)
         {
-            var key = (indexName, collection);
+            var key = Key(indexName, collection);
             if (_indexStatesByType.TryGetValue(typeId, out var tracked) && tracked.TryGetValue(key, out var state))
             {
                 if (state.State == IndexState.Applied)
@@ -409,7 +413,7 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
 
             foreach (var removedState in states)
             {
-                removed.Add((indexName, collection, removedState));
+                removed.Add((key.Name, key.Collection, removedState));
             }
         }
 
@@ -457,14 +461,14 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
             // Replace the stored states of the names tracked in this run, remove the ones removed in this run and, when
             // reconciled, the Applied states of indexes that do not exist and (after a completed run) the Failed states
             // of names no definition expected.
-            var newStateKeys = newStates.Select(s => (s.Name, s.CollectionName)).ToHashSet();
+            var newStateKeys = newStates.Select(s => Key(s.Name, s.CollectionName)).ToHashSet();
             var merged = stored.Where(existing =>
-                    !newStateKeys.Contains((existing.Name, existing.CollectionName)) &&
-                    !removed.Contains((existing.Name, existing.CollectionName, existing.State)) &&
+                    !newStateKeys.Contains(Key(existing.Name, existing.CollectionName)) &&
+                    !removed.Contains((existing.Name, existing.CollectionName.ToLowerInvariant(), existing.State)) &&
                     !(reconcile && InThisCollection(existing) &&
                       (existing.State == IndexState.Applied
                           ? !Exists(existing)
-                          : _runCompleted && !expected.Contains((existing.Name, existing.CollectionName)))))
+                          : _runCompleted && !expected.Contains(Key(existing.Name, existing.CollectionName)))))
                 .ToList();
 
             // An unchanged state keeps its stored AppliedAt.

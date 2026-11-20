@@ -1057,7 +1057,9 @@ as 300 items of which only 35 were distinct. Rules:
   - **Reconcile.** After the cleanup the run reads the final index list once (`Reconcile`): every `Applied` state of a type
     of the collection (base chain, root, descendants) whose index is not in it is removed, stored or tracked - whatever
     dropped it (the cleanup's plain `DropIndexAsync`, a replaced text index, an earlier run aborted before it persisted its
-    states). Without the list (read failed) the states are persisted as tracked.
+    states). Without the list (read failed) the states are persisted as tracked. Every index that serves a definition is
+    recorded `Applied`, also one found under its expected name with the definition (built by an earlier run, also one
+    aborted before it persisted its states), so the type keeps `Applied` under the index that serves it.
   - **A failure stays visible until the target shape exists.** `Failed` names the index a definition wants. An update that
     keeps a legacy index (`TrackServedBy(..., targetShape: false)`) removes only an `Applied` state under the expected name,
     so the `Failed` of an upgrade whose tiebreak build failed survives every CK import until a later build or upgrade

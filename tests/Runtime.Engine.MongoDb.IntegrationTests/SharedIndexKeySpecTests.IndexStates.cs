@@ -62,8 +62,8 @@ public partial class SharedIndexKeySpecTests
 
     /// <summary>
     ///     AC 2: an upgrade that was aborted after the tiebreak index was built but before the states were persisted
-    ///     (both indexes present, <c>Applied</c> stored under the legacy name). The retry drops the legacy index and its
-    ///     states.
+    ///     (both indexes present, the only stored state of each type is <c>Applied</c> under the legacy name). The retry
+    ///     drops the legacy index and its states, and each type is <c>Applied</c> under the tiebreak index the run found.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -79,7 +79,7 @@ public partial class SharedIndexKeySpecTests
             await ReplaceFieldIndexesAsync(collection, (legacyName, LegacyKeys), (tiebreakName, TiebreakKeys));
             foreach (var typeName in new[] { AlphaTypeName, BetaTypeName })
             {
-                await AddStoredStateAsync(tenant, "Retry", typeName, legacyName, IndexState.Applied);
+                await AddStoredStateAsync(tenant, "Retry", typeName, legacyName, IndexState.Applied, onlyState: true);
             }
 
             using (var adminSession = await systemContext.GetAdminSessionAsync())
@@ -293,21 +293,27 @@ public partial class SharedIndexKeySpecTests
         CollectionIndexCache.Invalidate(collection);
     }
 
+    /// <summary>
+    ///     Stores a state under <paramref name="indexName" /> on the type; with <paramref name="onlyState" /> it is the
+    ///     type's only state in the collection (the other states of the collection are removed).
+    /// </summary>
     private static async Task AddStoredStateAsync(ITenantContext tenant, string modelName, string typeName,
-        string indexName, IndexState state)
+        string indexName, IndexState state, bool onlyState = false)
     {
         var repository = (TenantRepository)tenant.GetTenantRepository();
         var ckTypes = repository.DataSource.CkTypes;
+        var collectionName = Collection(tenant, modelName).CollectionNamespace.CollectionName;
         var ckType = await ckTypes.DocumentAsync(repository.GetSession(),
             new CkId<CkTypeId>($"{modelName}-1.0.0/{typeName}"));
         Assert.NotNull(ckType);
         ckType.IndexStates =
         [
-            .. (ckType.IndexStates ?? []).Where(s => s.Name != indexName),
+            .. (ckType.IndexStates ?? []).Where(s =>
+                s.Name != indexName && !(onlyState && s.CollectionName == collectionName)),
             new CkIndexState
             {
                 Name = indexName,
-                CollectionName = Collection(tenant, modelName).CollectionNamespace.CollectionName,
+                CollectionName = collectionName,
                 State = state,
                 AppliedAt = DateTime.UtcNow
             }

@@ -19,7 +19,8 @@
 - AB#9391 Fix: the index states of the CK types (`CkType.IndexStates`) always name the indexes that exist. At the end of
   every collection run of the index update and the tiebreak upgrade the states of all types of the collection are
   reconciled with the final index list: an `Applied` state under an index that no longer exists is removed (the cleanup
-  dropped a legacy index without removing its states, also when an earlier upgrade was aborted before it persisted them).
+  dropped a legacy index without removing its states, also when an earlier upgrade was aborted before it persisted them),
+  and every index that serves a definition is recorded `Applied`, also one found under its expected name.
   A `Failed` tiebreak build of the upgrade stays visible through later CK imports that keep the legacy index (a normal
   update removed it) until an index in the target shape serves the definition; a `Failed` state no current definition
   expects is removed after a completed run. A failure never overwrites the `Applied` state of an existing index of the same

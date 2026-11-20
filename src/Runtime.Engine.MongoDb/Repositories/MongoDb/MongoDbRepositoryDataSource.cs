@@ -1477,9 +1477,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     // AB#9342: the only legacy index with these keys carries the name of another type's slot; it serves
                     // this type too (MongoDB holds one index per key spec). AB#9391: the type it was built for is named
                     // when a stored index state identifies it.
-                    using var stateSession = await GetSessionAsync();
-                    holderType = (await _indexStateService.FindStoredHolderAsync(stateSession, legacy.Name,
-                        collection.CollectionName))?.ToString() ?? SharedIndexKeySpecs.UnknownHolder;
+                    holderType = await FindStoredHolderForLogAsync(legacy.Name, collection.CollectionName);
                     _logger.LogInformation(
                         "Legacy index '{SharedName}' of type '{HolderCkTypeId}' in '{CollectionName}' has the keys of the " +
                         "index of type '{CkTypeId}'; it is kept and serves the type until the tiebreak index upgrade (AB#9342)",
@@ -1543,10 +1541,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             }
             else if (indexDefiningType != null)
             {
-                // AB#9391: the index exists under the expected name with the definition (built by an earlier run or
-                // another process): a failure an earlier run recorded under the name is over.
-                _indexStateService.RemoveIndexState(indexDefiningType.CkTypeId, indexName, collection.CollectionName,
-                    IndexState.Failed);
+                // AB#9391: the index exists under the expected name with the definition (built by an earlier run, also
+                // one aborted before it persisted its states, or by another process): Applied under it, which replaces a
+                // failure an earlier run recorded there. An unchanged state is not written again.
+                TrackServedBy(indexDefiningType, indexName, indexName, collection.CollectionName, targetShape: true);
             }
 
             if (legacy != null)
@@ -1606,6 +1604,27 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 indexName, ckTypeIndex.IndexType, collection.CollectionName, ex.Message);
 
             // Don't rethrow - continue with other indexes
+        }
+    }
+
+    /// <summary>
+    ///     AB#9391: the type a legacy index another type shares was built for, for the log line only: the type a stored
+    ///     index state identifies, else <see cref="SharedIndexKeySpecs.UnknownHolder" />. A failed read never stops the
+    ///     collection run.
+    /// </summary>
+    private async Task<string> FindStoredHolderForLogAsync(string indexName, string collectionName)
+    {
+        try
+        {
+            using var session = await GetSessionAsync();
+            return (await _indexStateService.FindStoredHolderAsync(session, indexName, collectionName))?.ToString()
+                   ?? SharedIndexKeySpecs.UnknownHolder;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read the index states naming '{IndexName}' of '{CollectionName}'",
+                indexName, collectionName);
+            return SharedIndexKeySpecs.UnknownHolder;
         }
     }
 
