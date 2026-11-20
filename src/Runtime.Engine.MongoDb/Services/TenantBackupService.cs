@@ -577,9 +577,9 @@ internal class TenantBackupService(
         catch (Exception exception)
         {
             logger.LogError(exception,
-                "Restore of tenant '{TenantId}' failed before the platform-only values were removed; the restored database '{DatabaseName}' is dropped",
+                "Restore of tenant '{TenantId}' failed before the platform-only values were removed; the restored database '{DatabaseName}' is dropped while this restore still holds its claim",
                 tenantId, databaseName);
-            await DropRestoredTargetAsync(tenantId, databaseName, claim);
+            await DropRestoredTargetOrThrowLeftToOperatorAsync(tenantId, databaseName, claim, exception);
             throw;
         }
 
@@ -655,7 +655,7 @@ internal class TenantBackupService(
 
     /// <summary>
     ///     Attaches the restored database (see <see cref="AttachInOneTransactionAsync" />). A failed attach drops the
-    ///     target after its transaction was aborted.
+    ///     target after its transaction was aborted, but only while this restore still holds its own claim.
     /// </summary>
     /// <returns>The warning of a tenant-created notification that could not be published, else null.</returns>
     private async Task<string?> AttachUnderOwnClaimAsync(string tenantId, string databaseName, RestoreClaim claim)
@@ -667,12 +667,27 @@ internal class TenantBackupService(
         catch (Exception exception)
         {
             logger.LogError(exception,
-                "Restore of tenant '{TenantId}' could not attach database '{DatabaseName}'; the restored database is dropped",
+                "Restore of tenant '{TenantId}' could not attach database '{DatabaseName}'; the restored database is dropped while this restore still holds its claim",
                 tenantId, databaseName);
-            await DropRestoredTargetAsync(tenantId, databaseName, claim);
+            await DropRestoredTargetOrThrowLeftToOperatorAsync(tenantId, databaseName, claim, exception);
             throw;
         }
     }
+
+    private async Task DropRestoredTargetOrThrowLeftToOperatorAsync(string tenantId, string databaseName,
+        RestoreClaim claim, Exception failure)
+    {
+        var dropOutcome = await DropRestoredTargetAsync(tenantId, databaseName, claim);
+        if (dropOutcome == RestoredTargetDrop.LeftToOperator)
+        {
+            throw new InvalidOperationException($"{failure.Message} {LeftToOperatorNote(databaseName)}", failure);
+        }
+    }
+
+    private static string LeftToOperatorNote(string databaseName) =>
+        $"This restore no longer holds its claim on database '{databaseName}' (another operation replaced or " +
+        "removed it, or it could not be read), so the database was not dropped: check which operation holds it, " +
+        "and drop it by hand only once no restore or attach of it runs any more.";
 
     /// <summary>
     ///     One transaction that first lifts the quarantine of this restore's own claim: when the claim is no longer its
@@ -724,11 +739,15 @@ internal class TenantBackupService(
         logger.LogError(
             "mongorestore of tenant '{TenantId}' did not complete (cancelled: {Cancelled}, process may still run: {ProcessMayStillRun}); the target database '{DatabaseName}' is dropped",
             tenantId, result.Cancelled, result.ProcessMayStillRun, databaseName);
-        var dropped = await DropRestoredTargetAsync(tenantId, databaseName, claim);
-        var dropNote = dropped
-            ? $"The target database '{databaseName}' was dropped."
-            : $"The target database '{databaseName}' could not be dropped; it stays quarantined and no attach accepts it. Drop it by hand.";
-        if (dropped && result.ProcessMayStillRun)
+        var dropOutcome = await DropRestoredTargetAsync(tenantId, databaseName, claim);
+        var dropNote = dropOutcome switch
+        {
+            RestoredTargetDrop.Dropped => $"The target database '{databaseName}' was dropped.",
+            RestoredTargetDrop.DropFailed =>
+                $"The target database '{databaseName}' could not be dropped; it stays quarantined and no attach accepts it. Drop it by hand.",
+            _ => LeftToOperatorNote(databaseName)
+        };
+        if (dropOutcome == RestoredTargetDrop.Dropped && result.ProcessMayStillRun)
         {
             var claimKept = await KeepClaimWhileMongoRestoreMayRunAsync(tenantId, databaseName, claim);
             dropNote = claimKept
@@ -767,9 +786,29 @@ internal class TenantBackupService(
         }
     }
 
-    /// <summary>Drops the restored target; when the drop fails, it stays quarantined so no attach accepts it.</summary>
-    private async Task<bool> DropRestoredTargetAsync(string tenantId, string databaseName, RestoreClaim claim)
+    private enum RestoredTargetDrop
     {
+        Dropped,
+        DropFailed,
+        LeftToOperator
+    }
+
+    /// <summary>
+    ///     Drops the restored target while it still carries this restore's own claim; when the drop fails, it stays
+    ///     quarantined so no attach accepts it. A target whose claim another operation replaced or removed is left
+    ///     unchanged: it may hold that operation's data.
+    /// </summary>
+    private async Task<RestoredTargetDrop> DropRestoredTargetAsync(string tenantId, string databaseName,
+        RestoreClaim claim)
+    {
+        if (!await StillHoldsOwnClaimAsync(tenantId, databaseName, claim))
+        {
+            logger.LogError(
+                "Restore of tenant '{TenantId}' no longer holds its claim on database '{DatabaseName}'; the database is not dropped and is left to the operator",
+                tenantId, databaseName);
+            return RestoredTargetDrop.LeftToOperator;
+        }
+
         var dropped = await platformOnlyValueRemover.DropRestoredDatabaseAsync(databaseName);
         if (!dropped)
         {
@@ -777,9 +816,26 @@ internal class TenantBackupService(
                 "Restore of tenant '{TenantId}': the restored database '{DatabaseName}' could not be dropped; it stays quarantined",
                 tenantId, databaseName);
             claim.Keep();
+            return RestoredTargetDrop.DropFailed;
         }
 
-        return dropped;
+        return RestoredTargetDrop.Dropped;
+    }
+
+    private async Task<bool> StillHoldsOwnClaimAsync(string tenantId, string databaseName, RestoreClaim claim)
+    {
+        try
+        {
+            return await claim.IsOnTargetAsync();
+        }
+        catch (Exception readException)
+        {
+            logger.LogError(readException,
+                "Restore of tenant '{TenantId}' could not read the claim on database '{DatabaseName}'; the claim is kept",
+                tenantId, databaseName);
+            claim.Keep();
+            return false;
+        }
     }
 
     /// <summary>
@@ -809,6 +865,14 @@ internal class TenantBackupService(
         /// <summary>Whether the marker on the target is this restore's own claim (inserted or taken over).</summary>
         public bool IsHeld => _inserted;
 
+        /// <summary>Reads the marker of the target: whether it is still exactly this restore's claim.</summary>
+        public async Task<bool> IsOnTargetAsync()
+        {
+            var marker = await store.GetAsync(databaseName, CancellationToken.None);
+            return marker != null &&
+                   TenantOwnershipStore.IsClaim(marker, ownerSystemDatabaseName, tenantId, _claimTime, _claimId);
+        }
+
         /// <summary>
         ///     Lifts the quarantine in the transaction of <paramref name="session" />, while the marker is still this
         ///     restore's own claim; false when another operation replaced it.
@@ -836,9 +900,11 @@ internal class TenantBackupService(
 
             if (marker.Quarantined)
             {
-                return $"a restore that did not complete quarantined the database (owner system database " +
-                       $"'{marker.OwnerSystemDatabaseName}', tenant '{marker.TenantId}'); an operator must drop it " +
-                       "first; nothing was dropped or written by the restore";
+                return $"another restore holds or quarantined the database (owner system database " +
+                       $"'{marker.OwnerSystemDatabaseName}', tenant '{marker.TenantId}', claimed " +
+                       $"{marker.AttachedAtUtc:u}); that restore may still be running. Wait for it to finish, or " +
+                       "confirm that no restore of this database runs any more, and only then drop the database by " +
+                       "hand; nothing was dropped or written by this restore";
             }
 
             if (string.Equals(marker.OwnerSystemDatabaseName, ownerSystemDatabaseName, StringComparison.Ordinal))

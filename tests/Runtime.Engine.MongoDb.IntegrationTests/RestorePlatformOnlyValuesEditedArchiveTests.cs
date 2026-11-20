@@ -153,6 +153,7 @@ public class RestorePlatformOnlyValuesEditedArchiveTests(SystemFixture systemFix
         finally
         {
             await ThrowawayTenant.DropAsync(systemContext, targetTenantId);
+            await GetDatabase(targetTenantId).Client.DropDatabaseAsync(targetTenantId, CancellationToken.None);
             await ThrowawayTenant.DropAsync(systemContext, sourceTenantId);
             File.Delete(archivePath);
         }
@@ -188,6 +189,7 @@ public class RestorePlatformOnlyValuesEditedArchiveTests(SystemFixture systemFix
         finally
         {
             await ThrowawayTenant.DropAsync(systemContext, targetTenantId);
+            await GetDatabase(targetTenantId).Client.DropDatabaseAsync(targetTenantId, CancellationToken.None);
             await ThrowawayTenant.DropAsync(systemContext, sourceTenantId);
             File.Delete(archivePath);
         }

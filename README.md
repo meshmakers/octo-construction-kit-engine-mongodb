@@ -158,13 +158,15 @@ values (`CommandResult.RemovedPlatformOnlyValues`, paths only). A removal on res
 moves a ciphertext into another attribute of the same tenant; only location-bound envelopes (enc:v3) close that. A restore
 that cannot remove the values safely leaves no database that holds them: every restore that does not complete after
 mongorestore started (a non-zero exit, a timeout, a cancellation, an exception, a failed attach) drops the target database
-(when the drop fails, the target stays quarantined). Only a cancellation sets `CommandResult.Cancelled`; a timeout
+while the restore still holds its own claim on it (when the drop fails, the target stays quarantined; when another operation
+replaced or removed the claim, the database is left unchanged for the operator). Only a cancellation sets `CommandResult.Cancelled`; a timeout
 is a plain failure. When mongorestore may still run, the dropped target is claimed again and stays quarantined until an
 operator drops it by hand. The claim of a restore quarantines its target until the restore's own attach: no attach (also
 not a plain attach of the same instance) and no other restore accepts a quarantined database. A mongorestore that never
 started leaves the target as it was. While the target is not a registered tenant, the claim of a restore is exclusive: a
-second restore of the same target is refused, and a restore whose claim was replaced before the attach (each claim carries a
-random id) drops the target and fails. Details:
+second restore of the same target is refused (the restore submitted first may still be running: wait for it, or confirm that
+no restore runs, before dropping the database by hand), and a restore whose claim was replaced or removed before the attach
+(each claim carries a random id) fails without dropping the target. Details:
 `CLAUDE.md`, "Restore leaves out platform-only values"; the purpose binding of sealed execution values and the operator steps
 at the upgrade are documented in octo-communication-controller-services.
 

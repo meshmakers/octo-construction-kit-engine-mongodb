@@ -185,8 +185,10 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture)
     public async Task ExecuteCommandAsync_WhenTheProgramRan_DoesNotReportThatItNeverStarted()
     {
         var result = await _service.ExecuteCommandAsync("bash", ["-c", "exit 3"]);
+        Assert.SkipWhen(result.ProcessNeverStarted, "bash is not available on this host");
 
         result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(3);
         result.ProcessNeverStarted.Should().BeFalse();
     }
 
@@ -266,13 +268,12 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture)
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (DateTime.UtcNow < deadline)
         {
-            var statPath = $"/proc/{processId}/stat";
-            if (!File.Exists(statPath))
+            var statLine = await TryReadProcessStatAsync(processId);
+            if (statLine is null)
             {
                 return true;
             }
 
-            var statLine = await File.ReadAllTextAsync(statPath);
             var processState = statLine[(statLine.LastIndexOf(')') + 2)..].Split(' ')[0];
             if (processState == "Z" || processState == "X")
             {
@@ -283,6 +284,18 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture)
         }
 
         return false;
+    }
+
+    private static async Task<string?> TryReadProcessStatAsync(int processId)
+    {
+        try
+        {
+            return await File.ReadAllTextAsync($"/proc/{processId}/stat");
+        }
+        catch (Exception readException) when (readException is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     #endregion

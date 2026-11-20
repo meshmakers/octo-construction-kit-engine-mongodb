@@ -58,6 +58,7 @@ public class RestoreLeavesOutSecretDefaultsTests(SystemFixture systemFixture)
         finally
         {
             await ThrowawayTenant.DropAsync(systemContext, tenantId);
+            await _support.GetDatabase(tenantId).Client.DropDatabaseAsync(tenantId, CancellationToken.None);
             File.Delete(archivePath);
         }
     }
@@ -115,6 +116,7 @@ public class RestoreLeavesOutSecretDefaultsTests(SystemFixture systemFixture)
         finally
         {
             await ThrowawayTenant.DropAsync(systemContext, targetTenantId);
+            await _support.GetDatabase(targetTenantId).Client.DropDatabaseAsync(targetTenantId, CancellationToken.None);
             await ThrowawayTenant.DropAsync(systemContext, sourceTenantId);
             File.Delete(archivePath);
         }
@@ -147,6 +149,7 @@ public class RestoreLeavesOutSecretDefaultsTests(SystemFixture systemFixture)
         finally
         {
             await ThrowawayTenant.DropAsync(systemContext, cloneTenantId);
+            await _support.GetDatabase(cloneTenantId).Client.DropDatabaseAsync(cloneTenantId, CancellationToken.None);
             await ThrowawayTenant.DropAsync(systemContext, sourceTenantId);
         }
     }

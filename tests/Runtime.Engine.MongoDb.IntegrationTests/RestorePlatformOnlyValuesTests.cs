@@ -106,6 +106,7 @@ public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
         finally
         {
             await ThrowawayTenant.DropAsync(systemContext, targetTenantId);
+            await GetDatabase(targetTenantId).Client.DropDatabaseAsync(targetTenantId, CancellationToken.None);
             await ThrowawayTenant.DropAsync(systemContext, sourceTenantId);
             if (File.Exists(archivePath))
             {
@@ -142,6 +143,7 @@ public class RestorePlatformOnlyValuesTests(SystemFixture systemFixture)
         finally
         {
             await ThrowawayTenant.DropAsync(systemContext, targetTenantId);
+            await GetDatabase(targetTenantId).Client.DropDatabaseAsync(targetTenantId, CancellationToken.None);
             await ThrowawayTenant.DropAsync(systemContext, sourceTenantId);
             if (File.Exists(archivePath))
             {

@@ -279,8 +279,37 @@ public class RepositoryOpsService(
     /// <summary>
     ///     Kills the process with its whole tree and waits a bounded time for it to exit.
     /// </summary>
-    /// <returns><c>true</c> when the process exited, <c>false</c> when it may still run.</returns>
+    /// <returns>
+    ///     <c>true</c> when the whole tree was killed and the process exited, <c>false</c> when the process or one of
+    ///     its descendants may still run.
+    /// </returns>
     private async Task<bool> StopProcessTreeAsync(Process process, string displayCommand)
+    {
+        var processTreeKilled = TryKillProcessTree(process, displayCommand);
+
+        using var exitWait = new CancellationTokenSource(ProcessExitWaitTimeout);
+        try
+        {
+            await process.WaitForExitAsync(exitWait.Token);
+            if (!processTreeKilled)
+            {
+                logger.LogError(
+                    "The process exited, but the kill of its tree failed, so a descendant may still run: {Command}",
+                    displayCommand);
+            }
+
+            return processTreeKilled;
+        }
+        catch (Exception waitException)
+        {
+            logger.LogError(waitException,
+                "The process did not exit within {ExitWaitTimeout} after the kill and may still run: {Command}",
+                ProcessExitWaitTimeout, displayCommand);
+            return false;
+        }
+    }
+
+    private bool TryKillProcessTree(Process process, string displayCommand)
     {
         try
         {
@@ -288,23 +317,12 @@ public class RepositoryOpsService(
             {
                 process.Kill(entireProcessTree: true);
             }
+
+            return true;
         }
         catch (Exception killException)
         {
             logger.LogError(killException, "Could not kill the process tree of: {Command}", displayCommand);
-        }
-
-        using var exitWait = new CancellationTokenSource(ProcessExitWaitTimeout);
-        try
-        {
-            await process.WaitForExitAsync(exitWait.Token);
-            return true;
-        }
-        catch (Exception waitException)
-        {
-            logger.LogError(waitException,
-                "The process did not exit within {ExitWaitTimeout} after the kill and may still run: {Command}",
-                ProcessExitWaitTimeout, displayCommand);
             return false;
         }
     }

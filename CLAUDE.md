@@ -3609,14 +3609,18 @@ could move the ciphertext into any other attribute.
     values is left on the server for a later attach. When that drop fails, the claim of this instance on the database is
     kept (not released), so no other instance attaches it, and the error log asks to drop it by hand.
   - **Every restore that does not complete after mongorestore started drops the target database** (AB#9420): a non-zero
-    exit, a timeout (also when the kill was confirmed), a cancellation, an exception, a failed attach. A partly restored
+    exit, a timeout (also when the kill was confirmed), a cancellation, an exception, a failed attach. The drop runs only
+    while the marker on the target is still this restore's own claim (`RestoreClaim.IsOnTargetAsync`); when another
+    operation replaced or removed it, or it cannot be read, the database is left unchanged, the restore fails and its error
+    tells the operator to check which operation holds it before dropping it by hand. A partly restored
     database is never only cleaned: the clean-up would read `CkTypeInheritance` from the same partial database, and an
     execution of a derived type would keep its sealed caller when that collection was not written yet. A failed restore
     over a detached database drops its earlier content too.
   - **Timeout versus cancellation.** On cancellation, a timeout or an exception while the process runs,
     `RepositoryOpsService` kills the whole process tree and waits up to 30 s for it to exit. Only a cancellation sets
     `CommandResult.Cancelled`; a timeout and an exception return a plain failure. All three set
-    `CommandResult.ProcessMayStillRun` when the kill failed or the process did not exit in time. The drop removes the claim
+    `CommandResult.ProcessMayStillRun` when the kill failed (also when the parent exited afterwards: a descendant may
+    still run) or the process did not exit in time. The drop removes the claim
     marker with the database, so a restore whose mongorestore may still run (or threw) then claims the empty target again
     and **keeps that claim, quarantined**: the database holds only the claim marker plus whatever mongorestore still
     writes, no attach and no restore accepts it, and the error tells the operator to make sure mongorestore has stopped and
@@ -3640,7 +3644,10 @@ could move the ciphertext into any other attribute.
     random claim id (`TenantOwnershipRecord.ClaimId`), so two restores that claim in the same millisecond never both count
     as owner. The attach transaction first lifts the quarantine of exactly this claim
     (`RestoreClaim.TryLiftQuarantineAsync`): when it is no longer this restore's claim, the transaction is aborted, the
-    target is dropped and the restore fails; a change after that write collides with it. The session and the notification
+    target is left unchanged (it may hold the other operation's data) and the restore fails; a change after that write
+    collides with it. The refusal of a quarantined or claimed target is logged as "another restore holds or quarantined
+    the database ... may still be running": the operator waits for that restore, or confirms that none runs, before
+    dropping the database by hand. The session and the notification
     scope of the attach are opened inside the guarded block, so their failure drops the target too. A stale claim of this
     instance on an unregistered database (a restore that kept its claim, a release that failed) therefore blocks later
     restores of that database until it is dropped by hand.
@@ -3668,8 +3675,10 @@ could move the ciphertext into any other attribute.
   forms fail the restore and drop the database; a mongorestore that fails after writing drops the target),
   `RestoreWithoutCkTypeInheritanceTests` (a non-zero exit before the inheritance was written drops the target; a completed
   restore without inheritance and an execution of an unknown type fails and drops it), `RestoreConcurrentSameTargetTests`
-  (of two concurrent restores of the same target only one attaches and no sealed caller survives; a claim replaced before
-  the attach, also by a claim of the same millisecond, drops the target and fails the restore),
+  (of two concurrent restores of the same target only one attaches, the second is refused at the claim before its
+  mongorestore runs, and no sealed caller survives; a claim replaced or removed before the attach, also by a claim of the
+  same millisecond, fails the restore and leaves the target with the other claim unchanged; a mongorestore that fails
+  after its claim was replaced leaves the target too),
   `RestoreInterruptedTests` (a mongorestore cancelled, possibly still running or throwing after it wrote drops the target; the
   last two keep the re-claimed target quarantined), `RestoreFailsClosedAfterMongoRestoreTests` (a cancellation after a
   successful mongorestore drops the database, a failed drop keeps it quarantined and a plain attach is refused, a clone
