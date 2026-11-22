@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- AB#9594 Chore: NuGet packages raised to the newest versions within the .NET 10 line: MongoDB.Driver and MongoDB.Bson
+  3.14.1 (same as the engine), Npgsql 10.0.4 (11.x moves with the .NET 11 line, AB#9580), Dapper 2.1.100, Polly.Core
+  8.9.1, Snappier 1.3.2, Microsoft.OpenApi 2.13.1, NLog.Web.AspNetCore 6.3.0, Swashbuckle.AspNetCore.SwaggerUI 11.0.1,
+  test tooling (Test.Sdk, xunit.v3, runner, coverlet, FluentAssertions, Testcontainers.MongoDb). No behaviour change.
 - AB#9561 Fix: a failed transaction commit is no longer masked by "Cannot call AbortTransaction after calling
   CommitTransaction". After a commit attempt `OctoSession` never aborts the transaction (`AbortTransactionAsync` and
   `Dispose` skip the driver call), so the original commit exception (a `w:majority` wtimeout, a write concern error, a
