@@ -1137,10 +1137,11 @@ as 300 items of which only 35 were distinct. Rules:
     collection with 1,000,000 documents of about 1 KB and one legacy index took 2.1 s for its section (metadata re-read,
     tiebreak build, legacy drop, index states), the other collections of the tenant at most 121 ms each. A collection
     rebuilds its legacy indexes one after the other, so its section grows with documents x legacy indexes; at the local
-    rate the 90 s wait of an import is exceeded only from about 40 million document-indexes in one collection. Production
-    disks under load are slower - treat the local rate as a lower bound and check the "finished in" lines of the first
-    production upgrade. The import's 90 s wait is not raised (no collection near that size is known); if one is, upgrade
-    that tenant outside import times.
+    rate one section alone reaches 90 s at about 40 million document-indexes. That is an estimate for one section, not a
+    threshold for import timeouts: an import that waits through several sections can exceed its 90 s with smaller
+    collections. Production disks under load are slower - treat the local rate as a lower bound and check the
+    "finished in" lines of the first production upgrade. The import's 90 s wait is not raised (no collection near that
+    size is known); if one is, upgrade that tenant outside import times.
   - **Cancellation and lock loss.** The caller's token stops before the next section (an index build already started
     finishes, the collection's run completes). A lost lock (`LockLostToken`, signalled by the heartbeat within 15 s of
     the takeover) aborts the current collection before its next index operation (also before the text-index drop and
