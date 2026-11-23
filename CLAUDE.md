@@ -2572,7 +2572,8 @@ the "not found" exception of `MongoDbDataSourceCollection` (update/replace/archi
 
 Since AB#7212 `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read, a
 hidden record answers exactly like a missing rtId with a valid or an invalid payload, also when addressed as a sibling
-type of the shared `Location` collection (`Test/Country`) and when deleted by the abstract `Test/Location`. Callers
+type of the shared `Location` collection (`Test/Country`; the stored record stays unchanged, the engine's stored-type
+step refuses it after validation) and when deleted by the abstract `Test/Location`. Callers
 without a visibility question (system session, no policies, full read) keep the engine's answers of before. Needs the
 engine package of engine PR 383 (AB#7212).
 

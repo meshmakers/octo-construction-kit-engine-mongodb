@@ -4,7 +4,8 @@
 
 - AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read,
   a hidden record answers exactly like a missing rtId (update, replace and delete, valid and invalid payload), also when
-  it is addressed under a sibling type of the shared Location collection and when it is deleted by the abstract
+  it is addressed under a sibling type of the shared Location collection (then it is also not written; before the
+  engine change a valid update through the sibling type wrote the hidden record) and when it is deleted by the abstract
   Location type (engine PR 383: a delete by an abstract type of a missing rtId answers not found instead of returning).
   No code change in this repository; the test needs the engine version that contains PR 383.
 - AB#9594 Chore: NuGet packages raised to the newest versions within the .NET 10 line: MongoDB.Driver and MongoDB.Bson

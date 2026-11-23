@@ -155,9 +155,18 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
             var missingAnswer = await AnswerOfChangeAsync(repository, OwnedOnlyEmployee,
                 Change(operation, CountryTypeId, missingRtId, validPayload), missingRtId);
 
-            AssertNotFound(siblingAnswer);
-            Assert.Equal(siblingAnswer, missingAnswer);
+            Assert.Equal(missingAnswer, siblingAnswer);
+            if (operation == "update" && validPayload)
+            {
+                AssertNotFound(siblingAnswer);
+            }
         });
+
+        using var systemSession = await repository.GetSessionAsync();
+        var storedContinent = await repository.GetRtEntityByRtIdAsync(systemSession,
+            new RtEntityId(ContinentTypeId, foreignRtId));
+        Assert.NotNull(storedContinent);
+        Assert.Equal("Foreign", storedContinent.GetAttributeStringValueOrDefault("Name"));
     }
 
     [Fact]
