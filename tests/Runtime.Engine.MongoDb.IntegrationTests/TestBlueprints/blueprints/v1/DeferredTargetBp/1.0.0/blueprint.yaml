@@ -1,0 +1,9 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: DeferredTargetBp-1.0.0
+description: >-
+  AB#9651 - seeds the continent DeferredLinkBp links to (stands in for the service-managed System.Communication
+  blueprint that seeds the Mesh Adapter when Communication is enabled).
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+seedDataPath: seed-data/continents.yaml

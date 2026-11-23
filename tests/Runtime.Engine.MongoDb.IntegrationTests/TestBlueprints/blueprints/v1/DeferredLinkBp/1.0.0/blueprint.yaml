@@ -1,0 +1,9 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: DeferredLinkBp-1.0.0
+description: >-
+  AB#9651 - seeds two countries linked to a continent this blueprint does not seed (like pipelines linked to the Mesh
+  Adapter that the service-managed System.Communication blueprint seeds once Communication is enabled).
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+seedDataPath: seed-data/countries.yaml
