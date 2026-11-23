@@ -12,6 +12,14 @@
   can then differ from the sequential order, all of them are idempotent guarded upserts, and a retry of the same insert
   converges. Tests: `InsertStatementLanesTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
+  (owned-only for every action, Write and Delete for all with Read owned-only, or Write and Delete without Read), a
+  hidden record answers exactly like a missing rtId (update, replace and delete, valid and invalid payload), also when
+  it is addressed under a sibling type of the shared Location collection (then it is also not written, checked without
+  a transaction; before the engine change a valid update through the sibling type wrote the hidden record) and when it
+  is deleted by the abstract Location type (engine PR 383: a delete by an abstract type of a missing rtId answers not
+  found instead of returning). The caller's own visible record with the same invalid payload still answers the
+  validation error. No code change in this repository; the test needs the engine version that contains PR 383.
 - AB#9594 Chore: NuGet packages raised to the newest versions within the .NET 10 line: MongoDB.Driver and MongoDB.Bson
   3.14.1 (same as the engine), Npgsql 10.0.4 (11.x moves with the .NET 11 line, AB#9580), Dapper 2.1.100, Polly.Core
   8.9.1, Snappier 1.3.2, Microsoft.OpenApi 2.13.1, NLog.Web.AspNetCore 6.3.0, Swashbuckle.AspNetCore.SwaggerUI 11.0.1,

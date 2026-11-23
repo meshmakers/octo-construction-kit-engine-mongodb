@@ -2586,6 +2586,19 @@ pins the compatibility change. `TenantRepository.CreateEntityNotFoundException` 
 the "not found" exception of `MongoDbDataSourceCollection` (update/replace/archive: `IdNotFound`, erase:
 `FilterNotMatching`). Needs the engine package that contains the guard change (engine PR of AB#7126).
 
+Since AB#7212 `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
+(Read, Write and Delete owned-only; Write and Delete for all with Read owned-only; Write and Delete without Read), a
+hidden record answers exactly like a missing rtId with a valid or an invalid payload, also when addressed as a sibling
+type of the shared `Location` collection (`Test/Country`, run without a transaction; the stored record stays
+unchanged, the engine's stored-type step refuses it after validation) and when deleted by the abstract
+`Test/Location`. The caller's own visible record with the same invalid payload still answers the validation error.
+Callers without a visibility question (system session, no policies, full read) keep the engine's answers of before
+for a missing record only: an invalid payload is a validation error, a valid one is not found. Engine PR 383 changed
+two answers: a delete through an abstract type of an rtId that does not exist answers not found instead of returning,
+for every caller including a system session, and a valid update by a non-system caller under policies of a record
+addressed through a sibling type (a type outside the stored type's subtree that shares its collection) answers not
+found and writes nothing, also for a full reader. Needs the engine package of engine PR 383 (AB#7212).
+
 ### Deep graph honours the caller's data permissions (AB#6734)
 
 Both `ITenantRepository.GetRtDeepGraphAsync` overloads (ParentChild traversal and the directed

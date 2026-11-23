@@ -211,8 +211,15 @@ public class InsertStatementLanesTests
 
             if (rows == failingStatement)
             {
-                await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                failed.SetResult();
+                try
+                {
+                    await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                finally
+                {
+                    failed.SetResult();
+                }
+
                 throw failure;
             }
 
