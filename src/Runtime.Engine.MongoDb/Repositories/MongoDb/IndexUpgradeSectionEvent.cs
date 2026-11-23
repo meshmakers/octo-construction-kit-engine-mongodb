@@ -6,14 +6,26 @@ internal enum IndexUpgradeSectionStage
     /// <summary><c>index_update_lock</c> is held and the CK metadata re-read; the collection is next.</summary>
     Acquired,
 
+    /// <summary>The collection run began tracking index states (inside the section); nothing is built yet.</summary>
+    TrackingStarted,
+
     /// <summary>The collection is done (index states persisted, tracking ended); the lock is still held.</summary>
     Releasing,
 
-    /// <summary>The lock was released.</summary>
+    /// <summary>
+    ///     The section disposed its lock: released, or - when the release failed (logged) or the lock was lost - left to
+    ///     expire. Tests that hand the lock to another holder check the lock document themselves.
+    /// </summary>
     Released,
 
     /// <summary>The upgrade checked for a waiting index update and yielded the lock if there was one.</summary>
-    Yielded
+    Yielded,
+
+    /// <summary>
+    ///     The collection holds a type of a model that is still being imported after its retry; it is left for the next
+    ///     run (no index of it was dropped or replaced).
+    /// </summary>
+    LeftForNextRun
 }
 
 /// <summary>

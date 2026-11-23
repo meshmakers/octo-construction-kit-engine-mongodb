@@ -2,19 +2,25 @@
 
 ## Unreleased
 
-- AB#9302 Fix: a CK import no longer times out while the tiebreak index upgrade runs. `UpgradeTiebreakIndexesAsync`
-  holds `index_update_lock` per collection instead of for the whole tenant: each lock section re-reads the CK metadata,
-  upgrades the next collection root not processed in this run (also one an import created meanwhile) and releases the
-  lock. A waiting index update (CK import, `UpdateIndexesAsync`) keeps a short-lived waiter marker in `SysLock` (opt-in
-  per lock, only `index_update_lock`; every other lock is unchanged); the upgrade yields the lock to it after the current
-  collection and then waits up to one hour for the lock itself. The import waits at most one collection's index build
-  (measured locally: 2.1 s for a collection of 1,000,000 documents with one legacy index). Cancellation stops before the next collection; a lost lock aborts the current collection and
-  persists no index state outside the lock. The normal index update keeps its whole-tenant lock; the public API is
+- AB#9302 Fix: a CK import waits for at most one collection of a running tiebreak index upgrade instead of the whole
+  tenant, so it no longer times out because of the upgrade - unless one collection's index builds take longer than the
+  import's unchanged 90 s wait. `UpgradeTiebreakIndexesAsync` holds `index_update_lock` per collection instead of for
+  the whole tenant: each lock section re-reads the CK metadata, upgrades the next collection root not processed in this
+  run (also one an import created meanwhile) and releases the lock. A waiting index update (CK import,
+  `UpdateIndexesAsync`) keeps a short-lived waiter marker in `SysLock` (opt-in per lock, only `index_update_lock`; every
+  other lock is unchanged); the upgrade gives it the chance to take the lock after the current collection (a yield of up
+  to 3 s, not a guaranteed turn) and then waits up to one hour for the lock itself. Measured locally: 2.1 s for a
+  collection of 1,000,000 documents with one legacy index. A section never drops or replaces an index of a collection
+  holding a type of a model that is still being imported: such a collection is retried after the others and otherwise
+  left for the next run (warning). Cancellation stops before the next collection; a lost lock, once detected (heartbeat,
+  every 15 s), aborts the current collection and persists no more index states - also in the normal index update, which
+  before stopped only between collections. The normal index update keeps its whole-tenant lock; the public API is
   unchanged. Per-collection start/finish logs (information) and lock acquire/release (debug) name tenant and collection.
   Index states (AB#9391 follow-ups): a failed build is named after every definition of the collection was processed, so
   a failure under the alternate name is visible in the same run in either order, also when a legacy index carries the
-  tiebreak name; `ClearIndexStatesForCollectionAsync` writes only `IndexStates` (`$set`); the slot-name check of the
-  holder log accepts only engine slot names. Tests: `TiebreakIndexUpgradeLockTests`, `TiebreakUpgradeSectionPerformanceTests`
+  tiebreak name; the index a failed build would have replaced stays a candidate for the later definitions of the run;
+  `ClearIndexStatesForCollectionAsync` writes only `IndexStates` (`$set`); the slot-name check of the holder log accepts
+  only engine slot names. Tests: `TiebreakIndexUpgradeLockTests`, `TiebreakUpgradeSectionPerformanceTests`
   (`Category=Performance`), `RepositoryDistributedLockServiceTests`, `SharedIndexKeySpecTests.IndexStates.cs`.
 - AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
   (owned-only for every action, Write and Delete for all with Read owned-only, or Write and Delete without Read), a

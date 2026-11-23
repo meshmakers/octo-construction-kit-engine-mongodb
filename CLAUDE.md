@@ -1112,9 +1112,18 @@ as 300 items of which only 35 were distinct. Rules:
   version), upgrades it and releases the lock; a last section creates the model-independent indexes (RtAssociations,
   GridFS owner). A collection an import created meanwhile is upgraded in the same run. The index state tracking scope
   (`BeginTracking` .. persist .. `EndTracking`) lies inside `UpdateIndexesForCollectionRoot`, so inside one section.
+  - **Never on a collection of a model being imported.** A CK import releases the lock after its index update and only
+    then sets its model Available (`DatabaseCkModelRepository`). A section in that window would not see the model's index
+    definitions and drop its indexes. So a section reads the metadata with the Importing models
+    (`includeModelsInStateImporting: true`) only to recognise them: a root whose collection holds a type of an Importing
+    model (root, base chain or descendant, `InvolvesImportingModel`) is skipped, retried once after every other
+    collection, and if still involved left for the next run (a warning names the collections). The upgrade never waits
+    for imports to end, so steady imports cannot starve it. A model in another non-Available state (ResolveFailed) is
+    treated as by every index update: its types are not part of the metadata.
   - **What a concurrent import waits for.** A CK import (`UpdateIndexAsync`, also `ITenantContext.UpdateIndexesAsync`)
-    keeps the whole-tenant lock and its 90 s wait (`RepositoryDistributedLockService.MaxAcquireDuration`); it waits at
-    most for the collection the upgrade works on. It creates its lock with `markWaiters`: while it waits it keeps a waiter
+    keeps the whole-tenant lock and its 90 s wait (`RepositoryDistributedLockService.MaxAcquireDuration`); it waits for
+    the collection the upgrade works on, not for the whole tenant. The yield gives it the chance to take the lock next,
+    not a guarantee; an import still times out when one collection's builds take longer than its 90 s. It creates its lock with `markWaiters`: while it waits it keeps a waiter
     marker `waiter:index_update_lock:<owner token>` in `SysLock` (expiry 5 s, refreshed on every 1 s poll, deleted when
     it stops waiting). After each section the upgrade checks the markers (`HasWaitersAsync`); with a fresh one it gives
     the waiter up to 3 s (`YieldToWaiterMaxWait`) to take the lock, then acquires for the next collection with a wait of
@@ -1131,21 +1140,28 @@ as 300 items of which only 35 were distinct. Rules:
     production upgrade. The import's 90 s wait is not raised (no collection near that size is known); if one is, upgrade
     that tenant outside import times.
   - **Cancellation and lock loss.** The caller's token stops before the next section (an index build already started
-    finishes, the collection's run completes). A lost lock (`LockLostToken`) aborts the current collection before its
-    next index operation; its index states are not persisted (another holder may work on the collection; the next run
+    finishes, the collection's run completes). A lost lock (`LockLostToken`, signalled by the heartbeat within 15 s of
+    the takeover) aborts the current collection before its next index operation (also before the text-index drop and
+    the RtAssociation index maintenance); once the loss is detected - also after the final index-list read - its index
+    states are not persisted (a token check cannot fence a write already started; states are written with `$set` on
+    `IndexStates` only) (another holder may work on the collection; the next run
     reconciles), and the upgrade does not go on with the next collection. In both cases the lock is not held afterwards
     (released, or another holder's).
   - **Logs.** Per section `index_update_lock` acquire/release at debug (the lock service's routine lines at debug too,
     `routineLogLevel`), collection start/finish (with seconds) at information, both with tenant and collection; at the
     end the number of collections, the total and the longest collection.
   - **Not changed:** the normal index update (CK import, `UpdateIndexesAsync`) still holds the lock for the whole tenant
-    (AC 6: it creates only missing indexes, fast, from one consistent metadata pass). MongoDB's own collection locks of an
+    (AC 6: it creates only missing indexes, fast, from one consistent metadata pass). Two side effects for it: its lock
+    writes the waiter marker while it waits, and a lost lock now aborts it inside a collection (before the next index
+    operation) without persisting that collection's index states - before, it stopped only between collections and
+    persisted them. MongoDB's own collection locks of an
     index build are unchanged: while a collection's index is built, readers of that collection can be blocked briefly
     (test-2 2026-11-18: one rollup tick of every tenant failed while `octosystem.RtEntity_SystemTenant` was rebuilt) -
     in prod windows run the system tenant separately. The public API is unchanged.
   Tests: `TiebreakIndexUpgradeLockTests` (lock per collection and free between collections, an import during the upgrade
-  gets the lock after the current collection and the upgrade finishes the rest from re-read metadata, a dead waiter,
-  cancellation, lock loss), `RepositoryDistributedLockServiceTests` (waiter marker opt-in, refreshed, deleted).
+  gets the lock after the current collection and the upgrade finishes the rest from re-read metadata, a collection with
+  a type of an Importing model left for the next run without a drop, a dead waiter, cancellation, lock loss after the
+  tracking began), `RepositoryDistributedLockServiceTests` (waiter marker opt-in, refreshed, deleted).
 - **Not changed:** unpaged queries keep the caller's sort; the association navigations (`MultipleOrigin*`), whose
   entity-driven path (AB#4369) relies on an index-backed `$sort` with a `$lookup` between `$sort` and `$limit`; the cached
   navigation path (page membership comes from the cached id list). Interface queries already break ties by rtId in their

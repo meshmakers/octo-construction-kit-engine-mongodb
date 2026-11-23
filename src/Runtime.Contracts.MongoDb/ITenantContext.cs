@@ -467,8 +467,9 @@ public interface ITenantContext
     ///     <para>
     ///         AB#9302: the upgrade holds the tenant's index update lock only while it works on one collection; between
     ///         two collections the lock is free and the CK metadata is read again. A CK import (or
-    ///         <see cref="UpdateIndexesAsync" />) that starts meanwhile waits at most for the collection being upgraded
-    ///         (its own wait is 90 s; the upgrade yields the lock to it after that collection) and then succeeds; the
+    ///         <see cref="UpdateIndexesAsync" />) that starts meanwhile waits for the collection being upgraded, not for
+    ///         the whole tenant (its own wait stays 90 s; after that collection the upgrade gives it the chance to take
+    ///         the lock, not a guaranteed turn); the
     ///         upgrade continues with the remaining collections, including collections the import changed or created.
     ///         The worst case is the index builds of one collection: measured locally 2.1 s for 1,000,000 documents
     ///         with one legacy index; a collection with tens of millions of documents or several legacy indexes can

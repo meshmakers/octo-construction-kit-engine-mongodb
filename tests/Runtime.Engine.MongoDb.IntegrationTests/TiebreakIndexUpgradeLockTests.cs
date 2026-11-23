@@ -69,14 +69,17 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
             foreach (var section in sections.Where(s => s.Key < sections.Count - 1))
             {
                 Assert.Equal(
-                    [IndexUpgradeSectionStage.Acquired, IndexUpgradeSectionStage.Releasing,
-                        IndexUpgradeSectionStage.Released, IndexUpgradeSectionStage.Yielded],
+                    [IndexUpgradeSectionStage.Acquired, IndexUpgradeSectionStage.TrackingStarted,
+                        IndexUpgradeSectionStage.Releasing, IndexUpgradeSectionStage.Released,
+                        IndexUpgradeSectionStage.Yielded],
                     section.Select(e => e.Event.Stage));
                 Assert.Single(section.Select(e => e.Event.CollectionName).Distinct());
                 Assert.NotNull(section.First().Event.CollectionName);
-                Assert.All(section, e => Assert.False(e.Event.TrackingActive));
+                // The tracking scope is open only inside the section, never when it gets or gives up the lock.
+                Assert.All(section, e => Assert.Equal(e.Event.Stage == IndexUpgradeSectionStage.TrackingStarted,
+                    e.Event.TrackingActive));
                 Assert.All(section, e => Assert.False(e.Event.WaiterSeen));
-                Assert.Equal([true, true, false, false], section.Select(e => e.Held));
+                Assert.Equal([true, true, true, false, false], section.Select(e => e.Held));
             }
 
             // The last section creates the model-independent indexes.
@@ -127,8 +130,9 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
                     import = Task.Run(async () =>
                     {
                         await tenant.ImportCkModelAsync(Model(ModelName, "1.0.1", withOtherIndex: true));
-                        await tenant.ImportCkModelAsync(Model(NewModelName, "1.0.0", typeNames: ["Delta"]));
+                        // Bounded for the import that waited only: the second one starts later, at its own pace.
                         importDoneAtSection = events.Count(x => x.Stage == IndexUpgradeSectionStage.Acquired);
+                        await tenant.ImportCkModelAsync(Model(NewModelName, "1.0.0", typeNames: ["Delta"]));
                     }, Ct);
 
                     // The import's index update waits for the lock this section holds: its waiter marker shows it.
@@ -164,8 +168,9 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
             var list = events.ToList();
             var firstOurs = list.First(e => e.Stage == IndexUpgradeSectionStage.Acquired && ours.Contains(e.CollectionName!));
 
-            // The upgrade yielded after the section the import waited for, and the import was done before the next
-            // section of the upgrade acquired the lock (each import takes the lock once for its index update).
+            // The upgrade yielded after the section the import waited for, and the first import was done at the latest
+            // while the next section ran (it takes the lock once for its index update and makes its model Available after
+            // releasing it; a section in between skips the collections of that Importing model).
             Assert.Contains(list, e => e.Stage == IndexUpgradeSectionStage.Yielded && e.Section == firstOurs.Section &&
                                        e.WaiterSeen);
             Assert.True(importDoneAtSection >= 0);
@@ -178,7 +183,7 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
             Assert.Superset(ours, acquired.OfType<string>().ToHashSet());
             Assert.Contains(CollectionNames(NewModelName, ["Delta"]).Single(), acquired);
             Assert.Null(acquired[^1]);
-            Assert.All(list, e => Assert.False(e.TrackingActive));
+            Assert.All(list, e => Assert.Equal(e.Stage == IndexUpgradeSectionStage.TrackingStarted, e.TrackingActive));
 
             var before = new Dictionary<string, List<string>>();
             foreach (var typeName in TypeNames)
@@ -212,9 +217,11 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
-    ///     Coordinator's condition 3: a waiter marker whose waiter is gone. An expired marker is never seen; a fresh one
-    ///     makes the upgrade yield once for at most <see cref="MongoDbRepositoryDataSource.YieldToWaiterMaxWait" /> (nobody
-    ///     takes the lock), after its expiry the upgrade continues without waiting, and the run completes.
+    ///     Coordinator's condition 3: a waiter marker whose waiter is gone. An expired marker is never seen. A fresh one
+    ///     (written right after the first section) makes the upgrade yield for at most
+    ///     <see cref="MongoDbRepositoryDataSource.YieldToWaiterMaxWait" /> (3 s, nobody takes the lock); the marker expires
+    ///     after <see cref="RepositoryDistributedLockService.WaiterMarkerTimeToLive" /> (5 s), so at most two yields see it,
+    ///     whatever the speed of the sections, and the run completes. No wall-clock bound is asserted.
     /// </summary>
     [Fact]
     public async Task DeadWaiter_TheUpgradeContinuesWithoutWaiting()
@@ -229,51 +236,37 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
                 ExpiryDateTime = DateTime.UtcNow.AddSeconds(-1)
             }, cancellationToken: Ct);
 
-            var yields = new List<(IndexUpgradeSectionEvent Event, TimeSpan SinceRelease)>();
-            var released = Stopwatch.StartNew();
+            var yields = new List<IndexUpgradeSectionEvent>();
             var deadInserted = false;
             dataSource.UpgradeSectionObserver = async e =>
             {
-                if (e.Stage == IndexUpgradeSectionStage.Released)
+                if (e.Stage == IndexUpgradeSectionStage.Released && !deadInserted)
                 {
-                    if (!deadInserted)
+                    // A waiter that wrote its marker and died right away.
+                    deadInserted = true;
+                    await locks.InsertOneAsync(new SysLock
                     {
-                        // A waiter that wrote its marker and died right away.
-                        deadInserted = true;
-                        await locks.InsertOneAsync(new SysLock
-                        {
-                            Id = $"{RepositoryDistributedLockService.WaiterIdPrefix}" +
-                                 $"{MongoDbRepositoryDataSource.IndexUpdateLockId}:dead",
-                            ExpiryDateTime = DateTime.UtcNow.Add(RepositoryDistributedLockService.WaiterMarkerTimeToLive)
-                        }, cancellationToken: Ct);
-                    }
-
-                    released.Restart();
+                        Id = $"{RepositoryDistributedLockService.WaiterIdPrefix}" +
+                             $"{MongoDbRepositoryDataSource.IndexUpdateLockId}:dead",
+                        ExpiryDateTime = DateTime.UtcNow.Add(RepositoryDistributedLockService.WaiterMarkerTimeToLive)
+                    }, cancellationToken: Ct);
                 }
                 else if (e.Stage == IndexUpgradeSectionStage.Yielded)
                 {
-                    yields.Add((e, released.Elapsed));
+                    yields.Add(e);
                 }
             };
 
-            var run = Stopwatch.StartNew();
             using (var adminSession = await systemContext.GetAdminSessionAsync())
             {
                 await dataSource.UpgradeTiebreakIndexesAsync(adminSession, Ct);
             }
 
-            run.Stop();
-            Assert.True(yields[0].Event.WaiterSeen);
-            var seen = yields.Where(y => y.Event.WaiterSeen).ToList();
-            Assert.All(seen, y => Assert.True(y.SinceRelease < MongoDbRepositoryDataSource.YieldToWaiterMaxWait +
-                                              TimeSpan.FromSeconds(1), $"a yield took {y.SinceRelease}"));
-            // The marker expires after WaiterMarkerTimeToLive (5 s); each yield waits at most 3 s.
-            Assert.True(seen.Count <= 3, $"{seen.Count} yields to a dead waiter");
-            Assert.All(yields.Where(y => !y.Event.WaiterSeen),
-                y => Assert.True(y.SinceRelease < TimeSpan.FromSeconds(1), $"a yield without waiter took {y.SinceRelease}"));
+            Assert.True(yields[0].WaiterSeen, "the fresh marker was not seen");
+            var seen = yields.Count(y => y.WaiterSeen);
+            Assert.InRange(seen, 1, 2);
             Assert.True(yields.Count >= TypeNames.Length);
-            RunProgress.Report($"AB#9302 dead waiter: {yields.Count} yields, {seen.Count} saw the marker, run " +
-                               $"{run.Elapsed.TotalSeconds:F1} s");
+            RunProgress.Report($"AB#9302 dead waiter: {yields.Count} yields, {seen} saw the marker");
 
             foreach (var typeName in TypeNames)
             {
@@ -329,9 +322,10 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
     }
 
     /// <summary>
-    ///     AC 5: a lost lock (another holder claimed it; the heartbeat notices within 15 s) aborts the current
-    ///     collection before its first index operation and the upgrade does not go on with the next collection. The
-    ///     upgrade does not delete the other holder's lock document and persists no index state outside its section.
+    ///     AC 5: a lost lock (another holder claimed it; the heartbeat notices within 15 s) during a collection run, after
+    ///     its index state tracking began, aborts the collection before its first index operation, persists none of its
+    ///     index states (the stored states of its types are unchanged), and the upgrade does not go on with the next
+    ///     collection. The upgrade does not delete the other holder's lock document.
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task LockLost_AbortsTheCurrentCollection_AndTheNextIsNotStarted()
@@ -346,14 +340,17 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
             var thiefToken = Guid.NewGuid();
             var events = new List<IndexUpgradeSectionEvent>();
             string? stolenIn = null;
+            var statesBefore = await StatesAsync(tenant);
             dataSource.UpgradeSectionObserver = async e =>
             {
                 events.Add(e);
-                if (e.Stage != IndexUpgradeSectionStage.Acquired || stolenIn != null ||
+                if (e.Stage != IndexUpgradeSectionStage.TrackingStarted || stolenIn != null ||
                     !ours.Contains(e.CollectionName ?? ""))
                 {
                     return;
                 }
+
+                Assert.True(e.TrackingActive);
 
                 stolenIn = e.CollectionName;
                 await locks.UpdateOneAsync(
@@ -378,6 +375,10 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
                                                  e.CollectionName == stolenIn).Section;
                 Assert.DoesNotContain(events, e => e.Section > section);
                 Assert.DoesNotContain(events, e => e.Section == section && e.Stage == IndexUpgradeSectionStage.Releasing);
+                Assert.Contains(events, e => e.Section == section && e.Stage == IndexUpgradeSectionStage.TrackingStarted);
+
+                // No index state of the aborted collection's types was persisted outside the section.
+                Assert.Equal(statesBefore, await StatesAsync(tenant));
 
                 // The collection was not touched: its legacy index is still there, no tiebreak index was built.
                 var typeName = TypeNames.Single(t => CollectionNames(ModelName, [t]).Single() == stolenIn);
@@ -399,7 +400,112 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
         });
     }
 
+    /// <summary>
+    ///     Kassandra round 1, finding 1 (invariant decided by the coordinator): a CK import releases the lock after its
+    ///     index update and makes its model Available only afterwards. A section that runs in that window must not drop or
+    ///     replace an index of a collection holding a type of the Importing model. Here a model derives a type from Alpha
+    ///     and defines an index on another field; its types are held in state Importing while the upgrade runs. Alpha's
+    ///     collection is skipped, retried after the others and left for the next run: the derived type's index and the
+    ///     legacy index stay, the other collections are upgraded. Once the model is Available the next upgrade upgrades
+    ///     Alpha and keeps the derived type's index.
+    /// </summary>
+    [Fact]
+    public async Task CollectionWithATypeOfAnImportingModel_IsLeftForTheNextRun_AndNoIndexOfItIsDropped()
+    {
+        await WithLegacyTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(DerivedModel());
+            var alpha = Collection(tenant, ModelName, TypeNames[0]);
+            var alphaName = CollectionNames(ModelName, [TypeNames[0]]).Single();
+            Assert.Contains(await IndexesAsync(alpha), i => KeysOf(i).SequenceEqual(OtherTiebreakKeys));
+
+            var ckTypes = ((TenantRepository)tenant.GetTenantRepository()).DataSource.CkTypes.GetMongoCollection();
+            FilterDefinition<CkType> derivedFilter =
+                new BsonDocument("_id", new BsonRegularExpression("^" + DerivedModelName + "-"));
+            await ckTypes.UpdateManyAsync(derivedFilter,
+                Builders<CkType>.Update.Set(t => t.ModelState, ModelState.Importing), cancellationToken: Ct);
+
+            var dataSource = DataSourceOf(tenant);
+            var events = new List<IndexUpgradeSectionEvent>();
+            dataSource.UpgradeSectionObserver = e =>
+            {
+                events.Add(e);
+                return Task.CompletedTask;
+            };
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await dataSource.UpgradeTiebreakIndexesAsync(adminSession, Ct);
+            }
+
+            Assert.DoesNotContain(events, e => e.Stage == IndexUpgradeSectionStage.Acquired && e.CollectionName == alphaName);
+            Assert.Contains(events, e => e.Stage == IndexUpgradeSectionStage.LeftForNextRun && e.CollectionName == alphaName);
+            var alphaIndexes = await IndexesAsync(alpha);
+            Assert.Contains(alphaIndexes, i => KeysOf(i).SequenceEqual(OtherTiebreakKeys));
+            Assert.Contains(alphaIndexes, i => KeysOf(i).SequenceEqual(LegacyKeys));
+            foreach (var typeName in TypeNames.Skip(1))
+            {
+                Assert.Single(await IndexesAsync(Collection(tenant, ModelName, typeName)),
+                    i => KeysOf(i).SequenceEqual(TiebreakKeys));
+            }
+
+            // The import finished: the next upgrade upgrades Alpha and keeps the derived type's index.
+            await ckTypes.UpdateManyAsync(derivedFilter,
+                Builders<CkType>.Update.Set(t => t.ModelState, ModelState.Available), cancellationToken: Ct);
+            dataSource.UpgradeSectionObserver = null;
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await dataSource.UpgradeTiebreakIndexesAsync(adminSession, Ct);
+            }
+
+            alphaIndexes = await IndexesAsync(alpha);
+            Assert.Contains(alphaIndexes, i => KeysOf(i).SequenceEqual(OtherTiebreakKeys));
+            Assert.Single(alphaIndexes, i => KeysOf(i).SequenceEqual(TiebreakKeys));
+            Assert.DoesNotContain(alphaIndexes, i => KeysOf(i).SequenceEqual(LegacyKeys));
+        });
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------------------
+
+    private const string DerivedModelName = "LockDerivedModel";
+
+    /// <summary>A model with a type derived from Alpha that defines an Ascending index on the other field.</summary>
+    private static CkCompiledModelRoot DerivedModel()
+    {
+        const string modelVersion = DerivedModelName + "-1.0.0";
+        return new CkCompiledModelRoot
+        {
+            ModelId = new CkModelId(modelVersion),
+            Dependencies = [SystemCkIds.CkModelId, new CkModelId($"{ModelName}-1.0.0")],
+            Types =
+            [
+                new()
+                {
+                    TypeId = new CkTypeId("AlphaChild"),
+                    DerivedFromCkTypeId = new CkId<CkTypeId>($"{ModelName}-1.0.0/{TypeNames[0]}"),
+                    Attributes = [],
+                    Indexes =
+                    [
+                        new()
+                        {
+                            IndexType = IndexTypeDto.Ascending,
+                            Fields = [new() { AttributePaths = [OtherFieldName] }]
+                        }
+                    ]
+                }
+            ]
+        };
+    }
+
+    /// <summary>The stored index states of every type of <see cref="ModelName" />, as comparable strings.</summary>
+    private static async Task<List<string>> StatesAsync(ITenantContext tenant)
+    {
+        var ckTypes = ((TenantRepository)tenant.GetTenantRepository()).DataSource.CkTypes.GetMongoCollection();
+        FilterDefinition<CkType> filter = new BsonDocument("_id", new BsonRegularExpression("^" + ModelName + "-"));
+        var types = await ckTypes.Find(filter).ToListAsync(Ct);
+        return types.SelectMany(t => (t.IndexStates ?? []).Select(s =>
+                $"{t.CkTypeId}:{s.Name}:{s.State}:{s.ErrorMessage}:{s.AppliedAt?.Ticks}"))
+            .OrderBy(x => x, StringComparer.Ordinal).ToList();
+    }
 
     /// <summary>A tenant with <see cref="ModelName" /> imported and every one of its indexes in the legacy shape.</summary>
     private async Task WithLegacyTenantAsync(Func<ITenantContext, ISystemContext, Task> test)

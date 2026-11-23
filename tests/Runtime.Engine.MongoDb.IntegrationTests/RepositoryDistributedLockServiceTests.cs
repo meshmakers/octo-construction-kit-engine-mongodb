@@ -257,10 +257,13 @@ public class RepositoryDistributedLockServiceTests
 
         await using var holder = CreateLockService(lockId);
         await holder.AcquireLockAsync(Ct);
-        await using var contender = CreateLockService(lockId);
+        var (client, repo) = GetClientAndRepo();
+        var polls = new PollCountingLogger();
+        await using var contender = new RepositoryDistributedLockService(client, repo, polls, lockId);
         var acquireTask = contender.AcquireLockAsync(Ct);
 
-        await Task.Delay(2500, Ct);
+        // The contender has polled (and found the lock held) at least twice.
+        await polls.WaitForPollsAsync(2);
         Assert.False(acquireTask.IsCompleted);
         Assert.Empty(await WaiterMarkersAsync(collection, lockId));
         Assert.False(await RepositoryDistributedLockService.HasWaitersAsync(GetClientAndRepo().repo, lockId, Ct));
@@ -288,18 +291,63 @@ public class RepositoryDistributedLockServiceTests
             markWaiters: true);
         var acquireTask = contender.AcquireLockAsync(Ct);
 
-        await Task.Delay(1500, Ct);
-        var first = Assert.Single(await WaiterMarkersAsync(collection, lockId));
+        // Wait (bounded) for the marker, then for its expiry to move on - observed, not timed.
+        var first = await WaitForAsync(async () => (await WaiterMarkersAsync(collection, lockId)).SingleOrDefault(),
+            m => m != null, "no waiter marker appeared");
         Assert.True(await RepositoryDistributedLockService.HasWaitersAsync(repo, lockId, Ct));
-        await Task.Delay(2000, Ct);
-        var refreshed = Assert.Single(await WaiterMarkersAsync(collection, lockId));
-        Assert.Equal(first.Id, refreshed.Id);
-        Assert.True(refreshed.ExpiryDateTime > first.ExpiryDateTime, "the marker was not refreshed while waiting");
+        var refreshed = await WaitForAsync(async () => (await WaiterMarkersAsync(collection, lockId)).SingleOrDefault(),
+            m => m != null && m.ExpiryDateTime > first!.ExpiryDateTime, "the marker was not refreshed while waiting");
+        Assert.Equal(first!.Id, refreshed!.Id);
 
         await holder.DisposeAsync();
         await acquireTask;
         Assert.Empty(await WaiterMarkersAsync(collection, lockId));
         Assert.False(await RepositoryDistributedLockService.HasWaitersAsync(repo, lockId, Ct));
+    }
+
+    private static async Task<T> WaitForAsync<T>(Func<Task<T>> read, Func<T, bool> done, string failure)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (true)
+        {
+            var value = await read();
+            if (done(value))
+            {
+                return value;
+            }
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(30), failure);
+            await Task.Delay(100, Ct);
+        }
+    }
+
+    /// <summary>Counts the "Waiting for distributed lock" lines: each is one poll that found the lock held.</summary>
+    private sealed class PollCountingLogger : ILogger
+    {
+        private int _polls;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception).StartsWith("Waiting for distributed lock", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _polls);
+            }
+        }
+
+        public async Task WaitForPollsAsync(int count)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            while (Volatile.Read(ref _polls) < count)
+            {
+                Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(30), $"only {_polls} poll(s) in 30 s");
+                await Task.Delay(100, Ct);
+            }
+        }
     }
 
     private static async Task<List<SysLock>> WaiterMarkersAsync(IMongoCollection<SysLock> collection, string lockId)

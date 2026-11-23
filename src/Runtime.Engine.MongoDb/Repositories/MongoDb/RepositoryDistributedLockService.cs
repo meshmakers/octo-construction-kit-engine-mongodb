@@ -149,6 +149,12 @@ internal class RepositoryDistributedLockService(
                         }
 
                         var backoff = GetTransientRetryDelay(transientFailures);
+                        var remaining = maxWait - acquireStopwatch.Elapsed;
+                        if (backoff > remaining)
+                        {
+                            backoff = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+                        }
+
                         logger.LogWarning(
                             "Transient transaction error while acquiring distributed lock '{LockId}' (attempt {TransientAttempt}, error code {ErrorCode}), retrying in {DelayMilliseconds} ms",
                             id, transientFailures, GetMongoErrorCode(ex), (int)backoff.TotalMilliseconds);
@@ -159,7 +165,7 @@ internal class RepositoryDistributedLockService(
                     if (!lockAcquired)
                     {
                         attempt++;
-                        if (attempt >= maxAttempts || acquireStopwatch.Elapsed >= maxWait)
+                        if (acquireStopwatch.Elapsed >= maxWait)
                         {
                             var expiryInfo = existingLock?.ExpiryDateTime.HasValue == true
                                 ? $"Current lock expires at {existingLock.ExpiryDateTime.Value:O}"
@@ -176,16 +182,27 @@ internal class RepositoryDistributedLockService(
                         logger.Log(routineLogLevel,
                             "Waiting for distributed lock '{LockId}' (attempt {Attempt}/{MaxAttempts})",
                             id, attempt, maxAttempts);
-                        await Task.Delay(DelayMilliseconds, cancellationToken);
+
+                        // One deadline: the last poll is never later than maxWait.
+                        var left = maxWait - acquireStopwatch.Elapsed;
+                        var delay = TimeSpan.FromMilliseconds(DelayMilliseconds);
+                        if (delay > left)
+                        {
+                            delay = left > TimeSpan.Zero ? left : TimeSpan.Zero;
+                        }
+
+                        await Task.Delay(delay, cancellationToken);
                     }
                 }
             }
-            finally
+            catch
             {
                 if (waiterMarked)
                 {
                     await UnmarkWaitingAsync(collection.GetMongoCollection()).ConfigureAwait(false);
                 }
+
+                throw;
             }
 
             logger.Log(routineLogLevel, "Acquired distributed lock '{LockId}' (token {OwnerToken})", id, _ownerToken);
@@ -195,8 +212,14 @@ internal class RepositoryDistributedLockService(
                 _isLockAcquired = true;
             }
 
-            // Start heartbeat for long-running operations
+            // Start heartbeat for long-running operations - before the waiter cleanup, so a slow cleanup never lets
+            // the lease expire unrenewed.
             StartHeartbeat();
+
+            if (waiterMarked)
+            {
+                await UnmarkWaitingAsync(collection.GetMongoCollection()).ConfigureAwait(false);
+            }
         }
         catch (Exception e)
         {
@@ -350,8 +373,10 @@ internal class RepositoryDistributedLockService(
     {
         try
         {
-            await mongoCollection.DeleteOneAsync(Builders<SysLock>.Filter.Eq(sysLock => sysLock.Id, WaiterMarkerId))
-                .ConfigureAwait(false);
+            // Bounded: the marker expires by itself (WaiterMarkerTimeToLive).
+            using var timeout = new CancellationTokenSource(WaiterMarkerTimeToLive);
+            await mongoCollection.DeleteOneAsync(Builders<SysLock>.Filter.Eq(sysLock => sysLock.Id, WaiterMarkerId),
+                timeout.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
