@@ -2570,12 +2570,11 @@ pins the compatibility change. `TenantRepository.CreateEntityNotFoundException` 
 the "not found" exception of `MongoDbDataSourceCollection` (update/replace/archive: `IdNotFound`, erase:
 `FilterNotMatching`). Needs the engine package that contains the guard change (engine PR of AB#7126).
 
-Since AB#7212 the engine resolves existence before rule validation, for every caller: `DataPermissionHiddenEqualsMissingTests`
-pins on real MongoDB that a hidden record answers exactly like a missing rtId with a valid or an invalid payload (also
-compared with a full reader's missing answer), when addressed as a sibling type of the shared `Location` collection
-(`Test/Country`) and when deleted by the abstract `Test/Location`; for a system session a missing rtId or association
-origin answers `EntityNotFoundException`, an existing record keeps its validation error. Needs the engine package of
-engine PR 383 (AB#7212); against an older engine 11 of its cases fail.
+Since AB#7212 `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read, a
+hidden record answers exactly like a missing rtId with a valid or an invalid payload, also when addressed as a sibling
+type of the shared `Location` collection (`Test/Country`) and when deleted by the abstract `Test/Location`. Callers
+without a visibility question (system session, no policies, full read) keep the engine's answers of before. Needs the
+engine package of engine PR 383 (AB#7212).
 
 ### Deep graph honours the caller's data permissions (AB#6734)
 

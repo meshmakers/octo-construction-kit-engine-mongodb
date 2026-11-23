@@ -1,5 +1,4 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -14,10 +13,9 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
 /// <summary>
-///     On the persisted path a record the caller may not see answers exactly like a missing rtId, whatever the payload
-///     and however the record is addressed (stored type, sibling type of the shared Location collection, abstract
-///     base type). A missing record answers not found before its payload is validated, also for callers whose read is
-///     not restricted; an existing record keeps its validation error.
+///     On the persisted path a record a caller with restricted read may not see answers exactly like a missing rtId,
+///     whatever the payload and however the record is addressed (stored type, sibling type of the shared Location
+///     collection, abstract base type).
 /// </summary>
 [Collection(DataPermissionCollection.Name)]
 public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fixture)
@@ -26,7 +24,6 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
 
     private static readonly RtSecurityContext OwnedOnlyEmployee = RtSecurityContext.ForUser("user-1", ["TestEmployee"]);
     private static readonly RtSecurityContext OtherEmployee = RtSecurityContext.ForUser("user-2", ["TestEmployee"]);
-    private static readonly RtSecurityContext FullReader = RtSecurityContext.ForUser("user-m", ["TestManagement"]);
 
     private static readonly RtCkId<CkTypeId> ContinentTypeId = TestCkIds.RtCkContinentTypeId;
     private static readonly RtCkId<CkTypeId> CountryTypeId = TestCkIds.RtCkCountryTypeId;
@@ -123,8 +120,7 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
     [InlineData("replace", true)]
     [InlineData("replace", false)]
     [InlineData("delete", true)]
-    public async Task HiddenRecord_AnswersExactlyLikeMissingRecord_ForRestrictedAndFullReaders(string operation,
-        bool validPayload)
+    public async Task HiddenRecord_AnswersExactlyLikeMissingRecord(string operation, bool validPayload)
     {
         var (repository, foreignRtId) = await SeedForeignContinentAsync();
         var missingRtId = OctoObjectId.GenerateNewId();
@@ -135,12 +131,9 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
                 Change(operation, ContinentTypeId, foreignRtId, validPayload), foreignRtId);
             var missingAnswer = await AnswerOfChangeAsync(repository, OwnedOnlyEmployee,
                 Change(operation, ContinentTypeId, missingRtId, validPayload), missingRtId);
-            var missingForFullReader = await AnswerOfChangeAsync(repository, FullReader,
-                Change(operation, ContinentTypeId, missingRtId, validPayload), missingRtId);
 
             Assert.Equal(nameof(EntityNotFoundException), hiddenAnswer.ExceptionType);
             Assert.Equal(hiddenAnswer, missingAnswer);
-            Assert.Equal(hiddenAnswer, missingForFullReader);
         });
     }
 
@@ -185,45 +178,5 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
             Assert.Equal(nameof(EntityNotFoundException), hiddenAnswer.ExceptionType);
             Assert.Equal(hiddenAnswer, missingAnswer);
         });
-    }
-
-    [Theory]
-    [InlineData("update")]
-    [InlineData("replace")]
-    public async Task SystemSession_InvalidPayload_MissingRecordIsNotFound_ExistingRecordKeepsTheValidationError(
-        string operation)
-    {
-        var (repository, existingRtId) = await SeedForeignContinentAsync();
-        var missingRtId = OctoObjectId.GenerateNewId();
-
-        var missingAnswer = await AnswerOfChangeAsync(repository, null,
-            Change(operation, ContinentTypeId, missingRtId, false), missingRtId);
-        var missingWithValidPayload = await AnswerOfChangeAsync(repository, null,
-            Change(operation, ContinentTypeId, missingRtId, true), missingRtId);
-        var existingAnswer = await AnswerOfChangeAsync(repository, null,
-            Change(operation, ContinentTypeId, existingRtId, false), existingRtId);
-
-        AssertNotFound(missingAnswer);
-        Assert.Equal(missingWithValidPayload, missingAnswer);
-        Assert.Equal(nameof(RuntimeRepositoryException), existingAnswer.ExceptionType);
-        Assert.Contains("Name", existingAnswer.Message);
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task SystemSession_AssociationFromMissingOrigin_AnswersNotFound(bool validRole)
-    {
-        var (repository, continentRtId) = await SeedForeignContinentAsync();
-        var missingCountryRtId = OctoObjectId.GenerateNewId();
-        var roleId = validRole ? SystemCkIds.RtCkParentChildRoleId : new RtCkId<CkAssociationRoleId>("Test/Undefined");
-        var association = AssociationUpdateInfo.CreateInsert(new RtEntityId(CountryTypeId, missingCountryRtId),
-            new RtEntityId(ContinentTypeId, continentRtId), roleId);
-
-        var answer = await AnswerOfWriteAsync(repository, null,
-            session => repository.ApplyChangesAsync(session, [], [association], new OperationResult()),
-            missingCountryRtId);
-
-        AssertNotFound(answer);
     }
 }
