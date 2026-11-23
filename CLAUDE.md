@@ -1123,14 +1123,16 @@ as 300 items of which only 35 were distinct. Rules:
   - **What a concurrent import waits for.** A CK import (`UpdateIndexAsync`, also `ITenantContext.UpdateIndexesAsync`)
     keeps the whole-tenant lock and its 90 s wait (`RepositoryDistributedLockService.MaxAcquireDuration`); it waits for
     the collection the upgrade works on, not for the whole tenant. The yield gives it the chance to take the lock next,
-    not a guarantee; an import still times out when one collection's builds take longer than its 90 s. It creates its lock with `markWaiters`: while it waits it keeps a waiter
+    not a guarantee: an import can wait through several sections, and still times out when the sections it waits for
+    take longer than its 90 s. It creates its lock with `markWaiters`: while it waits it keeps a waiter
     marker `waiter:index_update_lock:<owner token>` in `SysLock` (expiry 5 s, refreshed on every 1 s poll, deleted when
     it stops waiting). After each section the upgrade checks the markers (`HasWaitersAsync`); with a fresh one it gives
     the waiter up to 3 s (`YieldToWaiterMaxWait`) to take the lock, then acquires for the next collection with a wait of
     up to one hour (`UpgradeSectionMaxWait`) - it never times out behind an import. A dead waiter's marker expires, so
     the upgrade waits at most 3 s per section for it, and only while the marker is fresh. The marker is opt-in per lock:
     every other lock (model import, migrations, ...) behaves as before.
-  - **Worst case of one collection.** An import waits at most one collection's tiebreak build plus the 3 s yield.
+  - **Cost of one collection.** Usually an import waits for the current collection's tiebreak build plus the 3 s yield;
+    the yield is no guaranteed turn, so it can be several sections.
     Measured (`TiebreakUpgradeSectionPerformanceTests`, `Category=Performance`, local Testcontainer, 2026-11-23): one
     collection with 1,000,000 documents of about 1 KB and one legacy index took 2.1 s for its section (metadata re-read,
     tiebreak build, legacy drop, index states), the other collections of the tenant at most 121 ms each. A collection

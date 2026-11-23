@@ -119,7 +119,11 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
             var ours = CollectionNames(ModelName).ToHashSet();
             var events = new ConcurrentQueue<IndexUpgradeSectionEvent>();
             Task? import = null;
-            var importDoneAtSection = -1;
+            var firstImportDone = false;
+            var importAwaited = false;
+            int? waitedInSection = null;
+            List<string> waiterIds = [];
+            bool? waiterGoneAtNextSection = null;
             var sectionStopwatches = new Dictionary<string, Stopwatch>();
             dataSource.UpgradeSectionObserver = async e =>
             {
@@ -130,19 +134,36 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
                     import = Task.Run(async () =>
                     {
                         await tenant.ImportCkModelAsync(Model(ModelName, "1.0.1", withOtherIndex: true));
-                        // Bounded for the import that waited only: the second one starts later, at its own pace.
-                        importDoneAtSection = events.Count(x => x.Stage == IndexUpgradeSectionStage.Acquired);
+                        Volatile.Write(ref firstImportDone, true);
                         await tenant.ImportCkModelAsync(Model(NewModelName, "1.0.0", typeNames: ["Delta"]));
                     }, Ct);
 
                     // The import's index update waits for the lock this section holds: its waiter marker shows it.
                     var waited = Stopwatch.StartNew();
-                    while (!await HasWaiterAsync(tenant))
+                    while ((waiterIds = await WaiterIdsAsync(tenant)).Count == 0)
                     {
                         Assert.False(import.IsFaulted, import.Exception?.ToString());
                         Assert.True(waited.Elapsed < TimeSpan.FromSeconds(60), "the import never waited for the lock");
                         await Task.Delay(50, Ct);
                     }
+
+                    waitedInSection = e.Section;
+                }
+                else if (e.Stage == IndexUpgradeSectionStage.Acquired && e.Section == waitedInSection + 1)
+                {
+                    // The lock is ours again: the import's waiter marker is gone - it acquired the lock in between.
+                    // (A waiter deletes its marker right after it acquired; one that timed out would delete it too, but
+                    // the import is asserted to succeed below.)
+                    var now = await WaiterIdsAsync(tenant);
+                    waiterGoneAtNextSection = !waiterIds.Intersect(now).Any();
+                }
+                else if (e.Stage == IndexUpgradeSectionStage.Released && !importAwaited &&
+                         Volatile.Read(ref firstImportDone) && import != null)
+                {
+                    // Barrier outside the lock: the second import (a new collection) is done before the next section
+                    // reads the metadata, so the run must pick it up.
+                    importAwaited = true;
+                    await import;
                 }
 
                 if (e.CollectionName != null)
@@ -168,14 +189,13 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
             var list = events.ToList();
             var firstOurs = list.First(e => e.Stage == IndexUpgradeSectionStage.Acquired && ours.Contains(e.CollectionName!));
 
-            // The upgrade yielded after the section the import waited for, and the first import was done at the latest
-            // while the next section ran (it takes the lock once for its index update and makes its model Available after
-            // releasing it; a section in between skips the collections of that Importing model).
+            // The upgrade yielded after the section the import waited for, and the import's index update took the lock
+            // before the upgrade's next section (its waiter marker was gone then) - observed through the lock, not timed.
+            Assert.Equal(firstOurs.Section, waitedInSection);
             Assert.Contains(list, e => e.Stage == IndexUpgradeSectionStage.Yielded && e.Section == firstOurs.Section &&
                                        e.WaiterSeen);
-            Assert.True(importDoneAtSection >= 0);
-            Assert.True(importDoneAtSection <= firstOurs.Section + 2,
-                $"the import finished only before section {importDoneAtSection}, it waited from section {firstOurs.Section}");
+            Assert.True(waiterGoneAtNextSection, "the import had not taken the lock before the upgrade's next section");
+            Assert.True(importAwaited, "the barrier for the second import was not reached before the last section");
 
             // The remaining collections, the new collection and the model-independent indexes in the same run.
             var acquired = list.Where(e => e.Stage == IndexUpgradeSectionStage.Acquired)
@@ -551,11 +571,12 @@ public class TiebreakIndexUpgradeLockTests(ImportTestCkModelFixture fixture)
             .Find(s => s.Id == MongoDbRepositoryDataSource.IndexUpdateLockId && s.ExpiryDateTime > DateTime.UtcNow)
             .AnyAsync(Ct);
 
-    private static async Task<bool> HasWaiterAsync(ITenantContext tenant)
+    /// <summary>The ids of the fresh waiter markers of <c>index_update_lock</c>.</summary>
+    private static async Task<List<string>> WaiterIdsAsync(ITenantContext tenant)
     {
         var prefix = $"{RepositoryDistributedLockService.WaiterIdPrefix}{MongoDbRepositoryDataSource.IndexUpdateLockId}:";
         var all = await SysLockCollection(tenant).Find(s => s.ExpiryDateTime > DateTime.UtcNow).ToListAsync(Ct);
-        return all.Any(s => s.Id.StartsWith(prefix, StringComparison.Ordinal));
+        return all.Where(s => s.Id.StartsWith(prefix, StringComparison.Ordinal)).Select(s => s.Id).ToList();
     }
 
     private static IEnumerable<string> CollectionNames(string modelName, string[]? typeNames = null) =>

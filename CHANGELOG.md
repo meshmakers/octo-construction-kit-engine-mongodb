@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- AB#9302 Fix: a CK import waits for at most one collection of a running tiebreak index upgrade instead of the whole
-  tenant, so it no longer times out because of the upgrade - unless one collection's index builds take longer than the
-  import's unchanged 90 s wait. `UpgradeTiebreakIndexesAsync` holds `index_update_lock` per collection instead of for
+- AB#9302 Fix: a CK import no longer waits for the whole tenant of a running tiebreak index upgrade: the upgrade releases
+  the lock between collections and lets a waiting import take it. This reduces contention; it is no bound - the import
+  keeps its 90 s wait and can still time out when one collection's builds, or several sections before it gets its turn,
+  take longer. `UpgradeTiebreakIndexesAsync` holds `index_update_lock` per collection instead of for
   the whole tenant: each lock section re-reads the CK metadata, upgrades the next collection root not processed in this
   run (also one an import created meanwhile) and releases the lock. A waiting index update (CK import,
   `UpdateIndexesAsync`) keeps a short-lived waiter marker in `SysLock` (opt-in per lock, only `index_update_lock`; every
