@@ -1221,8 +1221,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                         // Always save tracked index states before ending tracking
                         try
                         {
+                            // AB#9302: the token is checked again after the session and the read of the stored states
+                            // and before each write.
                             using var updateSession = await GetSessionAsync();
-                            await _indexStateService.BulkUpdateIndexStatesAsync(updateSession);
+                            if (!await _indexStateService.BulkUpdateIndexStatesAsync(updateSession, lockLostToken))
+                            {
+                                _logger.LogWarning(
+                                    "Lost '{LockId}' while persisting the index states of '{CollectionName}'; the " +
+                                    "remaining states are not persisted, the next index update reconciles them",
+                                    IndexUpdateLockId, collection.CollectionName);
+                            }
                         }
                         catch (Exception ex)
                         {

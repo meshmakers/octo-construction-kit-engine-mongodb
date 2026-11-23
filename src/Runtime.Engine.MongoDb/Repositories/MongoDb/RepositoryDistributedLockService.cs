@@ -50,7 +50,7 @@ internal class RepositoryDistributedLockService(
     private static readonly TimeSpan LockTimeToLive = TimeSpan.FromSeconds(60);
 
     // Heartbeat interval: extend the lock well before the TTL window closes (4× margin).
-    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(15);
 
     // Overall acquire budget. Transient transaction errors are retried on a much shorter
     // cadence than the contention poll, so they are bounded by elapsed time, not by attempts.
@@ -90,6 +90,9 @@ internal class RepositoryDistributedLockService(
     /// <inheritdoc />
     public CancellationToken LockLostToken => _lockLostCts.Token;
 
+    /// <summary>The heartbeat interval; tests shorten it to see a lost lock early.</summary>
+    internal TimeSpan HeartbeatInterval { get; init; } = DefaultHeartbeatInterval;
+
     public Task AcquireLockAsync(CancellationToken cancellationToken = default) =>
         AcquireLockAsync(MaxAcquireDuration, cancellationToken);
 
@@ -127,8 +130,17 @@ internal class RepositoryDistributedLockService(
 
             try
             {
+                SysLock? lastSeenLock = null;
                 while (!lockAcquired)
                 {
+                    // AB#9302 (CodeRabbit round 2): a retry never starts after the deadline. A delay may overrun (a
+                    // late scheduler, a slow waiter-marker write), and a lock taken after maxWait would be accepted
+                    // by a caller that has already been told to expect a timeout. The first attempt always runs.
+                    if ((attempt > 0 || transientFailures > 0) && acquireStopwatch.Elapsed >= maxWait)
+                    {
+                        throw CreateAcquireTimeout(maxWait, lastSeenLock, transientFailures);
+                    }
+
                     SysLock? existingLock = null;
                     try
                     {
@@ -165,13 +177,10 @@ internal class RepositoryDistributedLockService(
                     if (!lockAcquired)
                     {
                         attempt++;
+                        lastSeenLock = existingLock;
                         if (acquireStopwatch.Elapsed >= maxWait)
                         {
-                            var expiryInfo = existingLock?.ExpiryDateTime.HasValue == true
-                                ? $"Current lock expires at {existingLock.ExpiryDateTime.Value:O}"
-                                : "Lock has no expiry time set";
-                            throw new TimeoutException(
-                                $"Could not acquire distributed lock '{id}' after {maxWait.TotalSeconds:F0} seconds. {expiryInfo}");
+                            throw CreateAcquireTimeout(maxWait, existingLock, 0);
                         }
 
                         if (markWaiters)
@@ -220,12 +229,45 @@ internal class RepositoryDistributedLockService(
             {
                 await UnmarkWaitingAsync(collection.GetMongoCollection()).ConfigureAwait(false);
             }
+
+            // AB#9302 (CodeRabbit round 2): the heartbeat may have found the lock taken by another holder while the
+            // cleanup ran. Never report success with a cancelled LockLostToken: the caller would start work it can only
+            // abort. The lock document belongs to the other holder now and is left alone (_lockLost keeps the release
+            // away from it). Thrown as the cancellation by LockLostToken, like a loss noticed during the work.
+            if (_lockLost)
+            {
+                await StopHeartbeatAsync().ConfigureAwait(false);
+                lock (_lockObject)
+                {
+                    _isLockAcquired = false;
+                }
+
+                throw new OperationCanceledException(
+                    $"Lost distributed lock '{id}' (token {_ownerToken}) while completing its acquisition: another " +
+                    "holder claimed it.", LockLostToken);
+            }
         }
         catch (Exception e)
         {
             logger.LogError(e, "Error acquiring distributed lock '{LockId}'", id);
             throw;
         }
+    }
+
+    private TimeoutException CreateAcquireTimeout(TimeSpan maxWait, SysLock? lastSeenLock, int transientFailures)
+    {
+        if (lastSeenLock == null && transientFailures > 0)
+        {
+            return new TimeoutException(
+                $"Could not acquire distributed lock '{id}' after {maxWait.TotalSeconds:F0} seconds: " +
+                $"transaction kept failing with transient write conflicts ({transientFailures} attempts).");
+        }
+
+        var expiryInfo = lastSeenLock?.ExpiryDateTime.HasValue == true
+            ? $"Current lock expires at {lastSeenLock.ExpiryDateTime.Value:O}"
+            : "Lock has no expiry time set";
+        return new TimeoutException(
+            $"Could not acquire distributed lock '{id}' after {maxWait.TotalSeconds:F0} seconds. {expiryInfo}");
     }
 
     /// <summary>

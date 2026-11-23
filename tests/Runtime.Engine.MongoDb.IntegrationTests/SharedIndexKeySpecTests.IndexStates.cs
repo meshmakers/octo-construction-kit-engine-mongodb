@@ -477,6 +477,50 @@ public partial class SharedIndexKeySpecTests
     }
 
     /// <summary>
+    ///     AB#9302 (CodeRabbit round 2 on PR #275): a lock lost before the index states are written persists nothing -
+    ///     the token is checked after the read of the stored states and before each write; with the lock kept the same
+    ///     tracked state is written.
+    /// </summary>
+    [Fact]
+    public async Task BulkUpdateIndexStates_WithTheLockLost_PersistsNothing()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("LostSet", "1.0.0", betaFirst: false));
+            var repository = (TenantRepository)tenant.GetTenantRepository();
+            var collectionName = Collection(tenant, "LostSet").CollectionNamespace.CollectionName;
+            var alpha = new CkId<CkTypeId>($"LostSet-1.0.0/{AlphaTypeName}");
+            const string indexName = "lost_lock_index";
+
+            async Task<bool> PersistAsync(CancellationToken lockLostToken)
+            {
+                var service = new IndexStateService(repository.DataSource.CkTypes, NullLogger.Instance);
+                service.BeginTracking(collectionName, [alpha]);
+                service.TrackIndexOperation(alpha, indexName, collectionName, IndexState.Applied);
+                try
+                {
+                    return await service.BulkUpdateIndexStatesAsync(repository.GetSession(), lockLostToken);
+                }
+                finally
+                {
+                    service.EndTracking();
+                }
+            }
+
+            async Task<bool> StoredAsync() =>
+                ((await repository.DataSource.CkTypes.DocumentAsync(repository.GetSession(), alpha))?.IndexStates ?? [])
+                .Any(s => s.Name == indexName && s.CollectionName == collectionName);
+
+            Assert.False(await StoredAsync());
+            Assert.False(await PersistAsync(new CancellationToken(canceled: true)));
+            Assert.False(await StoredAsync());
+
+            Assert.True(await PersistAsync(CancellationToken.None));
+            Assert.True(await StoredAsync());
+        });
+    }
+
+    /// <summary>
     ///     AB#9302 (CodeRabbit round 2 on PR #269, item 5): a slot name is the type's collection name, an underscore and
     ///     the slot number, optionally with the tiebreak suffix and an alternate-name hash - nothing else.
     /// </summary>

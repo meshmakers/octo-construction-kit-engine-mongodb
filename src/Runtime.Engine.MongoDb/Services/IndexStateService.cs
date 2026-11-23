@@ -206,18 +206,25 @@ internal partial class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTyp
     public void Reconcile(IEnumerable<string> existingIndexNames, bool runCompleted) =>
         _currentTracker?.Reconcile(existingIndexNames, runCompleted);
 
-    public async Task BulkUpdateIndexStatesAsync(IOctoSession session)
+    /// <summary>
+    ///     Persists the tracked index states of the current collection (only the <c>IndexStates</c> field of each type).
+    ///     AB#9302: <paramref name="lockLostToken" /> is the lost-lock token of the index update; it is checked after the
+    ///     read of the stored states and before each write, so a loss noticed meanwhile persists nothing more. A token
+    ///     check cannot fence a write already started; the next index update reconciles the states.
+    /// </summary>
+    /// <returns>False when the lost lock stopped the update before a write, otherwise true.</returns>
+    public async Task<bool> BulkUpdateIndexStatesAsync(IOctoSession session, CancellationToken lockLostToken = default)
     {
         if (_currentTracker == null)
         {
             logger.LogWarning("BulkUpdateIndexStatesAsync: No active tracking context, skipping index state update");
-            return;
+            return true;
         }
 
         var typeIds = _currentTracker.AffectedTypeIds();
         if (typeIds.Count == 0)
         {
-            return;
+            return true;
         }
 
         IReadOnlyCollection<CkType> types;
@@ -230,7 +237,12 @@ internal partial class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTyp
         {
             logger.LogError(ex, "Failed to load the CkTypes of collection '{CollectionName}' for the index state update",
                 _currentTracker.CollectionName);
-            return;
+            return true;
+        }
+
+        if (lockLostToken.IsCancellationRequested)
+        {
+            return false;
         }
 
         foreach (var missing in typeIds.Where(id => types.All(t => t.CkTypeId != id) &&
@@ -263,6 +275,11 @@ internal partial class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTyp
                 // read above and this write.
                 foreach (var ckType in typesToUpdate)
                 {
+                    if (lockLostToken.IsCancellationRequested)
+                    {
+                        return false;
+                    }
+
                     await ckTypes.UpdateOneAsync(session, ckType.CkTypeId,
                         Builders<CkType>.Update.Set(t => t.IndexStates, ckType.IndexStates));
                 }
@@ -273,6 +290,8 @@ internal partial class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTyp
                 throw;
             }
         }
+
+        return true;
     }
 
     public async Task ClearIndexStatesForCollectionAsync(IOctoSession session, string collectionName,

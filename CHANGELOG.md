@@ -15,14 +15,19 @@
   holding a type of a model that is still being imported: such a collection is retried after the others and otherwise
   left for the next run (warning). Cancellation stops before the next collection; a lost lock, once detected (heartbeat,
   every 15 s), aborts the current collection and persists no more index states - also in the normal index update, which
-  before stopped only between collections. The normal index update keeps its whole-tenant lock; the public API is
+  before stopped only between collections; the index-state write checks the loss again after reading the stored
+  states and before each type it writes. A lock acquire never polls after its deadline (a delay or a slow waiter-marker
+  write that overruns it ends in the `TimeoutException`, not in a late acquire), and it fails with the cancelled
+  `LockLostToken` (`OperationCanceledException`) instead of returning success when the heartbeat found the lock taken
+  while the waiter marker was being cleaned up. The normal index update keeps its whole-tenant lock; the public API is
   unchanged. Per-collection start/finish logs (information) and lock acquire/release (debug) name tenant and collection.
   Index states (AB#9391 follow-ups): a failed build is named after every definition of the collection was processed, so
   a failure under the alternate name is visible in the same run in either order, also when a legacy index carries the
   tiebreak name; the index a failed build would have replaced stays a candidate for the later definitions of the run;
   `ClearIndexStatesForCollectionAsync` writes only `IndexStates` (`$set`); the slot-name check of the holder log accepts
   only engine slot names. Tests: `TiebreakIndexUpgradeLockTests`, `TiebreakUpgradeSectionPerformanceTests`
-  (`Category=Performance`), `RepositoryDistributedLockServiceTests`, `SharedIndexKeySpecTests.IndexStates.cs`.
+  (`Category=Performance`), `RepositoryDistributedLockServiceTests`, `RepositoryDistributedLockServiceDeadlineTests`,
+  `SharedIndexKeySpecTests.IndexStates.cs`.
 - AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
   (owned-only for every action, Write and Delete for all with Read owned-only, or Write and Delete without Read), a
   hidden record answers exactly like a missing rtId (update, replace and delete, valid and invalid payload), also when

@@ -1148,7 +1148,13 @@ as 300 items of which only 35 were distinct. Rules:
     states are not persisted (a token check cannot fence a write already started; states are written with `$set` on
     `IndexStates` only) (another holder may work on the collection; the next run
     reconciles), and the upgrade does not go on with the next collection. In both cases the lock is not held afterwards
-    (released, or another holder's).
+    (released, or another holder's). The index-state write checks the token again after reading the stored states
+    and before each type it writes (`IndexStateService.BulkUpdateIndexStatesAsync`).
+  - **Acquire deadline and loss during the acquire.** `AcquireLockAsync(maxWait)` never polls after `maxWait`: a retry
+    that would start after it (an overrun delay, a slow waiter-marker write) ends in the `TimeoutException`. When the
+    heartbeat finds the lock taken while the waiter marker is still being cleaned up, the acquire throws an
+    `OperationCanceledException` with the cancelled `LockLostToken` instead of returning success, and leaves the lock
+    document to its new holder (`RepositoryDistributedLockServiceDeadlineTests`).
   - **Logs.** Per section `index_update_lock` acquire/release at debug (the lock service's routine lines at debug too,
     `routineLogLevel`), collection start/finish (with seconds) at information, both with tenant and collection; at the
     end the number of collections, the total and the longest collection.
