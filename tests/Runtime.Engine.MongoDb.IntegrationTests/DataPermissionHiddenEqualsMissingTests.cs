@@ -15,12 +15,20 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// <summary>
 ///     On the persisted path a record a caller with restricted read may not see answers exactly like a missing rtId,
 ///     whatever the payload and however the record is addressed (stored type, sibling type of the shared Location
-///     collection, abstract base type).
+///     collection, abstract base type), while the caller's own visible record still answers the validation error.
 /// </summary>
 [Collection(DataPermissionCollection.Name)]
 public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fixture)
 {
+    public enum PolicyConfiguration
+    {
+        OwnedOnlyForEveryAction,
+        WriteAndDeleteAllReadOwnedOnly,
+        WriteAndDeleteAllWithoutRead
+    }
+
     private const string NotFoundMessageShape = "is not existing for document type RtEntity";
+    private const string ValidationErrorMessageShape = "Operation result contains errors.";
 
     private static readonly RtSecurityContext OwnedOnlyEmployee = RtSecurityContext.ForUser("user-1", ["TestEmployee"]);
     private static readonly RtSecurityContext OtherEmployee = RtSecurityContext.ForUser("user-2", ["TestEmployee"]);
@@ -31,35 +39,74 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
 
     private sealed record Answer(string ExceptionType, string Message);
 
-    private static RtDataPolicyTable PolicyTable() =>
-        new(
-        [
-            new RtDataPolicyRule("test.continents", new HashSet<string> { ContinentTypeId.SemanticVersionedFullName },
-                [RtDataAction.Read, RtDataAction.Write, RtDataAction.Delete],
-                OwnedOnly: true, AuditOnly: false, new HashSet<string> { "TestEmployee" }),
-            new RtDataPolicyRule("test.continents.all", new HashSet<string> { ContinentTypeId.SemanticVersionedFullName },
-                [RtDataAction.Read, RtDataAction.Write, RtDataAction.Delete],
-                OwnedOnly: false, AuditOnly: false, new HashSet<string> { "TestManagement" })
-        ]);
+    private static RtDataPolicyTable PolicyTable(PolicyConfiguration configuration)
+    {
+        var continentTypes = new HashSet<string> { ContinentTypeId.SemanticVersionedFullName };
+        var employeeRoles = new HashSet<string> { "TestEmployee" };
+        var managementRule = new RtDataPolicyRule("test.continents.all", continentTypes,
+            [RtDataAction.Read, RtDataAction.Write, RtDataAction.Delete],
+            OwnedOnly: false, AuditOnly: false, new HashSet<string> { "TestManagement" });
+
+        RtDataPolicyRule[] employeeRules = configuration switch
+        {
+            PolicyConfiguration.OwnedOnlyForEveryAction =>
+            [
+                new RtDataPolicyRule("test.continents", continentTypes,
+                    [RtDataAction.Read, RtDataAction.Write, RtDataAction.Delete],
+                    OwnedOnly: true, AuditOnly: false, employeeRoles)
+            ],
+            PolicyConfiguration.WriteAndDeleteAllReadOwnedOnly =>
+            [
+                new RtDataPolicyRule("test.continents.read", continentTypes, [RtDataAction.Read],
+                    OwnedOnly: true, AuditOnly: false, employeeRoles),
+                new RtDataPolicyRule("test.continents.write", continentTypes,
+                    [RtDataAction.Write, RtDataAction.Delete],
+                    OwnedOnly: false, AuditOnly: false, employeeRoles)
+            ],
+            PolicyConfiguration.WriteAndDeleteAllWithoutRead =>
+            [
+                new RtDataPolicyRule("test.continents.write", continentTypes,
+                    [RtDataAction.Write, RtDataAction.Delete],
+                    OwnedOnly: false, AuditOnly: false, employeeRoles)
+            ],
+            _ => throw new ArgumentOutOfRangeException(nameof(configuration), configuration, "Unknown configuration")
+        };
+
+        return new RtDataPolicyTable([.. employeeRules, managementRule]);
+    }
 
     private async Task<(ITenantRepository Repository, OctoObjectId ForeignRtId)> SeedForeignContinentAsync()
     {
         fixture.Resolver.Table = RtDataPolicyTable.Empty;
         await fixture.ClearCollectionAsync();
         var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
-        using var session = await tenantRepository.GetSessionAsync(OtherEmployee);
+        var foreignRtId = await InsertContinentAsync(tenantRepository, OtherEmployee, "Foreign");
+        return (tenantRepository, foreignRtId);
+    }
+
+    private static async Task<OctoObjectId> InsertContinentAsync(ITenantRepository tenantRepository,
+        RtSecurityContext owner, string name)
+    {
+        using var session = await tenantRepository.GetSessionAsync(owner);
         session.StartTransaction();
         var continent = await tenantRepository.CreateTransientRtEntityAsync<RtContinent>();
         continent.RtId = OctoObjectId.GenerateNewId();
-        continent.Name = "Foreign";
+        continent.Name = name;
         await tenantRepository.InsertOneRtEntityAsync(session, continent);
         await session.CommitTransactionAsync();
 
+        Assert.Equal(name, await StoredContinentNameAsync(tenantRepository, continent.RtId));
+        return continent.RtId;
+    }
+
+    private static async Task<string?> StoredContinentNameAsync(ITenantRepository tenantRepository,
+        OctoObjectId rtId)
+    {
         using var systemSession = await tenantRepository.GetSessionAsync();
-        var stored = await tenantRepository.GetRtEntityByRtIdAsync(systemSession,
-            new RtEntityId(ContinentTypeId, continent.RtId));
-        Assert.NotNull(stored);
-        return (tenantRepository, continent.RtId);
+        var storedContinent = await tenantRepository.GetRtEntityByRtIdAsync(systemSession,
+            new RtEntityId(ContinentTypeId, rtId));
+        Assert.NotNull(storedContinent);
+        return storedContinent.GetAttributeStringValueOrDefault("Name");
     }
 
     private static IEntityUpdateInfo<RtEntity> Change(string operation, RtCkId<CkTypeId> addressedTypeId,
@@ -78,26 +125,43 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
     }
 
     private static Task<Answer> AnswerOfChangeAsync(ITenantRepository tenantRepository,
-        RtSecurityContext? securityContext, IEntityUpdateInfo<RtEntity> change, OctoObjectId rtId) =>
+        RtSecurityContext securityContext, IEntityUpdateInfo<RtEntity> change, OctoObjectId rtId) =>
         AnswerOfWriteAsync(tenantRepository, securityContext,
             session => tenantRepository.ApplyChangesAsync(session, [change], new OperationResult()), rtId);
 
     private static async Task<Answer> AnswerOfWriteAsync(ITenantRepository tenantRepository,
-        RtSecurityContext? securityContext, Func<IOctoSession, Task> write, OctoObjectId rtId)
+        RtSecurityContext securityContext, Func<IOctoSession, Task> write, OctoObjectId rtId)
     {
-        using var session = securityContext == null
-            ? await tenantRepository.GetSessionAsync()
-            : await tenantRepository.GetSessionAsync(securityContext);
+        using var session = await tenantRepository.GetSessionAsync(securityContext);
         session.StartTransaction();
         var exception = await Record.ExceptionAsync(() => write(session));
         await session.AbortTransactionAsync();
-        Assert.NotNull(exception);
-        return new Answer(exception.GetType().Name, exception.Message.Replace(rtId.ToString(), "<rtId>"));
+        return ToAnswer(exception, rtId);
     }
 
-    private async Task WithPoliciesAsync(Func<Task> assertions)
+    private static async Task<Answer?> AnswerOfChangeWithoutTransactionAsync(ITenantRepository tenantRepository,
+        RtSecurityContext securityContext, IEntityUpdateInfo<RtEntity> change, OctoObjectId rtId)
     {
-        fixture.Resolver.Table = PolicyTable();
+        using var session = await tenantRepository.GetSessionAsync(securityContext);
+        var exception = await Record.ExceptionAsync(() =>
+            tenantRepository.ApplyChangesAsync(session, [change], new OperationResult()));
+        return ToAnswerOrNull(exception, rtId);
+    }
+
+    private static Answer ToAnswer(Exception? exception, OctoObjectId rtId)
+    {
+        Assert.NotNull(exception);
+        return ToAnswerOrNull(exception, rtId)!;
+    }
+
+    private static Answer? ToAnswerOrNull(Exception? exception, OctoObjectId rtId) =>
+        exception == null
+            ? null
+            : new Answer(exception.GetType().Name, exception.Message.Replace(rtId.ToString(), "<rtId>"));
+
+    private async Task WithPoliciesAsync(PolicyConfiguration configuration, Func<Task> assertions)
+    {
+        fixture.Resolver.Table = PolicyTable(configuration);
         try
         {
             await assertions();
@@ -115,17 +179,28 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
     }
 
     [Theory]
-    [InlineData("update", true)]
-    [InlineData("update", false)]
-    [InlineData("replace", true)]
-    [InlineData("replace", false)]
-    [InlineData("delete", true)]
-    public async Task HiddenRecord_AnswersExactlyLikeMissingRecord(string operation, bool validPayload)
+    [InlineData(PolicyConfiguration.OwnedOnlyForEveryAction, "update", true)]
+    [InlineData(PolicyConfiguration.OwnedOnlyForEveryAction, "update", false)]
+    [InlineData(PolicyConfiguration.OwnedOnlyForEveryAction, "replace", true)]
+    [InlineData(PolicyConfiguration.OwnedOnlyForEveryAction, "replace", false)]
+    [InlineData(PolicyConfiguration.OwnedOnlyForEveryAction, "delete", true)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllReadOwnedOnly, "update", true)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllReadOwnedOnly, "update", false)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllReadOwnedOnly, "replace", true)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllReadOwnedOnly, "replace", false)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllReadOwnedOnly, "delete", true)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllWithoutRead, "update", true)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllWithoutRead, "update", false)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllWithoutRead, "replace", true)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllWithoutRead, "replace", false)]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllWithoutRead, "delete", true)]
+    public async Task HiddenRecord_AnswersExactlyLikeMissingRecord(PolicyConfiguration configuration,
+        string operation, bool validPayload)
     {
         var (repository, foreignRtId) = await SeedForeignContinentAsync();
         var missingRtId = OctoObjectId.GenerateNewId();
 
-        await WithPoliciesAsync(async () =>
+        await WithPoliciesAsync(configuration, async () =>
         {
             var hiddenAnswer = await AnswerOfChangeAsync(repository, OwnedOnlyEmployee,
                 Change(operation, ContinentTypeId, foreignRtId, validPayload), foreignRtId);
@@ -138,35 +213,55 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
     }
 
     [Theory]
+    [InlineData(PolicyConfiguration.OwnedOnlyForEveryAction, "update")]
+    [InlineData(PolicyConfiguration.OwnedOnlyForEveryAction, "replace")]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllReadOwnedOnly, "update")]
+    [InlineData(PolicyConfiguration.WriteAndDeleteAllReadOwnedOnly, "replace")]
+    public async Task OwnVisibleRecord_WithInvalidPayload_AnswersTheValidationError(
+        PolicyConfiguration configuration, string operation)
+    {
+        var (repository, _) = await SeedForeignContinentAsync();
+        var ownRtId = await InsertContinentAsync(repository, OwnedOnlyEmployee, "Own");
+
+        await WithPoliciesAsync(configuration, async () =>
+        {
+            var ownAnswer = await AnswerOfChangeAsync(repository, OwnedOnlyEmployee,
+                Change(operation, ContinentTypeId, ownRtId, validPayload: false), ownRtId);
+
+            Assert.Equal(nameof(RuntimeRepositoryException), ownAnswer.ExceptionType);
+            Assert.StartsWith(ValidationErrorMessageShape, ownAnswer.Message);
+            Assert.DoesNotContain(NotFoundMessageShape, ownAnswer.Message);
+        });
+
+        Assert.Equal("Own", await StoredContinentNameAsync(repository, ownRtId));
+    }
+
+    [Theory]
     [InlineData("update", true)]
     [InlineData("update", false)]
     [InlineData("replace", true)]
     [InlineData("replace", false)]
-    public async Task HiddenRecordAddressedAsSiblingType_AnswersExactlyLikeMissingRecord(string operation,
-        bool validPayload)
+    public async Task HiddenRecordAddressedAsSiblingType_AnswersExactlyLikeMissingRecordAndIsNotWritten(
+        string operation, bool validPayload)
     {
         var (repository, foreignRtId) = await SeedForeignContinentAsync();
         var missingRtId = OctoObjectId.GenerateNewId();
 
-        await WithPoliciesAsync(async () =>
+        await WithPoliciesAsync(PolicyConfiguration.OwnedOnlyForEveryAction, async () =>
         {
-            var siblingAnswer = await AnswerOfChangeAsync(repository, OwnedOnlyEmployee,
+            var siblingAnswer = await AnswerOfChangeWithoutTransactionAsync(repository, OwnedOnlyEmployee,
                 Change(operation, CountryTypeId, foreignRtId, validPayload), foreignRtId);
-            var missingAnswer = await AnswerOfChangeAsync(repository, OwnedOnlyEmployee,
+            var missingAnswer = await AnswerOfChangeWithoutTransactionAsync(repository, OwnedOnlyEmployee,
                 Change(operation, CountryTypeId, missingRtId, validPayload), missingRtId);
 
+            Assert.Equal("Foreign", await StoredContinentNameAsync(repository, foreignRtId));
+            Assert.NotNull(missingAnswer);
             Assert.Equal(missingAnswer, siblingAnswer);
             if (operation == "update" && validPayload)
             {
-                AssertNotFound(siblingAnswer);
+                AssertNotFound(missingAnswer);
             }
         });
-
-        using var systemSession = await repository.GetSessionAsync();
-        var storedContinent = await repository.GetRtEntityByRtIdAsync(systemSession,
-            new RtEntityId(ContinentTypeId, foreignRtId));
-        Assert.NotNull(storedContinent);
-        Assert.Equal("Foreign", storedContinent.GetAttributeStringValueOrDefault("Name"));
     }
 
     [Fact]
@@ -175,7 +270,7 @@ public class DataPermissionHiddenEqualsMissingTests(DataPermissionTestFixture fi
         var (repository, foreignRtId) = await SeedForeignContinentAsync();
         var missingRtId = OctoObjectId.GenerateNewId();
 
-        await WithPoliciesAsync(async () =>
+        await WithPoliciesAsync(PolicyConfiguration.OwnedOnlyForEveryAction, async () =>
         {
             var hiddenAnswer = await AnswerOfWriteAsync(repository, OwnedOnlyEmployee, session =>
                 repository.DeleteOneRtEntityByRtIdAsync(session, LocationTypeId, foreignRtId, DeleteOptions.Erase),
