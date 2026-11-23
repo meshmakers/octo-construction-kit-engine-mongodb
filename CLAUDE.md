@@ -1595,6 +1595,19 @@ missing rows once more (`MissingRowRetry`) (guarded: those rows, unguarded: the 
 CrateDB drop rows of a multi-row INSERT without an error, the same signature), and the stress test (`Category=Stress`, not in the CI)
 `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (own CrateDB container, 512 MB heap, query breaker set per
 test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never trips; ~15 s; red without the check).
+**The sub-batches of one write run four at a time (AB#8875).** `InsertGroupedAsync` hands the rows of each statement shape to
+`InsertStatementLanes`: `Plan` splits them into lanes by a stable hash of the row key (at most
+`StreamData:MaxConcurrentInsertStatements`, default 4, clamped to 1..`MaxPoolSize`; a write of one statement keeps one lane and
+the old split), `RunAsync` runs the lanes at the same time and the statements of a lane one after another. Rules: two
+statements in flight never carry the same key and the rows of one key keep their order (never split a key across lanes,
+never run the statements of a lane concurrently); the shapes (`ArchiveColumnSets` segments) still run one after another;
+the skipped rows are sorted by position, so they equal the sequential result; `MissingRowRetry` stays per statement. Failure
+contract of `Parallel.ForEachAsync`: after the first failed statement no lane starts another one, the statements in flight
+finish, the first failure is rethrown unchanged (no `AggregateException`). On a failed write the set of rows already written
+can differ from the sequential order; all of them are idempotent guarded upserts, and a retry of the same insert converges.
+Tests: `InsertStatementLanesTests` (unit, fake statement executor: limit reached and never exceeded, no key in two statements,
+order per key, failure contract), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests` (real CrateDB, 130,000 guarded
+time-range rows, limit 1 and 4 compared).
 **The rollup statements check their rows too (AB#8680).** The forward aggregation, the recompute's staging aggregation (both
 through `RollupSourceBucketAggregator`) and the staging-to-live copy are `INSERT … SELECT` statements that CrateDB answers the
 same way. Each compares its affected rows with the rows it must write: the aggregation with

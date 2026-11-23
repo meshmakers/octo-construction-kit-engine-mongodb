@@ -320,19 +320,13 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
             // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
             // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
-            for (var offset = 0; offset < group.Indexes.Count; offset += rowsPerStatement)
-            {
-                var end = Math.Min(offset + rowsPerStatement, group.Indexes.Count);
-                var batch = new int[end - offset];
-                for (var i = 0; i < batch.Length; i++)
-                {
-                    batch[i] = group.Indexes[offset + i];
-                }
+            var lanes = InsertStatementLanes.Plan(group.Indexes, i => keyOf(rows[i]), rowsPerStatement,
+                MaxConcurrentInsertStatements);
 
-                // One sub-batch as one statement; rows CrateDB did not write are written once more, then the write
-                // fails (AB#8679, MissingRowRetry).
-                skipped.AddRange(await MissingRowRetry.WriteAsync(batch, guarded, qualifiedTable, ExecuteSubBatchAsync, _logger));
-            }
+            // One sub-batch as one statement; rows CrateDB did not write are written once more, then the write
+            // fails (AB#8679, MissingRowRetry).
+            skipped.AddRange(await InsertStatementLanes.RunAsync(lanes,
+                batch => MissingRowRetry.WriteAsync(batch, guarded, qualifiedTable, ExecuteSubBatchAsync, _logger)));
 
             // Runs one statement over `statementRows` and returns the skipped rows and the missing rows, both as
             // positions in `rows`. For an unguarded statement "missing" is the shortfall of the affected-row count.
@@ -377,6 +371,15 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         return skipped;
     }
+
+    /// <summary>
+    /// Most sub-batch statements of one insert in flight at once (AB#8875, <see cref="StreamDataConfiguration.MaxConcurrentInsertStatements" />),
+    /// at least one and at most the tenant's pool size.
+    /// </summary>
+    private int MaxConcurrentInsertStatements => EffectiveMaxConcurrentInsertStatements(_configuration);
+
+    internal static int EffectiveMaxConcurrentInsertStatements(StreamDataConfiguration configuration)
+        => Math.Clamp(configuration.MaxConcurrentInsertStatements, 1, Math.Max(1, configuration.MaxPoolSize));
 
     /// <inheritdoc />
     public async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(

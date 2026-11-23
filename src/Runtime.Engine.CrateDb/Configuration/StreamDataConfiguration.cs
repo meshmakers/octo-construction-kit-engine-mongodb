@@ -32,6 +32,15 @@ public class StreamDataConfiguration
     public int MaxPoolSize { get; set; } = 32;
 
     /// <summary>
+    /// Most sub-batch statements (1,000 rows each) one archive insert runs at the same time (AB#8875). The rows are split
+    /// into lanes by row key, so two statements in flight never carry the same key; each statement leases its own
+    /// connection, so this is the share of the tenant's pool one large write may hold. Default 4. Bound to
+    /// <c>StreamData:MaxConcurrentInsertStatements</c>. Not positive = 1 (one statement after another); above
+    /// <see cref="MaxPoolSize" /> = <see cref="MaxPoolSize" />.
+    /// </summary>
+    public int MaxConcurrentInsertStatements { get; set; } = 4;
+
+    /// <summary>
     /// How long an idle pooled connection may live before the pool closes it. Keep slightly below
     /// any upstream proxy or load-balancer idle timeout to avoid using a connection the other
     /// side has already half-closed.

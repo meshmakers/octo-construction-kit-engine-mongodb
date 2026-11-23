@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- AB#8875 Fix: a large raw or time-range archive write no longer runs its 1,000-row statements one after another.
+  `CrateDatabaseClient.InsertGroupedAsync` splits the rows of a statement shape into lanes by row key and runs the lanes at
+  the same time (`InsertStatementLanes`), so two statements in flight never carry the same key and the rows of one key are
+  written in the order they were sent; the conflict guard, the skipped rows (same order) and `MissingRowRetry` per
+  statement are unchanged. **New setting** `StreamData:MaxConcurrentInsertStatements` (`StreamDataConfiguration`,
+  default 4, not positive = 1, at most `MaxPoolSize`). A write of one statement runs as before. On a failed write no new
+  statement starts, the ones in flight finish and the first failure is rethrown unchanged; the set of rows already written
+  can then differ from the sequential order, all of them are idempotent guarded upserts, and a retry of the same insert
+  converges. Tests: `InsertStatementLanesTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
+  (real CrateDB, 130,000 guarded rows, both modes compared).
 - AB#9594 Chore: NuGet packages raised to the newest versions within the .NET 10 line: MongoDB.Driver and MongoDB.Bson
   3.14.1 (same as the engine), Npgsql 10.0.4 (11.x moves with the .NET 11 line, AB#9580), Dapper 2.1.100, Polly.Core
   8.9.1, Snappier 1.3.2, Microsoft.OpenApi 2.13.1, NLog.Web.AspNetCore 6.3.0, Swashbuckle.AspNetCore.SwaggerUI 11.0.1,
