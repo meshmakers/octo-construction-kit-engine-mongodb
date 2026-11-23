@@ -14,9 +14,10 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 /// of lanes is the limit of statements in flight; a write that fits into one statement has one lane and runs as before.
 /// </para>
 /// <para>
-/// Failure contract of <c>Parallel.ForEachAsync</c>: after the first failed statement no lane starts another one, the
-/// statements in flight finish, and the first failure is rethrown unchanged. Which other rows were already written can
-/// then differ from a sequential write; all of them are idempotent upserts, so a retry of the same write converges.
+/// Failure: after the first failed statement no lane starts another one, the statements in flight finish, and the first
+/// failure is rethrown unchanged (no <see cref="AggregateException" />); a later failure of a statement in flight is
+/// dropped without a log entry. Which other rows were already written can then differ from a sequential write; all of
+/// them are idempotent upserts, so a retry of the same write converges.
 /// </para>
 /// </remarks>
 internal static class InsertStatementLanes

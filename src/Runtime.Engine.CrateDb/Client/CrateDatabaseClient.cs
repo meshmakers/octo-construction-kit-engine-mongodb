@@ -320,8 +320,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
             // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
             // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
-            var lanes = InsertStatementLanes.Plan(group.Indexes, i => keyOf(rows[i]), rowsPerStatement,
-                MaxConcurrentInsertStatements);
+            var lanes = PlanInsertStatements(rows, group.Indexes, keyOf, rowsPerStatement, _configuration);
 
             // One sub-batch as one statement; rows CrateDB did not write are written once more, then the write
             // fails (AB#8679, MissingRowRetry).
@@ -373,11 +372,18 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     /// <summary>
+    /// Splits the rows of one statement shape into lanes of statements (AB#8875): by row key, with at most
+    /// <see cref="EffectiveMaxConcurrentInsertStatements" /> lanes.
+    /// </summary>
+    internal static IReadOnlyList<IReadOnlyList<int[]>> PlanInsertStatements<T>(T[] rows, IReadOnlyList<int> indexes,
+        Func<T, string> keyOf, int rowsPerStatement, StreamDataConfiguration configuration)
+        => InsertStatementLanes.Plan(indexes, i => keyOf(rows[i]), rowsPerStatement,
+            EffectiveMaxConcurrentInsertStatements(configuration));
+
+    /// <summary>
     /// Most sub-batch statements of one insert in flight at once (AB#8875, <see cref="StreamDataConfiguration.MaxConcurrentInsertStatements" />),
     /// at least one and at most the tenant's pool size.
     /// </summary>
-    private int MaxConcurrentInsertStatements => EffectiveMaxConcurrentInsertStatements(_configuration);
-
     internal static int EffectiveMaxConcurrentInsertStatements(StreamDataConfiguration configuration)
         => Math.Clamp(configuration.MaxConcurrentInsertStatements, 1, Math.Max(1, configuration.MaxPoolSize));
 

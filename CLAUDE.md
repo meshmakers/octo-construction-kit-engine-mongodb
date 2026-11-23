@@ -1601,13 +1601,16 @@ test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never
 the old split), `RunAsync` runs the lanes at the same time and the statements of a lane one after another. Rules: two
 statements in flight never carry the same key and the rows of one key keep their order (never split a key across lanes,
 never run the statements of a lane concurrently); the shapes (`ArchiveColumnSets` segments) still run one after another;
-the skipped rows are sorted by position, so they equal the sequential result; `MissingRowRetry` stays per statement. Failure
-contract of `Parallel.ForEachAsync`: after the first failed statement no lane starts another one, the statements in flight
-finish, the first failure is rethrown unchanged (no `AggregateException`). On a failed write the set of rows already written
-can differ from the sequential order; all of them are idempotent guarded upserts, and a retry of the same insert converges.
+the skipped rows are sorted by position, so they equal the sequential result; `MissingRowRetry` stays per statement. On a
+failure no lane starts another statement after the first failed one, the statements in flight finish, the first failure is
+rethrown unchanged (no `AggregateException`) and a later failure of a statement in flight is dropped without a log entry. On
+a failed write the set of rows already written can differ from the sequential order; all of them are idempotent guarded
+upserts, and a retry of the same insert converges. The client plans its lanes in `CrateDatabaseClient.PlanInsertStatements`
+(limit from the configuration, key from the row).
 Tests: `InsertStatementLanesTests` (unit, fake statement executor: limit reached and never exceeded, no key in two statements,
-order per key, failure contract), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests` (real CrateDB, 130,000 guarded
-time-range rows, limit 1 and 4 compared).
+order per key, failure contract; `PlanInsertStatements` uses the configured limit and keeps a key in one lane),
+`StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests` (real CrateDB, limit 1 and 4 compared: 130,000 guarded
+time-range rows, and keys written again 1,000 to 3,000 rows later, which the lanes put into the same statement).
 **The rollup statements check their rows too (AB#8680).** The forward aggregation, the recompute's staging aggregation (both
 through `RollupSourceBucketAggregator`) and the staging-to-live copy are `INSERT … SELECT` statements that CrateDB answers the
 same way. Each compares its affected rows with the rows it must write: the aggregation with

@@ -197,15 +197,21 @@ public class InsertStatementLanesTests
         var failingStatement = lanes[0][0];
         var failure = StreamDataWriteIncompleteException.AfterRetry("\"t\".\"archive\"", 1_000, 3, "3 rows had no RETURNING row.");
         var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new ConcurrentBag<int[]>();
         var finished = new ConcurrentBag<int[]>();
 
         async Task<IReadOnlyList<SkippedArchiveRow>> WriteAsync(int[] rows)
         {
             started.Add(rows);
+            if (started.Count == lanes.Count)
+            {
+                allStarted.TrySetResult();
+            }
+
             if (rows == failingStatement)
             {
-                await Task.Yield();
+                await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 failed.SetResult();
                 throw failure;
             }
@@ -255,6 +261,32 @@ public class InsertStatementLanesTests
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => InsertStatementLanes.RunAsync(lanes, WriteAsync));
 
         Assert.Same(first, thrown);
+    }
+
+    // AC1 and AC2 at the client: the lanes of an insert follow the configured limit and the row key, not the position.
+    [Fact]
+    public void PlanInsertStatements_UsesTheConfiguredLimitAndKeepsEveryKeyInOneLane()
+    {
+        var configuration = new StreamDataConfiguration { ConnectionString = "Host=localhost", MaxConcurrentInsertStatements = 3 };
+        var keys = Enumerable.Range(0, 9_000)
+            .Select(i => CrateDatabaseClient.RowKey($"meter-{i % 3_000}", "Test/Meter", Origin, Origin.AddMinutes(15)))
+            .ToArray();
+
+        var lanes = CrateDatabaseClient.PlanInsertStatements(keys, Positions(keys.Length), key => key, RowsPerStatement,
+            configuration);
+
+        Assert.Equal(3, lanes.Count);
+        var laneOfKey = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var lane = 0; lane < lanes.Count; lane++)
+        {
+            foreach (var row in lanes[lane].SelectMany(statement => statement))
+            {
+                Assert.Equal(lane, laneOfKey.TryAdd(keys[row], lane) ? lane : laneOfKey[keys[row]]);
+            }
+        }
+
+        Assert.Equal(3_000, laneOfKey.Count);
+        Assert.Equal(keys.Length, lanes.Sum(lane => lane.Sum(statement => statement.Length)));
     }
 
     // AC1: the default is below the default pool, a limit above the pool is the pool, a limit of zero or less is one.

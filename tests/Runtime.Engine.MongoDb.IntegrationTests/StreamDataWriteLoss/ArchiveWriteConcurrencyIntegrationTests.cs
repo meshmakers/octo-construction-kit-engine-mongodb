@@ -31,6 +31,7 @@ public class ArchiveWriteConcurrencyIntegrationTests(CrateStagingCopyFixture fix
     private const int Windows = 1_000;
     private const int Rows = Meters * Windows;
     private const int RepeatedRows = 2_000;
+    private const int NearRows = 8_000;
 
     private static readonly RtCkId<CkTypeId> Type = new("Test", new CkTypeId("Meter"));
     private static readonly DateTime Origin = new(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -92,25 +93,54 @@ public class ArchiveWriteConcurrencyIntegrationTests(CrateStagingCopyFixture fix
         var points = Enumerable.Range(0, Rows).Select(i => Second(i, 1_000_000 + i)).ToList();
         points.AddRange(Enumerable.Range(0, RepeatedRows).Select(j => Second(j * 61 % Rows, 2_000_000 + j)));
         return points;
+    }
 
-        static TimeRangeDataPointDto Second(int row, double value) => (row % 4) switch
+    private static TimeRangeDataPointDto Second(int row, double value) => (row % 4) switch
+    {
+        0 => Point(row, value, 3, DocumentDate),
+        1 => Point(row, value, 1, DocumentDate),
+        2 => Point(row, value, 2, DocumentDate.AddHours(-1)),
+        _ => Point(row, value, 2, DocumentDate.AddHours(1))
+    };
+
+    /// <summary>
+    ///     Rows 0 to 7,999 again as in <see cref="SecondDelivery" />; from row 4,000 on, every fourth row is followed by a
+    ///     key of this batch written once more, 1,000 to 3,000 rows earlier: with the same ranks as its first write in the
+    ///     batch, a worse quality or a better quality. One statement after another puts the two writes of such a key into
+    ///     two statements, four lanes put most of them into one.
+    /// </summary>
+    private static List<TimeRangeDataPointDto> NearRepeatDelivery()
+    {
+        var points = new List<TimeRangeDataPointDto>();
+        for (var i = 0; i < NearRows; i++)
         {
-            0 => Point(row, value, 3, DocumentDate),
-            1 => Point(row, value, 1, DocumentDate),
-            2 => Point(row, value, 2, DocumentDate.AddHours(-1)),
-            _ => Point(row, value, 2, DocumentDate.AddHours(1))
-        };
+            points.Add(Second(i, 1_000_000 + i));
+            if (i >= 4_000 && i % 4 == 0)
+            {
+                var row = i - 1_000 - i * 7 % 2_001;
+                points.Add((i / 4 % 3) switch
+                {
+                    0 => Second(row, 3_000_000 + i),
+                    1 => Point(row, 3_000_000 + i, 3, DocumentDate.AddHours(2)),
+                    _ => Point(row, 3_000_000 + i, 1, DocumentDate.AddHours(-2))
+                });
+            }
+        }
+
+        return points;
     }
 
     [Fact]
     public async Task AGuardedWriteOf130000Rows_StoresAndSkipsTheSameRows_FourStatementsAtATimeAsOneAfterAnother()
     {
-        var sequential = await CreateTableAsync(withCheck: false);
-        var concurrent = await CreateTableAsync(withCheck: false);
+        var sequential = NewTable();
+        var concurrent = NewTable();
         await using var sequentialClient = CreateClient(1);
         await using var concurrentClient = CreateClient(4);
         try
         {
+            await CreateTableAsync(sequential.Table, withCheck: false);
+            await CreateTableAsync(concurrent.Table, withCheck: false);
             var firstSequential = await sequentialClient.Client.InsertTimeRangeDataAsync(sequential.Tenant, sequential.Table,
                 UserColumns, FirstDelivery(), conflictPrecedence: Precedence);
             var firstConcurrent = await concurrentClient.Client.InsertTimeRangeDataAsync(concurrent.Tenant, concurrent.Table,
@@ -141,14 +171,72 @@ public class ArchiveWriteConcurrencyIntegrationTests(CrateStagingCopyFixture fix
     }
 
     [Fact]
-    public async Task AGuardedWriteWhoseRetryStaysShort_FailsWithTheSameTableAndCounts_FourStatementsAtATimeAsOneAfterAnother()
+    public async Task AKeyWrittenAgain1000To3000RowsLater_StoresAndSkipsTheSameRows_FourStatementsAtATimeAsOneAfterAnother()
     {
-        var sequential = await CreateTableAsync(withCheck: true);
-        var concurrent = await CreateTableAsync(withCheck: true);
+        var keys = NearRepeatDelivery().Select(p => CrateDatabaseClient.RowKey(p.RtId, p.CkTypeId, p.From, p.To)).ToArray();
+        Assert.False(SharesAStatement(keys, 1));
+        Assert.True(SharesAStatement(keys, 4));
+
+        var sequential = NewTable();
+        var concurrent = NewTable();
         await using var sequentialClient = CreateClient(1);
         await using var concurrentClient = CreateClient(4);
         try
         {
+            await CreateTableAsync(sequential.Table, withCheck: false);
+            await CreateTableAsync(concurrent.Table, withCheck: false);
+            Assert.Empty(await sequentialClient.Client.InsertTimeRangeDataAsync(sequential.Tenant, sequential.Table,
+                UserColumns, FirstDelivery().Take(NearRows), conflictPrecedence: Precedence));
+            Assert.Empty(await concurrentClient.Client.InsertTimeRangeDataAsync(concurrent.Tenant, concurrent.Table,
+                UserColumns, FirstDelivery().Take(NearRows), conflictPrecedence: Precedence));
+
+            var skippedSequential = await sequentialClient.Client.InsertTimeRangeDataAsync(sequential.Tenant, sequential.Table,
+                UserColumns, NearRepeatDelivery(), conflictPrecedence: Precedence);
+            var skippedConcurrent = await concurrentClient.Client.InsertTimeRangeDataAsync(concurrent.Tenant, concurrent.Table,
+                UserColumns, NearRepeatDelivery(), conflictPrecedence: Precedence);
+
+            Assert.Contains(skippedSequential, s => s.Index >= 4_000 && s.Reason == StreamDataSkipReason.LowerPrecedence);
+            Assert.Contains(skippedSequential, s => s.Index >= 4_000 && s.Reason == StreamDataSkipReason.ManualValueProtected);
+            Assert.Equal(skippedSequential, skippedConcurrent);
+
+            var storedSequential = await ReadAsync(sequential.Table);
+            var storedConcurrent = await ReadAsync(concurrent.Table);
+            Assert.Equal(NearRows, storedSequential.Count);
+            Assert.Equal(storedSequential, storedConcurrent);
+            Assert.Contains(storedSequential, r => r.Split('|')[4].StartsWith("300", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await DropAsync(sequential.Table);
+            await DropAsync(concurrent.Table);
+        }
+    }
+
+    /// <summary>Whether a statement of the plan the client makes with this limit carries a key twice.</summary>
+    private static bool SharesAStatement(string[] keys, int limit)
+    {
+        var rowsPerStatement = CrateDatabaseClient.RowsPerStatement(5 + ArchiveRowOriginColumns.Names.Count + UserColumns.Length);
+        var configuration = new StreamDataConfiguration
+        {
+            ConnectionString = "Host=localhost", MaxConcurrentInsertStatements = limit
+        };
+        return CrateDatabaseClient.PlanInsertStatements(keys, Enumerable.Range(0, keys.Length).ToList(), k => k,
+                rowsPerStatement, configuration)
+            .SelectMany(lane => lane)
+            .Any(statement => statement.Select(r => keys[r]).Distinct(StringComparer.Ordinal).Count() < statement.Length);
+    }
+
+    [Fact]
+    public async Task AGuardedWriteWhoseRetryStaysShort_FailsWithTheSameTableAndCounts_FourStatementsAtATimeAsOneAfterAnother()
+    {
+        var sequential = NewTable();
+        var concurrent = NewTable();
+        await using var sequentialClient = CreateClient(1);
+        await using var concurrentClient = CreateClient(4);
+        try
+        {
+            await CreateTableAsync(sequential.Table, withCheck: true);
+            await CreateTableAsync(concurrent.Table, withCheck: true);
             static List<TimeRangeDataPointDto> Points()
             {
                 var points = Enumerable.Range(0, Rows).Select(i => Point(i, i == 70_123 ? -1d : i, 2, DocumentDate)).ToList();
@@ -194,10 +282,14 @@ public class ArchiveWriteConcurrencyIntegrationTests(CrateStagingCopyFixture fix
             Options.Create(new CrateRecomputeOptions())), access);
     }
 
-    private async Task<(string Tenant, string Table)> CreateTableAsync(bool withCheck)
+    private static (string Tenant, string Table) NewTable()
     {
         var tenant = CrateStagingCopyFixture.NewTenantId();
-        var table = TenantSchema.QualifiedArchiveTable(tenant, OctoObjectId.GenerateNewId().ToString());
+        return (tenant, TenantSchema.QualifiedArchiveTable(tenant, OctoObjectId.GenerateNewId().ToString()));
+    }
+
+    private async Task CreateTableAsync(string table, bool withCheck)
+    {
         var ddl = ArchiveDdlGenerator.GenerateCreateWindowedTable(table, Columns, 2, 0);
         if (withCheck)
         {
@@ -207,7 +299,6 @@ public class ArchiveWriteConcurrencyIntegrationTests(CrateStagingCopyFixture fix
         }
 
         await fixture.SqlAsync(ddl);
-        return (tenant, table);
     }
 
     /// <summary>The stored rows as one line each, ordered by key; the write clock columns are left out.</summary>
