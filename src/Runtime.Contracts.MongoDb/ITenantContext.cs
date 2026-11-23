@@ -464,6 +464,18 @@ public interface ITenantContext
     ///     Idempotent. Until a collection is upgraded its pages sort without the <c>_id</c> tiebreak; afterwards with
     ///     it. A CK import and <see cref="UpdateIndexesAsync" /> keep legacy indexes; this is the only way to replace
     ///     them. Building an index reads the whole collection: on large tenants run it in a maintenance window.
+    ///     <para>
+    ///         AB#9302: the upgrade holds the tenant's index update lock only while it works on one collection; between
+    ///         two collections the lock is free and the CK metadata is read again. A CK import (or
+    ///         <see cref="UpdateIndexesAsync" />) that starts meanwhile waits at most for the collection being upgraded
+    ///         (its own wait is 90 s; the upgrade yields the lock to it after that collection) and then succeeds; the
+    ///         upgrade continues with the remaining collections, including collections the import changed or created.
+    ///         The worst case is the index builds of one collection: measured locally 2.1 s for 1,000,000 documents
+    ///         with one legacy index; a collection with tens of millions of documents or several legacy indexes can
+    ///         still make an import wait longer than its 90 s.
+    ///         MongoDB's own locks of an index build still briefly block readers of the collection being upgraded;
+    ///         in production windows upgrade the system tenant separately.
+    ///     </para>
     /// </summary>
     /// <param name="adminSession">An admin session to perform the operation</param>
     /// <param name="cancellationToken">Stops before the next collection; an index build already started finishes.</param>

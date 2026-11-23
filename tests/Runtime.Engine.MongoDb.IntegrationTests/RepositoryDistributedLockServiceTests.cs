@@ -245,6 +245,70 @@ public class RepositoryDistributedLockServiceTests
         }
     }
 
+    /// <summary>
+    ///     AB#9302: the waiter marker is opt-in per lock. A contender created without it (every lock but
+    ///     <c>index_update_lock</c>) writes no marker while it waits, as before.
+    /// </summary>
+    [Fact]
+    public async Task Waiting_WithoutMarkWaiters_WritesNoWaiterMarker()
+    {
+        var lockId = NewLockId("test_no_marker");
+        var collection = GetSysLockCollection();
+
+        await using var holder = CreateLockService(lockId);
+        await holder.AcquireLockAsync(Ct);
+        await using var contender = CreateLockService(lockId);
+        var acquireTask = contender.AcquireLockAsync(Ct);
+
+        await Task.Delay(2500, Ct);
+        Assert.False(acquireTask.IsCompleted);
+        Assert.Empty(await WaiterMarkersAsync(collection, lockId));
+        Assert.False(await RepositoryDistributedLockService.HasWaitersAsync(GetClientAndRepo().repo, lockId, Ct));
+
+        await holder.DisposeAsync();
+        await acquireTask;
+        Assert.Empty(await WaiterMarkersAsync(collection, lockId));
+    }
+
+    /// <summary>
+    ///     AB#9302: a contender created with <c>markWaiters</c> keeps a waiter marker while it waits - refreshed on every
+    ///     poll (its expiry moves on) - and deletes it once it holds the lock.
+    /// </summary>
+    [Fact]
+    public async Task Waiting_WithMarkWaiters_RefreshesTheMarker_AndDeletesItOnAcquire()
+    {
+        var lockId = NewLockId("test_marker");
+        var collection = GetSysLockCollection();
+        var (client, repo) = GetClientAndRepo();
+        var logger = _fixture.GetService<ILoggerFactory>().CreateLogger("LockTest");
+
+        await using var holder = CreateLockService(lockId);
+        await holder.AcquireLockAsync(Ct);
+        await using var contender = new RepositoryDistributedLockService(client, repo, logger, lockId,
+            markWaiters: true);
+        var acquireTask = contender.AcquireLockAsync(Ct);
+
+        await Task.Delay(1500, Ct);
+        var first = Assert.Single(await WaiterMarkersAsync(collection, lockId));
+        Assert.True(await RepositoryDistributedLockService.HasWaitersAsync(repo, lockId, Ct));
+        await Task.Delay(2000, Ct);
+        var refreshed = Assert.Single(await WaiterMarkersAsync(collection, lockId));
+        Assert.Equal(first.Id, refreshed.Id);
+        Assert.True(refreshed.ExpiryDateTime > first.ExpiryDateTime, "the marker was not refreshed while waiting");
+
+        await holder.DisposeAsync();
+        await acquireTask;
+        Assert.Empty(await WaiterMarkersAsync(collection, lockId));
+        Assert.False(await RepositoryDistributedLockService.HasWaitersAsync(repo, lockId, Ct));
+    }
+
+    private static async Task<List<SysLock>> WaiterMarkersAsync(IMongoCollection<SysLock> collection, string lockId)
+    {
+        var prefix = $"{RepositoryDistributedLockService.WaiterIdPrefix}{lockId}:";
+        return (await collection.Find(FilterDefinition<SysLock>.Empty).ToListAsync(Ct))
+            .Where(s => s.Id.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+    }
+
     [Fact]
     public async Task Acquire_HonorsCancellationTokenWhilePolling()
     {

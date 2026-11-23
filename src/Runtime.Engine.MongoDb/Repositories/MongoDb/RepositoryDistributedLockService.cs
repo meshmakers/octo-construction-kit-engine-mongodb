@@ -10,13 +10,35 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
+/// <param name="routineLogLevel">
+///     The level of the routine lines (acquiring, waiting, acquired, releasing, released). AB#9302: the per-collection
+///     sections of the tiebreak index upgrade log them at debug.
+/// </param>
+/// <param name="markWaiters">
+///     AB#9302, opt-in per lock: while this instance waits for the lock it keeps a waiter marker (see
+///     <see cref="WaiterIdPrefix" />). Only <c>index_update_lock</c> uses it; every other lock behaves as before.
+/// </param>
 internal class RepositoryDistributedLockService(
     IRepositoryClient repositoryClient,
     IRepositoryInternal repository,
     ILogger logger,
-    string id)
+    string id,
+    LogLevel routineLogLevel = LogLevel.Information,
+    bool markWaiters = false)
     : IDistributedLockHandle
 {
+    /// <summary>
+    ///     AB#9302: the id prefix of the waiter markers. A contender created with <c>markWaiters</c> that finds the lock
+    ///     held writes <c>waiter:&lt;lock id&gt;:&lt;owner token&gt;</c> with a short expiry on every poll (so the marker is
+    ///     refreshed while it waits) and deletes it when it stops waiting; a holder that works in sections (the tiebreak
+    ///     index upgrade) yields the lock between two sections while a marker is fresh (<see cref="HasWaitersAsync" />).
+    ///     The prefix shares no prefix with a lock id.
+    /// </summary>
+    internal const string WaiterIdPrefix = "waiter:";
+
+    // AB#9302: a waiter polls every DelayMilliseconds; its marker counts as fresh for a few polls.
+    internal static readonly TimeSpan WaiterMarkerTimeToLive = TimeSpan.FromSeconds(5);
+
     // Polling cadence — with TTL=60s, 90 attempts × 1s = 90s max wait
     // (50% margin over TTL so a stale lock is always reached before the timeout).
     private const int MaxRetryAttempts = 90;
@@ -68,7 +90,14 @@ internal class RepositoryDistributedLockService(
     /// <inheritdoc />
     public CancellationToken LockLostToken => _lockLostCts.Token;
 
-    public async Task AcquireLockAsync(CancellationToken cancellationToken = default)
+    public Task AcquireLockAsync(CancellationToken cancellationToken = default) =>
+        AcquireLockAsync(MaxAcquireDuration, cancellationToken);
+
+    /// <summary>
+    ///     Acquires the lock, waiting at most <paramref name="maxWait" /> while another holder has it (AB#9302: the
+    ///     tiebreak index upgrade waits longer after it yielded the lock to a CK import).
+    /// </summary>
+    public async Task AcquireLockAsync(TimeSpan maxWait, CancellationToken cancellationToken = default)
     {
         lock (_lockObject)
         {
@@ -83,7 +112,7 @@ internal class RepositoryDistributedLockService(
             _ownerToken = Guid.NewGuid();
             _lockLost = false;
 
-            logger.LogInformation("Acquiring distributed lock '{LockId}' as {Holder} (token {OwnerToken})",
+            logger.Log(routineLogLevel, "Acquiring distributed lock '{LockId}' as {Holder} (token {OwnerToken})",
                 id, CurrentProcessHolderInfo, _ownerToken);
 
             var collection = repository.GetCollection(new LockMongoDataSourceMapper());
@@ -92,56 +121,74 @@ internal class RepositoryDistributedLockService(
             int attempt = 0;
             int transientFailures = 0;
             bool lockAcquired = false;
+            bool waiterMarked = false;
+            var maxAttempts = Math.Max(1, (int)Math.Ceiling(maxWait.TotalMilliseconds / DelayMilliseconds));
             var acquireStopwatch = Stopwatch.StartNew();
 
-            while (!lockAcquired)
+            try
             {
-                SysLock? existingLock = null;
-                try
+                while (!lockAcquired)
                 {
-                    (lockAcquired, existingLock) = await TryAcquireOnceAsync(collection).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (IsTransientTransactionError(ex))
-                {
-                    // A concurrent writer touched the lock document inside our transaction
-                    // (WriteConflict, code 112, label TransientTransactionError). The transaction
-                    // was aborted when its session was disposed; this is contention, so retry.
-                    transientFailures++;
-                    if (acquireStopwatch.Elapsed >= MaxAcquireDuration)
+                    SysLock? existingLock = null;
+                    try
                     {
-                        throw new TimeoutException(
-                            $"Could not acquire distributed lock '{id}' after {MaxAcquireDuration.TotalSeconds:F0} seconds: " +
-                            $"transaction kept failing with transient write conflicts ({transientFailures} attempts).",
-                            ex);
+                        (lockAcquired, existingLock) = await TryAcquireOnceAsync(collection).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (IsTransientTransactionError(ex))
+                    {
+                        // A concurrent writer touched the lock document inside our transaction
+                        // (WriteConflict, code 112, label TransientTransactionError). The transaction
+                        // was aborted when its session was disposed; this is contention, so retry.
+                        transientFailures++;
+                        if (acquireStopwatch.Elapsed >= maxWait)
+                        {
+                            throw new TimeoutException(
+                                $"Could not acquire distributed lock '{id}' after {maxWait.TotalSeconds:F0} seconds: " +
+                                $"transaction kept failing with transient write conflicts ({transientFailures} attempts).",
+                                ex);
+                        }
+
+                        var backoff = GetTransientRetryDelay(transientFailures);
+                        logger.LogWarning(
+                            "Transient transaction error while acquiring distributed lock '{LockId}' (attempt {TransientAttempt}, error code {ErrorCode}), retrying in {DelayMilliseconds} ms",
+                            id, transientFailures, GetMongoErrorCode(ex), (int)backoff.TotalMilliseconds);
+                        await Task.Delay(backoff, cancellationToken).ConfigureAwait(false);
+                        continue;
                     }
 
-                    var backoff = GetTransientRetryDelay(transientFailures);
-                    logger.LogWarning(
-                        "Transient transaction error while acquiring distributed lock '{LockId}' (attempt {TransientAttempt}, error code {ErrorCode}), retrying in {DelayMilliseconds} ms",
-                        id, transientFailures, GetMongoErrorCode(ex), (int)backoff.TotalMilliseconds);
-                    await Task.Delay(backoff, cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                if (!lockAcquired)
-                {
-                    attempt++;
-                    if (attempt >= MaxRetryAttempts || acquireStopwatch.Elapsed >= MaxAcquireDuration)
+                    if (!lockAcquired)
                     {
-                        var expiryInfo = existingLock?.ExpiryDateTime.HasValue == true
-                            ? $"Current lock expires at {existingLock.ExpiryDateTime.Value:O}"
-                            : "Lock has no expiry time set";
-                        throw new TimeoutException(
-                            $"Could not acquire distributed lock '{id}' after {MaxRetryAttempts * DelayMilliseconds / 1000} seconds. {expiryInfo}");
-                    }
+                        attempt++;
+                        if (attempt >= maxAttempts || acquireStopwatch.Elapsed >= maxWait)
+                        {
+                            var expiryInfo = existingLock?.ExpiryDateTime.HasValue == true
+                                ? $"Current lock expires at {existingLock.ExpiryDateTime.Value:O}"
+                                : "Lock has no expiry time set";
+                            throw new TimeoutException(
+                                $"Could not acquire distributed lock '{id}' after {maxWait.TotalSeconds:F0} seconds. {expiryInfo}");
+                        }
 
-                    logger.LogInformation("Waiting for distributed lock '{LockId}' (attempt {Attempt}/{MaxAttempts})",
-                        id, attempt, MaxRetryAttempts);
-                    await Task.Delay(DelayMilliseconds, cancellationToken);
+                        if (markWaiters)
+                        {
+                            waiterMarked |= await MarkWaitingAsync(collection.GetMongoCollection()).ConfigureAwait(false);
+                        }
+
+                        logger.Log(routineLogLevel,
+                            "Waiting for distributed lock '{LockId}' (attempt {Attempt}/{MaxAttempts})",
+                            id, attempt, maxAttempts);
+                        await Task.Delay(DelayMilliseconds, cancellationToken);
+                    }
+                }
+            }
+            finally
+            {
+                if (waiterMarked)
+                {
+                    await UnmarkWaitingAsync(collection.GetMongoCollection()).ConfigureAwait(false);
                 }
             }
 
-            logger.LogInformation("Acquired distributed lock '{LockId}' (token {OwnerToken})", id, _ownerToken);
+            logger.Log(routineLogLevel, "Acquired distributed lock '{LockId}' (token {OwnerToken})", id, _ownerToken);
 
             lock (_lockObject)
             {
@@ -268,6 +315,74 @@ internal class RepositoryDistributedLockService(
         }
 
         return (lockAcquired, existingLock);
+    }
+
+    private string WaiterMarkerId => $"{WaiterIdPrefix}{id}:{_ownerToken:N}";
+
+    /// <summary>AB#9302: writes or refreshes this contender's waiter marker. Best effort: a failure only logs.</summary>
+    private async Task<bool> MarkWaitingAsync(IMongoCollection<SysLock> mongoCollection)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            var marker = new SysLock
+            {
+                Id = WaiterMarkerId,
+                CreationDateTime = now,
+                ExpiryDateTime = now.Add(WaiterMarkerTimeToLive),
+                LastHeartbeat = now,
+                OwnerToken = _ownerToken,
+                HolderInfo = CurrentProcessHolderInfo
+            };
+            await mongoCollection.ReplaceOneAsync(Builders<SysLock>.Filter.Eq(sysLock => sysLock.Id, marker.Id), marker,
+                new ReplaceOptions { IsUpsert = true }).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not write the waiter marker of distributed lock '{LockId}'", id);
+            return false;
+        }
+    }
+
+    /// <summary>AB#9302: deletes this contender's waiter marker. Best effort: the marker expires anyway.</summary>
+    private async Task UnmarkWaitingAsync(IMongoCollection<SysLock> mongoCollection)
+    {
+        try
+        {
+            await mongoCollection.DeleteOneAsync(Builders<SysLock>.Filter.Eq(sysLock => sysLock.Id, WaiterMarkerId))
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not delete the waiter marker of distributed lock '{LockId}'", id);
+        }
+    }
+
+    /// <summary>
+    ///     AB#9302: true when a contender waits for the lock <paramref name="lockId" />: its waiter marker was written or
+    ///     refreshed within the last <see cref="WaiterMarkerTimeToLive" /> (a dead waiter's marker expires). Reads without
+    ///     a session, so it always sees the current state.
+    /// </summary>
+    internal static async Task<bool> HasWaitersAsync(IRepositoryInternal repository, string lockId,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = repository.GetCollection(new LockMongoDataSourceMapper()).GetMongoCollection();
+        var filter = Builders<SysLock>.Filter.Regex(sysLock => sysLock.Id,
+                         new MongoDB.Bson.BsonRegularExpression(
+                             "^" + System.Text.RegularExpressions.Regex.Escape($"{WaiterIdPrefix}{lockId}:"))) &
+                     Builders<SysLock>.Filter.Gt(sysLock => sysLock.ExpiryDateTime, DateTime.UtcNow);
+        return await collection.Find(filter).Limit(1).AnyAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>AB#9302: true when the lock <paramref name="lockId" /> is held right now (not expired).</summary>
+    internal static async Task<bool> IsHeldAsync(IRepositoryInternal repository, string lockId,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = repository.GetCollection(new LockMongoDataSourceMapper()).GetMongoCollection();
+        var filter = Builders<SysLock>.Filter.Eq(sysLock => sysLock.Id, lockId) &
+                     Builders<SysLock>.Filter.Gt(sysLock => sysLock.ExpiryDateTime, DateTime.UtcNow);
+        return await collection.Find(filter).Limit(1).AnyAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -487,7 +602,7 @@ internal class RepositoryDistributedLockService(
 
     public async ValueTask DisposeAsync()
     {
-        logger.LogInformation("Disposing distributed lock service for '{LockId}'", id);
+        logger.Log(routineLogLevel, "Disposing distributed lock service for '{LockId}'", id);
 
         // Stop heartbeat first
         await StopHeartbeatAsync();
@@ -516,7 +631,7 @@ internal class RepositoryDistributedLockService(
 
             try
             {
-                logger.LogInformation("Releasing distributed lock '{LockId}' (token {OwnerToken}) on dispose",
+                logger.Log(routineLogLevel, "Releasing distributed lock '{LockId}' (token {OwnerToken}) on dispose",
                     id, _ownerToken);
 
                 using var session = await repositoryClient.GetSessionAsync().ConfigureAwait(false);
@@ -531,7 +646,7 @@ internal class RepositoryDistributedLockService(
                         Builders<SysLock>.Filter.Eq(sysLock => sysLock.OwnerToken, _ownerToken));
                     await collection.DeleteOneAsync(session, filter);
 
-                    logger.LogInformation("Released distributed lock '{LockId}'", id);
+                    logger.Log(routineLogLevel, "Released distributed lock '{LockId}'", id);
                     await session.CommitTransactionAsync();
 
                     lock (_lockObject)

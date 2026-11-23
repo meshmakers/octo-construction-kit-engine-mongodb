@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- AB#9302 Fix: a CK import no longer times out while the tiebreak index upgrade runs. `UpgradeTiebreakIndexesAsync`
+  holds `index_update_lock` per collection instead of for the whole tenant: each lock section re-reads the CK metadata,
+  upgrades the next collection root not processed in this run (also one an import created meanwhile) and releases the
+  lock. A waiting index update (CK import, `UpdateIndexesAsync`) keeps a short-lived waiter marker in `SysLock` (opt-in
+  per lock, only `index_update_lock`; every other lock is unchanged); the upgrade yields the lock to it after the current
+  collection and then waits up to one hour for the lock itself. The import waits at most one collection's index build
+  (measured locally: 2.1 s for a collection of 1,000,000 documents with one legacy index). Cancellation stops before the next collection; a lost lock aborts the current collection and
+  persists no index state outside the lock. The normal index update keeps its whole-tenant lock; the public API is
+  unchanged. Per-collection start/finish logs (information) and lock acquire/release (debug) name tenant and collection.
+  Index states (AB#9391 follow-ups): a failed build is named after every definition of the collection was processed, so
+  a failure under the alternate name is visible in the same run in either order, also when a legacy index carries the
+  tiebreak name; `ClearIndexStatesForCollectionAsync` writes only `IndexStates` (`$set`); the slot-name check of the
+  holder log accepts only engine slot names. Tests: `TiebreakIndexUpgradeLockTests`, `TiebreakUpgradeSectionPerformanceTests`
+  (`Category=Performance`), `RepositoryDistributedLockServiceTests`, `SharedIndexKeySpecTests.IndexStates.cs`.
 - AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
   (owned-only for every action, Write and Delete for all with Read owned-only, or Write and Delete without Read), a
   hidden record answers exactly like a missing rtId (update, replace and delete, valid and invalid payload), also when

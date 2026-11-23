@@ -994,7 +994,8 @@ as 300 items of which only 35 were distinct. Rules:
   `TryFindTenantContextAsync`, which reaches every collection) and `ITenantContext.UpdateIndexesAsync` keep an existing
   legacy index and create only missing indexes (in the new shape) - an import must never rebuild the indexes of a large
   collection while a tenant is resolved. `ITenantContext.UpgradeTiebreakIndexesAsync` (data source
-  `UpgradeTiebreakIndexesAsync`, under `index_update_lock`, collection by collection) builds `<Type>_<n>_id` next to
+  `UpgradeTiebreakIndexesAsync`, collection by collection, each under `index_update_lock` of its own - see "Tiebreak
+  upgrade holds the lock per collection" below) builds `<Type>_<n>_id` next to
   `<Type>_<n>` and drops the legacy index only in the cleanup at the end of the collection, after the build: the
   collection never lacks the index. A failed build keeps the legacy index. Idempotent. An engine before AB#8960 (rollback)
   sorts its pages from the new index (prefix) and, on its next index update, rebuilds `<Type>_<n>` and then drops
@@ -1069,21 +1070,33 @@ as 300 items of which only 35 were distinct. Rules:
     succeeds, an index with the definition is found under the expected name, or an index in the target shape of another
     type serves the definition (AB#9342). Every definition expects its expected name and its alternate name
     (`ExpectIndex`); after a completed run a `Failed` state under a name no definition of the type expected in that run is
-    removed (the definition is gone); after an aborted run the `Failed` states stay. A definition served in its target
-    shape removes a `Failed` state under its alternate name.
+    removed (the definition is gone). After an aborted run no `Failed` state is removed for that reason (the definitions
+    not processed yet expected nothing); what the run changed before the abort - a failure it recorded, a failure it
+    removed because the definition is served in its target shape - is persisted. A run aborted because the lock was lost
+    persists nothing (AB#9302). A definition served in its target shape removes a `Failed` state under its alternate name.
   - **A failure never replaces `Applied`.** The tracker keys by index name and collection; a `Failed` never overwrites an
-    `Applied` the run recorded under that name. When another definition of the type is served by the index under this
-    definition's expected name (two definitions whose existing indexes hold each other's keys) and its own build fails, the
-    failure is recorded under `AlternateIndexName` - the name its index gets while the expected name is taken and that a
-    later successful build uses. `CkIndexState` is unchanged (no new field).
+    `Applied` the run recorded under that name. A failed build is recorded with `TrackFailure` and named only after every
+    definition of the collection was processed (`ResolveFailures`, AB#9302): when by then the type is `Applied` under the
+    definition's expected name - another definition of the type is served by the index there (two definitions whose
+    existing indexes hold each other's keys, in either order), or a legacy index with that name keeps serving it after a
+    failed upgrade - the failure is recorded under `AlternateIndexName`, the name its index gets while the expected name is
+    taken and that a later successful build uses. Before AB#9302 the name was chosen at the failure, so a later
+    definition's `Applied` replaced it until the next run. The index a failed build would have replaced (under the
+    expected name, the alternate name or, for a unique index, with the keys) stays a candidate for the later definitions
+    of the run - it is no longer taken out of the list - and the cleanup does not drop it
+    (`SharedIndexKeySpecs.KeepAfterFailedBuild`, released again when a later build replaces it); before AB#9302 a later
+    definition with its keys could not adopt it, failed with "Index already exists" and recorded a second wrong failure. `CkIndexState` is unchanged (no new field).
   - **No write without a change.** The merged states are compared with the stored ones by name, collection, state and
     error message; an unchanged run writes no CkType document (`AppliedAt` is ignored, an unchanged state keeps its stored
     `AppliedAt`). Before, every CK import rewrote the CkType documents of every type served by a kept, shared or adopted
-    index. Only the `IndexStates` field is written (`$set`), never the whole document, so a CkType change committed
-    between the read and the write (a model import does not take `index_update_lock`) is not reverted. Persisting reads
+    index. Only the `IndexStates` field is written (`$set`), never the whole document - by `BulkUpdateIndexStatesAsync`
+    and, since AB#9302, by `ClearIndexStatesForCollectionAsync` (a collection whose types define no index) - so a CkType
+    change committed between the read and the write (a model import writes its types before it takes
+    `index_update_lock`) is not reverted. Persisting reads
     the types of the collection with one query per collection run.
   - **Log.** The sharing line of a legacy index built for another type names that type (`FindStoredHolderAsync`): the
-    type of the collection whose slot name the index carries, in every order of the types; for an index with another
+    type of the collection whose slot name the index carries (`IsSlotNameOf`: `<collection>_<n>`, optionally `_id` and an
+    alternate-name hash, nothing else - AB#9302), in every order of the types; for an index with another
     name the only type with a stored `Applied` state under it, otherwise `(unknown)`. Only that last case reads the
     stored types, once per collection run and separately from the read for persisting (another purpose, read at
     another time).
@@ -1091,6 +1104,48 @@ as 300 items of which only 35 were distinct. Rules:
   a failed tiebreak build through a normal update until the upgrade succeeds, a failed slot next to an adopted index, no
   write on an unchanged update and upgrade, holder identification; each in both orders). The failed builds are produced
   with MongoDB's limit of 64 indexes per collection.
+- **Tiebreak upgrade holds the lock per collection (AB#9302).** `UpgradeTiebreakIndexesAsync`
+  (`UpgradeTiebreakIndexesPerCollectionAsync`) takes `index_update_lock` once per collection root, not for the whole
+  tenant. Each lock section re-reads the CK metadata (`ReadIndexUpdatePlanAsync`: a CK import between two sections can
+  change, add or remove collection roots and index definitions - a stale definition would drop an index the import just
+  built), takes the next collection root not processed in this run (by collection name: an import may raise the model
+  version), upgrades it and releases the lock; a last section creates the model-independent indexes (RtAssociations,
+  GridFS owner). A collection an import created meanwhile is upgraded in the same run. The index state tracking scope
+  (`BeginTracking` .. persist .. `EndTracking`) lies inside `UpdateIndexesForCollectionRoot`, so inside one section.
+  - **What a concurrent import waits for.** A CK import (`UpdateIndexAsync`, also `ITenantContext.UpdateIndexesAsync`)
+    keeps the whole-tenant lock and its 90 s wait (`RepositoryDistributedLockService.MaxAcquireDuration`); it waits at
+    most for the collection the upgrade works on. It creates its lock with `markWaiters`: while it waits it keeps a waiter
+    marker `waiter:index_update_lock:<owner token>` in `SysLock` (expiry 5 s, refreshed on every 1 s poll, deleted when
+    it stops waiting). After each section the upgrade checks the markers (`HasWaitersAsync`); with a fresh one it gives
+    the waiter up to 3 s (`YieldToWaiterMaxWait`) to take the lock, then acquires for the next collection with a wait of
+    up to one hour (`UpgradeSectionMaxWait`) - it never times out behind an import. A dead waiter's marker expires, so
+    the upgrade waits at most 3 s per section for it, and only while the marker is fresh. The marker is opt-in per lock:
+    every other lock (model import, migrations, ...) behaves as before.
+  - **Worst case of one collection.** An import waits at most one collection's tiebreak build plus the 3 s yield.
+    Measured (`TiebreakUpgradeSectionPerformanceTests`, `Category=Performance`, local Testcontainer, 2026-11-23): one
+    collection with 1,000,000 documents of about 1 KB and one legacy index took 2.1 s for its section (metadata re-read,
+    tiebreak build, legacy drop, index states), the other collections of the tenant at most 121 ms each. A collection
+    rebuilds its legacy indexes one after the other, so its section grows with documents x legacy indexes; at the local
+    rate the 90 s wait of an import is exceeded only from about 40 million document-indexes in one collection. Production
+    disks under load are slower - treat the local rate as a lower bound and check the "finished in" lines of the first
+    production upgrade. The import's 90 s wait is not raised (no collection near that size is known); if one is, upgrade
+    that tenant outside import times.
+  - **Cancellation and lock loss.** The caller's token stops before the next section (an index build already started
+    finishes, the collection's run completes). A lost lock (`LockLostToken`) aborts the current collection before its
+    next index operation; its index states are not persisted (another holder may work on the collection; the next run
+    reconciles), and the upgrade does not go on with the next collection. In both cases the lock is not held afterwards
+    (released, or another holder's).
+  - **Logs.** Per section `index_update_lock` acquire/release at debug (the lock service's routine lines at debug too,
+    `routineLogLevel`), collection start/finish (with seconds) at information, both with tenant and collection; at the
+    end the number of collections, the total and the longest collection.
+  - **Not changed:** the normal index update (CK import, `UpdateIndexesAsync`) still holds the lock for the whole tenant
+    (AC 6: it creates only missing indexes, fast, from one consistent metadata pass). MongoDB's own collection locks of an
+    index build are unchanged: while a collection's index is built, readers of that collection can be blocked briefly
+    (test-2 2026-11-18: one rollup tick of every tenant failed while `octosystem.RtEntity_SystemTenant` was rebuilt) -
+    in prod windows run the system tenant separately. The public API is unchanged.
+  Tests: `TiebreakIndexUpgradeLockTests` (lock per collection and free between collections, an import during the upgrade
+  gets the lock after the current collection and the upgrade finishes the rest from re-read metadata, a dead waiter,
+  cancellation, lock loss), `RepositoryDistributedLockServiceTests` (waiter marker opt-in, refreshed, deleted).
 - **Not changed:** unpaged queries keep the caller's sort; the association navigations (`MultipleOrigin*`), whose
   entity-driven path (AB#4369) relies on an index-backed `$sort` with a `$lookup` between `$sort` and `$limit`; the cached
   navigation path (page membership comes from the cached id list). Interface queries already break ties by rtId in their

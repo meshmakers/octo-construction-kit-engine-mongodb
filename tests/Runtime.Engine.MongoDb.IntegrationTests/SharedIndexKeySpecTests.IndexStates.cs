@@ -340,6 +340,165 @@ public partial class SharedIndexKeySpecTests
         });
     }
 
+    /// <summary>
+    ///     AB#9302 (AC 4 of AB#9391 in the reverse order, Kassandra round 3 on PR #269): the index under slot 0's expected
+    ///     name holds slot 1's keys; slot 0's build under its alternate name fails (the collection holds 64 indexes) before
+    ///     slot 1 adopts that index. The failure is named after every definition was processed, so it is recorded under
+    ///     slot 0's alternate name in the same run - it is no longer lost under the Applied state slot 1 records later.
+    ///     The next update builds slot 0's index there and the failure is gone.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedBuildOfASlot_BeforeAnotherSlotAdoptsItsName_IsRecordedUnderTheAlternateName(bool otherFirst)
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(SwapModel("SwapRev", "1.0.0", otherFirst));
+            var collection = Collection(tenant, "SwapRev");
+            var slot0 = IndexBaseName("SwapRev", RootTypeName) + TiebreakIndexShape.NameSuffix;
+            string[] slot1Keys = ["ckTypeId", otherFirst ? FieldPath : OtherFieldPath, "_id", "rtState"];
+            await ReplaceIndexesAsync(collection, [FieldPath, OtherFieldPath], (slot0, slot1Keys));
+            await FillUpIndexesAsync(collection);
+
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpdateIndexesAsync(adminSession);
+            }
+
+            Assert.Contains(await IndexesAsync(collection),
+                i => i["name"].AsString == slot0 && KeysOf(i).SequenceEqual(slot1Keys));
+            var states = await RootStatesAsync(tenant, "SwapRev-1.0.0");
+            Assert.Contains(states, s => s.State == IndexState.Applied && s.Name == slot0);
+            var failed = Assert.Single(states, s => s.State == IndexState.Failed);
+            Assert.True(TiebreakIndexShape.IsAlternateNameOf(failed.Name, slot0), failed.Name);
+            Assert.False(string.IsNullOrEmpty(failed.ErrorMessage));
+
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpdateIndexesAsync(adminSession);
+            }
+
+            Assert.Contains(await IndexesAsync(collection), i => i["name"].AsString == failed.Name);
+            states = await RootStatesAsync(tenant, "SwapRev-1.0.0");
+            Assert.DoesNotContain(states, s => s.State == IndexState.Failed);
+            Assert.Contains(states, s => s.State == IndexState.Applied && s.Name == slot0);
+            Assert.Contains(states, s => s.State == IndexState.Applied && s.Name == failed.Name);
+        });
+    }
+
+    /// <summary>
+    ///     AB#9302 (CodeRabbit round 2 on PR #269, item 1): a legacy-shaped index carries Alpha's tiebreak name
+    ///     (<c>&lt;Alpha&gt;_0_id</c> without the <c>_id</c> key). The upgrade's tiebreak build fails (64 indexes); the legacy
+    ///     index keeps serving both types (<c>Applied</c> under its name), and Alpha's failure is recorded under its
+    ///     alternate name instead of being dropped because the name it would get is taken by that <c>Applied</c> state.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedUpgrade_WhenTheLegacyIndexCarriesTheTiebreakName_KeepsTheFailureVisible(bool betaFirst)
+    {
+        await WithTenantAsync(async (tenant, systemContext) =>
+        {
+            await tenant.ImportCkModelAsync(Model("LegName", "1.0.0", betaFirst));
+            var collection = Collection(tenant, "LegName");
+            var alphaTiebreakName = IndexBaseName("LegName", AlphaTypeName) + TiebreakIndexShape.NameSuffix;
+            await ReplaceFieldIndexesAsync(collection, (alphaTiebreakName, LegacyKeys));
+            await FillUpIndexesAsync(collection);
+
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenant.UpgradeTiebreakIndexesAsync(adminSession);
+            }
+
+            Assert.Contains(await IndexesAsync(collection),
+                i => i["name"].AsString == alphaTiebreakName && KeysOf(i).SequenceEqual(LegacyKeys));
+            var alpha = Assert.Single(await TypesAsync(tenant, "LegName-1.0.0"),
+                t => t.CkTypeId == new CkId<CkTypeId>($"LegName-1.0.0/{AlphaTypeName}"));
+            var states = alpha.IndexStates ?? [];
+            Assert.Contains(states, s => s.State == IndexState.Applied && s.Name == alphaTiebreakName);
+            var failed = Assert.Single(states, s => s.State == IndexState.Failed);
+            Assert.True(TiebreakIndexShape.IsAlternateNameOf(failed.Name, alphaTiebreakName), failed.Name);
+            Assert.False(string.IsNullOrEmpty(failed.ErrorMessage));
+        });
+    }
+
+    /// <summary>
+    ///     AB#9302 (Kassandra round 3 on PR #269, item 2): clearing the index states of a collection writes only the
+    ///     <c>IndexStates</c> field (<c>$set</c>), never the whole CkType document, and removes only the states of that
+    ///     collection.
+    /// </summary>
+    [Fact]
+    public async Task ClearIndexStatesForCollection_WritesOnlyTheIndexStatesField()
+    {
+        await WithTenantAsync(async tenant =>
+        {
+            await tenant.ImportCkModelAsync(Model("ClearSet", "1.0.0", betaFirst: false));
+            var repository = (TenantRepository)tenant.GetTenantRepository();
+            var collectionName = Collection(tenant, "ClearSet").CollectionNamespace.CollectionName;
+            var alpha = new CkId<CkTypeId>($"ClearSet-1.0.0/{AlphaTypeName}");
+            await AddStoredStateAsync(tenant, "ClearSet", AlphaTypeName, "other_collection_index", IndexState.Applied);
+            var ckType = await repository.DataSource.CkTypes.DocumentAsync(repository.GetSession(), alpha);
+            Assert.NotNull(ckType);
+            ckType.IndexStates = [.. ckType.IndexStates!.Select(s => s.Name == "other_collection_index"
+                ? new CkIndexState { Name = s.Name, CollectionName = "SomeOtherCollection", State = s.State,
+                    AppliedAt = s.AppliedAt }
+                : s)];
+            await repository.DataSource.CkTypes.ReplaceManyAsync(repository.GetSession(), [ckType]);
+            Assert.Contains(ckType.IndexStates, s => s.CollectionName == collectionName);
+
+            var ckTypes = repository.DataSource.CkTypes.GetMongoCollection();
+            await using (await ProfileAsync(ckTypes,
+                             name => new BsonDocument
+                             {
+                                 { "ns", $"{ckTypes.Database.DatabaseNamespace.DatabaseName}.{name}" },
+                                 { "op", new BsonDocument("$in", new BsonArray { "update", "insert", "remove" }) }
+                             },
+                             writes =>
+                             {
+                                 Assert.NotEmpty(writes);
+                                 foreach (var write in writes)
+                                 {
+                                     var update = BsonDocument.Parse(write)["u"].AsBsonDocument;
+                                     Assert.Equal(["$set"], update.Names);
+                                     Assert.Equal(["indexStates"], update["$set"].AsBsonDocument.Names);
+                                 }
+                             }))
+            {
+                var service = new IndexStateService(repository.DataSource.CkTypes, NullLogger.Instance);
+                await service.ClearIndexStatesForCollectionAsync(repository.GetSession(), collectionName, [alpha, alpha]);
+            }
+
+            var cleared = await repository.DataSource.CkTypes.DocumentAsync(repository.GetSession(), alpha);
+            Assert.NotNull(cleared);
+            Assert.DoesNotContain(cleared.IndexStates ?? [], s => s.CollectionName == collectionName);
+            Assert.Contains(cleared.IndexStates ?? [], s => s.Name == "other_collection_index");
+        });
+    }
+
+    /// <summary>
+    ///     AB#9302 (CodeRabbit round 2 on PR #269, item 5): a slot name is the type's collection name, an underscore and
+    ///     the slot number, optionally with the tiebreak suffix and an alternate-name hash - nothing else.
+    /// </summary>
+    [Theory]
+    [InlineData("_0", true)]
+    [InlineData("_12", true)]
+    [InlineData("_0_id", true)]
+    [InlineData("_0_id_a1b2c3", true)]
+    [InlineData("_0_a1b2c3", true)]
+    [InlineData("_0_manual", false)]
+    [InlineData("_0_idx", false)]
+    [InlineData("_0_id_A1B2C3", false)]
+    [InlineData("_0_id_a1b2c", false)]
+    [InlineData("_x0", false)]
+    [InlineData("_", false)]
+    public void IsSlotNameOf_AcceptsOnlyTheEngineSlotNames(string suffix, bool expected)
+    {
+        var typeId = new CkId<CkTypeId>($"SlotModel-1.0.0/{AlphaTypeName}");
+        var collectionName = new RtCkId<CkTypeId>($"SlotModel/{AlphaTypeName}").GetCkTypeCollectionName();
+        Assert.Equal(expected, IndexStateService.IsSlotNameOf(collectionName + suffix, typeId));
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------------------
 
     /// <summary>Adds indexes on unused fields until the collection holds <see cref="MaxIndexesPerCollection" />.</summary>
