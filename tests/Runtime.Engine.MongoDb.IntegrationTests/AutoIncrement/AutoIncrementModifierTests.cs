@@ -25,9 +25,12 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.AutoIncrement;
 
 /// <summary>
-///     AB#6209 against a real MongoDB, in throwaway child tenants: <c>AutoIncrementModifier</c> numbers every new
-///     entity of a mixed batch (order-independent), never renumbers or clears the number of a stored entity (replace,
-///     partial update) and keeps supplied values (ImportRt / restore) without advancing the counter.
+///     AB#6209 and AB#9753 against a real MongoDB, in throwaway child tenants: <c>AutoIncrementModifier</c> numbers
+///     every new entity of a mixed batch in batch order, never renumbers or clears the number of a stored entity
+///     (replace, partial update) and keeps supplied values (ImportRt / restore) without advancing the counter. The
+///     numbers come from one atomic <c>findOneAndUpdate</c> with <c>$inc</c> per counter and batch: parallel writers
+///     get distinct consecutive numbers, an aborted transaction rolls the counter back, a transient error gives exactly
+///     one number after the retry, and <c>End</c> is never passed.
 ///     Model: Note (no auto-increment) and Ticket (<c>Number</c> from the counter "TicketNumber", which starts at 41).
 /// </summary>
 [Collection(CkModelImportGuardCollection.Name)]
@@ -70,9 +73,9 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
                 EntityUpdateInfo<RtEntity>.CreateInsert(Note("between")),
                 EntityUpdateInfo<RtEntity>.CreateInsert(second));
 
-            // Consecutive, but not in batch order: the entity rule engine collects inserts unordered.
-            long[] numbers = [await NumberAsync(database, first.RtId), await NumberAsync(database, second.RtId)];
-            Assert.Equal(new long[] { CounterStart + 1, CounterStart + 2 }, numbers.Order());
+            // AB#9753: in batch order (the entity rule engine keeps the input order).
+            Assert.Equal(CounterStart + 1, await NumberAsync(database, first.RtId));
+            Assert.Equal(CounterStart + 2, await NumberAsync(database, second.RtId));
             Assert.Equal(CounterStart + 2, await CounterAsync(database, counterId));
         });
     }
@@ -180,8 +183,8 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
-    ///     A batch without auto-increment types reads neither the counter nor the stored entities; the same probe sees
-    ///     both reads for a batch with a Ticket (control).
+    ///     A batch without auto-increment types touches neither the counter nor reads the stored entities; the same
+    ///     probe sees the counter's findAndModify and the stored-entity read for a batch with a Ticket (control).
     /// </summary>
     [Fact]
     public async Task BatchWithoutAutoIncrementTypes_IssuesNoExtraRead()
@@ -191,16 +194,16 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
             var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
             var databaseName = database.DatabaseNamespace.DatabaseName;
 
-            var notesOnly = await MongoProfiler.ProfileReadsAsync(config, databaseName, () =>
+            var notesOnly = await MongoProfiler.ProfileAllAsync(config, databaseName, () =>
                 ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(Note("one")),
                     EntityUpdateInfo<RtEntity>.CreateInsert(Note("two"))));
-            var withTicket = await MongoProfiler.ProfileReadsAsync(config, databaseName, () =>
+            var withTicket = await MongoProfiler.ProfileAllAsync(config, databaseName, () =>
                 ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(Note("three")),
                     EntityUpdateInfo<RtEntity>.CreateInsert(Ticket("ticket"))));
 
-            Assert.DoesNotContain(notesOnly, IsCounterRead);
+            Assert.DoesNotContain(notesOnly, IsCounterOperation);
             Assert.DoesNotContain(notesOnly, IsReadByRtId);
-            Assert.Contains(withTicket, IsCounterRead);
+            Assert.Contains(withTicket, IsCounterOperation);
             Assert.Contains(withTicket, IsReadByRtId);
         });
     }
@@ -230,10 +233,8 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
             var note = Note("note");
 
             var databaseName = database.DatabaseNamespace.DatabaseName;
-            var dataSource = new MongoDbRepositoryDataSource(NullLogger<MongoDbRepositoryDataSource>.Instance,
-                fixture.GetService<IAdminRepositoryAccess>().GetRepositoryClient(databaseName), databaseName,
-                databaseName);
-            var modifier = new AutoIncrementModifier(fixture.GetService<ICkCacheService>());
+            var dataSource = DataSource(databaseName);
+            var modifier = NewModifier();
             using (var session = await dataSource.GetSessionAsync())
             {
                 session.StartTransaction();
@@ -251,6 +252,350 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
         });
     }
 
+    // ---------------------------------------------------------------- AB#9753: atomic allocation
+
+    /// <summary>
+    ///     One batch with five Tickets (and Notes in between) is numbered n+1 .. n+5 in batch order, with exactly one
+    ///     operation on the counter: a findAndModify with <c>$inc</c> by 5 - no read, no update and no replace.
+    /// </summary>
+    [Fact]
+    public async Task Batch_IsNumberedInBatchOrder_WithOneFindAndModifyAndNoReplace()
+    {
+        await WithTicketTenantAsync("aiblock", async (repository, database, counterId) =>
+        {
+            var tickets = Enumerable.Range(1, 5).Select(i => Ticket($"ticket {i}")).ToList();
+            var updates = new List<IEntityUpdateInfo<RtEntity>>();
+            foreach (var ticket in tickets)
+            {
+                updates.Add(EntityUpdateInfo<RtEntity>.CreateInsert(ticket));
+                updates.Add(EntityUpdateInfo<RtEntity>.CreateInsert(Note("between")));
+            }
+
+            var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
+            var profiled = await MongoProfiler.ProfileAllAsync(config, database.DatabaseNamespace.DatabaseName,
+                () => ApplyAsync(repository, updates.ToArray()));
+
+            for (var i = 0; i < tickets.Count; i++)
+            {
+                Assert.Equal(CounterStart + 1 + i, await NumberAsync(database, tickets[i].RtId));
+            }
+
+            Assert.Equal(CounterStart + 5, await CounterAsync(database, counterId));
+            var counterOperations = profiled.Where(IsCounterOperation).ToList();
+            var findAndModify = Assert.Single(counterOperations);
+            Assert.True(IsCounterFindAndModify(findAndModify), findAndModify.ToJson());
+            var update = findAndModify["command"]["update"].AsBsonDocument;
+            Assert.Equal(new BsonDocument("$inc", new BsonDocument("attributes.currentValue", 5L)), update);
+        });
+    }
+
+    /// <summary>
+    ///     AC 1: 20 creations in parallel, each in its own session and transaction, get 20 distinct numbers
+    ///     n+1 .. n+20 and the counter ends at n+20. Parallel transactions on one counter conflict; the server aborts
+    ///     the loser with <c>TransientTransactionError</c> and its owner (here the test, like a request handler) runs the
+    ///     transaction again.
+    /// </summary>
+    [Fact]
+    public async Task TwentyParallelCreations_InTransactions_GetTwentyDistinctConsecutiveNumbers()
+    {
+        await WithTicketTenantAsync("aipartx", async (repository, database, counterId) =>
+        {
+            var tickets = Enumerable.Range(1, 20).Select(i => Ticket($"parallel {i}")).ToList();
+
+            await Task.WhenAll(tickets.Select(ticket => Task.Run(() =>
+                ApplyWithTransactionRetryAsync(repository, () => Ticket("parallel", rtId: ticket.RtId)))));
+
+            var numbers = new List<long>();
+            foreach (var ticket in tickets)
+            {
+                numbers.Add(await NumberAsync(database, ticket.RtId));
+            }
+
+            Assert.Equal(Enumerable.Range(CounterStart + 1, 20).Select(n => (long)n), numbers.Order());
+            Assert.Equal(CounterStart + 20, await CounterAsync(database, counterId));
+        });
+    }
+
+    /// <summary>AC 1 without transactions: 20 parallel sessions, each $inc is atomic on its own.</summary>
+    [Fact]
+    public async Task TwentyParallelCreations_WithoutTransactions_GetTwentyDistinctConsecutiveNumbers()
+    {
+        await WithTicketTenantAsync("aiparnotx", async (repository, database, counterId) =>
+        {
+            var tickets = Enumerable.Range(1, 20).Select(i => Ticket($"parallel {i}")).ToList();
+
+            await Task.WhenAll(tickets.Select(ticket => Task.Run(async () =>
+            {
+                using var session = await repository.GetSessionAsync();
+                var operationResult = new OperationResult();
+                await repository.ApplyChangesAsync(session, [EntityUpdateInfo<RtEntity>.CreateInsert(ticket)],
+                    operationResult);
+                Assert.False(operationResult.HasErrors, operationResult.GetMessages());
+            })));
+
+            var numbers = new List<long>();
+            foreach (var ticket in tickets)
+            {
+                numbers.Add(await NumberAsync(database, ticket.RtId));
+            }
+
+            Assert.Equal(Enumerable.Range(CounterStart + 1, 20).Select(n => (long)n), numbers.Order());
+            Assert.Equal(CounterStart + 20, await CounterAsync(database, counterId));
+        });
+    }
+
+    /// <summary>
+    ///     AC 3 outside a transaction: a transient error injected on the first allocation attempt is retried by the
+    ///     modifier; the entity gets exactly one number and the counter advances once.
+    /// </summary>
+    [Fact]
+    public async Task TransientError_OutsideATransaction_IsRetried_AndGivesExactlyOneNumber()
+    {
+        await WithTicketTenantAsync("aitransient", async (_, database, counterId) =>
+        {
+            var attempts = 0;
+            var modifier = NewModifier(() =>
+            {
+                attempts++;
+                return attempts == 1 ? Task.FromException(TransientError()) : Task.CompletedTask;
+            });
+            var ticket = Ticket("retried");
+
+            var dataSource = DataSource(database.DatabaseNamespace.DatabaseName);
+            using (var session = await dataSource.GetSessionAsync())
+            {
+                await modifier.RunAsync(session, dataSource, [ticket]);
+            }
+
+            Assert.Equal(2, attempts);
+            Assert.Equal(CounterStart + 1, Convert.ToInt64(ticket.GetAttributeValueOrDefault(NumberAttribute)));
+            Assert.Equal(CounterStart + 1, await CounterAsync(database, counterId));
+        });
+    }
+
+    /// <summary>The retry outside a transaction is bounded: an error that stays gives up after the last attempt.</summary>
+    [Fact]
+    public async Task TransientError_OutsideATransaction_GivesUpAfterTheLastAttempt()
+    {
+        await WithTicketTenantAsync("aitransmax", async (_, database, counterId) =>
+        {
+            var attempts = 0;
+            var modifier = NewModifier(() =>
+            {
+                attempts++;
+                return Task.FromException(TransientError());
+            });
+
+            var dataSource = DataSource(database.DatabaseNamespace.DatabaseName);
+            using var session = await dataSource.GetSessionAsync();
+            var exception = await Record.ExceptionAsync(() =>
+                modifier.RunAsync(session, dataSource, [Ticket("never numbered")]));
+
+            AssertTransientTransactionErrorLabel(exception);
+            Assert.Equal(AutoIncrementModifier.MaxAllocationAttempts, attempts);
+            Assert.Equal(CounterStart, await CounterAsync(database, counterId));
+        });
+    }
+
+    /// <summary>
+    ///     AC 3 inside a transaction: the modifier does not retry (the server has aborted the transaction), the
+    ///     exception keeps its <c>TransientTransactionError</c> label for the owner, and nothing is committed.
+    /// </summary>
+    [Fact]
+    public async Task TransientError_InsideATransaction_IsPassedOnToTheOwner_Unretried()
+    {
+        await WithTicketTenantAsync("aitransintx", async (_, database, counterId) =>
+        {
+            var attempts = 0;
+            var modifier = NewModifier(() =>
+            {
+                attempts++;
+                return Task.FromException(TransientError());
+            });
+
+            var dataSource = DataSource(database.DatabaseNamespace.DatabaseName);
+            using (var session = await dataSource.GetSessionAsync())
+            {
+                session.StartTransaction();
+                var exception = await Record.ExceptionAsync(() =>
+                    modifier.RunAsync(session, dataSource, [Ticket("in a transaction")]));
+
+                AssertTransientTransactionErrorLabel(exception);
+                await session.AbortTransactionAsync();
+            }
+
+            Assert.Equal(1, attempts);
+            Assert.Equal(CounterStart, await CounterAsync(database, counterId));
+        });
+    }
+
+    /// <summary>
+    ///     AC 3 with a real conflict: a second transaction that allocates while the first one still holds its
+    ///     uncommitted <c>$inc</c> is aborted with <c>TransientTransactionError</c>; run again after the first commits,
+    ///     its entity gets exactly one number and the counter advances once per entity.
+    /// </summary>
+    [Fact]
+    public async Task ConcurrentTransactions_TheLoserIsAbortedTransiently_AndItsRetryGetsExactlyOneNumber()
+    {
+        await WithTicketTenantAsync("aiconflict", async (repository, database, counterId) =>
+        {
+            var winner = Ticket("winner");
+            var loser = Ticket("loser");
+
+            using (var winnerSession = await repository.GetSessionAsync())
+            {
+                winnerSession.StartTransaction();
+                var winnerResult = new OperationResult();
+                await repository.ApplyChangesAsync(winnerSession, [EntityUpdateInfo<RtEntity>.CreateInsert(winner)],
+                    winnerResult);
+                Assert.False(winnerResult.HasErrors, winnerResult.GetMessages());
+
+                using (var loserSession = await repository.GetSessionAsync())
+                {
+                    loserSession.StartTransaction();
+                    var exception = await Record.ExceptionAsync(() => repository.ApplyChangesAsync(loserSession,
+                        [EntityUpdateInfo<RtEntity>.CreateInsert(loser)], new OperationResult()));
+                    AssertTransientTransactionErrorLabel(exception);
+                }
+
+                await winnerSession.CommitTransactionAsync();
+            }
+
+            // The owner runs the aborted transaction again, from its input.
+            await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(Ticket("loser", rtId: loser.RtId)));
+
+            Assert.Equal(CounterStart + 1, await NumberAsync(database, winner.RtId));
+            Assert.Equal(CounterStart + 2, await NumberAsync(database, loser.RtId));
+            Assert.Equal(CounterStart + 2, await CounterAsync(database, counterId));
+        });
+    }
+
+    /// <summary>AC 5: an aborted transaction rolls the counter back together with the entity.</summary>
+    [Fact]
+    public async Task AbortedTransaction_RollsTheCounterBack()
+    {
+        await WithTicketTenantAsync("aiabort", async (repository, database, counterId) =>
+        {
+            var ticket = Ticket("aborted");
+            using (var session = await repository.GetSessionAsync())
+            {
+                session.StartTransaction();
+                var operationResult = new OperationResult();
+                await repository.ApplyChangesAsync(session, [EntityUpdateInfo<RtEntity>.CreateInsert(ticket)],
+                    operationResult);
+                Assert.False(operationResult.HasErrors, operationResult.GetMessages());
+                Assert.Equal(CounterStart + 1, Convert.ToInt64(ticket.GetAttributeValueOrDefault(NumberAttribute)));
+                await session.AbortTransactionAsync();
+            }
+
+            Assert.Equal(CounterStart, await CounterAsync(database, counterId));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => FindDocumentAsync(database, ticket.RtId));
+
+            // The next creation gets the number the aborted one had.
+            var next = Ticket("next");
+            await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(next));
+            Assert.Equal(CounterStart + 1, await NumberAsync(database, next.RtId));
+        });
+    }
+
+    /// <summary>
+    ///     AC 4 for a block: a batch that needs more numbers than are left raises <c>AutoIncrementEndReached</c> and
+    ///     leaves the counter where it was (never past <c>End</c>, not partly advanced); the numbers that are left can
+    ///     still be taken.
+    /// </summary>
+    [Fact]
+    public async Task BatchLargerThanTheRest_Throws_AutoIncrementEndReached_AndDoesNotAdvance()
+    {
+        await WithTicketTenantAsync("aiendblock", async (repository, database, counterId) =>
+        {
+            var exception = await Record.ExceptionAsync(() => ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateInsert(Ticket("a")), EntityUpdateInfo<RtEntity>.CreateInsert(Ticket("b")),
+                EntityUpdateInfo<RtEntity>.CreateInsert(Ticket("c"))));
+
+            Assert.IsType<AutoIncrementFailedException>(exception);
+            Assert.Contains("number range 'TicketNumber'", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("needs 3 number(s), 2 left", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(CounterStart, await CounterAsync(database, counterId));
+
+            var last = Ticket("last");
+            var beforeLast = Ticket("before last");
+            await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(beforeLast),
+                EntityUpdateInfo<RtEntity>.CreateInsert(last));
+            Assert.Equal(CounterStart + 1, await NumberAsync(database, beforeLast.RtId));
+            Assert.Equal(CounterStart + 2, await NumberAsync(database, last.RtId));
+            Assert.Equal(CounterStart + 2, await CounterAsync(database, counterId));
+        }, end: CounterStart + 2);
+    }
+
+    /// <summary>A Ticket whose counter does not exist raises <c>AutoIncrementReferenceNotFound</c> as before.</summary>
+    [Fact]
+    public async Task MissingCounter_Throws_AutoIncrementReferenceNotFound()
+    {
+        await WithTicketTenantAsync("ainocounter", async (repository, database, counterId) =>
+        {
+            await database.GetCollection<BsonDocument>(CounterCollection).DeleteOneAsync(
+                new BsonDocument("_id", ObjectId.Parse(counterId.ToString())), TestContext.Current.CancellationToken);
+
+            var exception = await Record.ExceptionAsync(() =>
+                ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(Ticket("orphan"))));
+
+            Assert.IsType<InvalidAttributeException>(exception);
+        });
+    }
+
+    private AutoIncrementModifier NewModifier(Func<Task>? beforeAllocationAttempt = null) =>
+        new(fixture.GetService<ICkCacheService>(), NullLogger<AutoIncrementModifier>.Instance)
+        {
+            BeforeAllocationAttemptAsync = beforeAllocationAttempt
+        };
+
+    private MongoDbRepositoryDataSource DataSource(string databaseName) =>
+        new(NullLogger<MongoDbRepositoryDataSource>.Instance,
+            fixture.GetService<IAdminRepositoryAccess>().GetRepositoryClient(databaseName), databaseName, databaseName);
+
+    /// <summary>
+    ///     The exception a transaction owner catches is the MongoDB exception itself, with the
+    ///     <c>TransientTransactionError</c> label - not wrapped into an exception without it.
+    /// </summary>
+    private static void AssertTransientTransactionErrorLabel(Exception? exception)
+    {
+        var mongoException = Assert.IsAssignableFrom<MongoException>(exception);
+        Assert.True(mongoException.HasErrorLabel("TransientTransactionError"), mongoException.ToString());
+    }
+
+    private static MongoException TransientError()
+    {
+        var exception = new MongoException("injected transient transaction error (test)");
+        exception.AddErrorLabel("TransientTransactionError");
+        return exception;
+    }
+
+    /// <summary>
+    ///     What the owner of a transaction does on <c>TransientTransactionError</c>: run the whole transaction again
+    ///     (bounded, with a short random pause so the parallel writers spread out).
+    /// </summary>
+    /// <remarks>
+    ///     Every attempt builds the entity again from its input, as a request handler does: the modifier writes the
+    ///     number into the entity object, so an aborted attempt's object carries a number that was rolled back.
+    /// </remarks>
+    private static async Task ApplyWithTransactionRetryAsync(ITenantRepository repository, Func<RtEntity> create)
+    {
+        const int maxAttempts = 100;
+        for (var attempt = 1;; attempt++)
+        {
+            try
+            {
+                await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(create()));
+                return;
+            }
+            catch (Exception ex) when (attempt < maxAttempts &&
+                                       RepositoryDistributedLockService.IsTransientTransactionError(ex))
+            {
+                await Task.Delay(Random.Shared.Next(5, 50));
+            }
+        }
+    }
+
     private static string? ReadCollection(BsonDocument profiled)
     {
         var command = profiled["command"].AsBsonDocument;
@@ -259,8 +604,16 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
             : null;
     }
 
-    private static bool IsCounterRead(BsonDocument profiled) =>
-        ReadCollection(profiled) == "RtEntity_SystemAutoIncrement";
+    private const string CounterCollection = "RtEntity_SystemAutoIncrement";
+
+    /// <summary>Any profiled operation on the counter collection (read, write or findAndModify).</summary>
+    private static bool IsCounterOperation(BsonDocument profiled) =>
+        profiled.TryGetValue("ns", out var ns) && ns.IsString &&
+        ns.AsString.EndsWith("." + CounterCollection, StringComparison.Ordinal);
+
+    private static bool IsCounterFindAndModify(BsonDocument profiled) =>
+        IsCounterOperation(profiled) && profiled.TryGetValue("command", out var command) &&
+        command.AsBsonDocument.Contains("findAndModify");
 
     /// <summary>A read of the test model's collections that filters by <c>_id</c> with <c>$in</c> (the stored-entity check).</summary>
     private static bool IsReadByRtId(BsonDocument profiled) =>
@@ -270,7 +623,7 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
     private static RtEntity Note(string title) =>
         new(NoteTypeId, OctoObjectId.GenerateNewId(), new Dictionary<string, object?> { { "Title", title } });
 
-    private static RtEntity Ticket(string title, long? number = null)
+    private static RtEntity Ticket(string title, long? number = null, OctoObjectId? rtId = null)
     {
         var attributes = new Dictionary<string, object?> { { "Title", title } };
         if (number != null)
@@ -278,7 +631,7 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
             attributes[NumberAttribute] = number.Value;
         }
 
-        return new RtEntity(TicketTypeId, OctoObjectId.GenerateNewId(), attributes);
+        return new RtEntity(TicketTypeId, rtId ?? OctoObjectId.GenerateNewId(), attributes);
     }
 
     private static IEntityUpdateInfo<RtEntity> Replace(OctoObjectId rtId, string title, long? number = null)

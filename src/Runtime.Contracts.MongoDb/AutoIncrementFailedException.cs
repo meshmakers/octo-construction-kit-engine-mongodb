@@ -28,4 +28,18 @@ public class AutoIncrementFailedException : OperationFailedException
         return new AutoIncrementFailedException(
             $"Autoincrement end reached for attribute '{autoIncrementRtId}'");
     }
+
+    /// <summary>
+    ///     AB#9753: a batch needs more numbers than the range has left before its <c>End</c>. The batch is refused as a
+    ///     whole; no number is allocated.
+    /// </summary>
+    public static Exception AutoIncrementEndReached(OctoObjectId autoIncrementRtId, string rangeName,
+        long currentValue, long end, int requestedCount)
+    {
+        var left = Math.Max(0, end - currentValue);
+        return new AutoIncrementFailedException(
+            $"Autoincrement end reached for number range '{rangeName}' (counter '{autoIncrementRtId}'): the batch needs " +
+            $"{requestedCount} number(s), {left} left up to End {end} (current value {currentValue}). " +
+            "The batch is refused; no number was allocated.");
+    }
 }

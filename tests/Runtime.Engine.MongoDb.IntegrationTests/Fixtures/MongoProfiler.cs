@@ -32,6 +32,14 @@ internal static class MongoProfiler
             new BsonDocument("command.aggregate", new BsonDocument("$exists", true))
         }));
 
+    /// <summary>
+    ///     Runs <paramref name="run" /> with the profiler of <paramref name="databaseName" /> on and returns every
+    ///     profiled operation (reads, writes and commands such as <c>findAndModify</c>).
+    /// </summary>
+    public static Task<List<BsonDocument>> ProfileAllAsync(OctoSystemConfiguration config,
+        string databaseName, Func<Task> run) =>
+        ProfileAsync(config, databaseName, run, new BsonDocument());
+
     private static async Task<List<BsonDocument>> ProfileAsync(OctoSystemConfiguration config,
         string databaseName, Func<Task> run, BsonDocument filter)
     {

@@ -284,8 +284,13 @@ lacks the installed `Available` version (next bullet but one).
   skipped, no longer end the pass); since the pre-document modifications run on insert AND replace without saying
   which, the modifier reads the stored entities of the batch by RtId: a stored entity is never renumbered (an empty
   payload value gets the stored number back), a new one is numbered only where the attribute has no value (ImportRt
-  values kept, counter not advanced). A counter written back through an older typed
-  `RtAutoIncrement` keeps attributes only the newer System has. Sweep result (engine-mongodb `src/`): this was the only versioned generated-id lookup; the other
+  values kept, counter not advanced). AB#9753: numbers are allocated atomically - one `findOneAndUpdate` with
+  `$inc` per counter and batch (a block, filter `currentValue + n <= end`), handed out in batch order; the counter
+  is never read first and never written back (so an older typed `RtAutoIncrement` cannot drop attributes only the
+  newer System has). In a transaction a parallel writer of the same counter aborts the transaction with
+  `TransientTransactionError`, which the modifier passes on unretried (only the transaction owner can retry, and it
+  must rebuild the entities: the aborted attempt left its rolled-back number in the entity object); outside a
+  transaction the `$inc` is retried up to 3 times. Sweep result (engine-mongodb `src/`): this was the only versioned generated-id lookup; the other
   `GetCkType`/`GetCkRecord`/`GetCkEnum` calls take ids from the CK cache or the database, which are the installed
   versions. Pinned by `OlderEmbeddedSystem_CanWriteEntities_IntoATenantWithANewerSystem`.
 - Counters live in `CkModelImportDiagnostics` on the meter `Meshmakers.Octo.MongoDb` (no tenant tag; the tenant

@@ -7,6 +7,12 @@ using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+
+using Microsoft.Extensions.Logging;
+
+using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
 
@@ -22,17 +28,40 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 ///         replace never clears it either.</item>
 ///     </list>
 ///     Every entity of a mixed batch is handled; an entity or type without auto-increment attributes is skipped.
+///     <para>
+///         Allocation (AB#9753) is atomic: one <c>findOneAndUpdate</c> with <c>$inc</c> per counter and batch takes a
+///         block of consecutive numbers, and its filter holds the <c>End</c> bound, so two writers never get the same
+///         number and a counter never passes <c>End</c>. The counter is neither read first nor replaced. The block is
+///         handed out in batch order (the entity rule engine keeps the order of the input).
+///     </para>
+///     <para>
+///         Transactions: the <c>$inc</c> runs in the caller's session. Inside a transaction it is part of it, so an
+///         abort rolls the counter back together with the entities. A concurrent writer of the same counter makes the
+///         server abort the transaction with the label <c>TransientTransactionError</c>; that exception is passed on
+///         unchanged, because only the owner of the transaction can retry it (the whole transaction). Outside a
+///         transaction the <c>$inc</c> is retried here (bounded) on that label or a write conflict; it is committed at
+///         once, so a later failure of the write leaves a gap in the numbers.
+///     </para>
 /// </summary>
 public class AutoIncrementModifier(
-    ICkCacheService ckCacheService)
+    ICkCacheService ckCacheService,
+    ILogger<AutoIncrementModifier> logger)
     : IPreDocumentModification<RtEntity>
 {
+    /// <summary>Attempts of one allocation outside a transaction (the first one included).</summary>
+    internal const int MaxAllocationAttempts = 3;
+
+    private const string CurrentValueField = "attributes.currentValue";
+    private const string EndField = "attributes.end";
+
+    /// <summary>Test seam (AB#9753): runs before every allocation attempt, e.g. to inject a transient error.</summary>
+    internal Func<Task>? BeforeAllocationAttemptAsync { get; init; }
+
     public async Task RunAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
         IEnumerable<RtEntity> documents)
     {
         var documentList = documents.ToArray();
-        var autoIncrementTypes = new List<AutoIncrementType>();
-        HashSet<string> autoIncrementReferences = new();
+        var autoIncrementTypes = new Dictionary<RtCkId<CkTypeId>, AutoIncrementType>();
         foreach (IGrouping<RtCkId<CkTypeId>, RtEntity> ckTypeGroup in documentList.GroupBy(d => d.GetRtCkTypeId()))
         {
             var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, ckTypeGroup.Key);
@@ -59,14 +88,55 @@ public class AutoIncrementModifier(
                 }
 
                 attributes.Add((ckTypeAttributeGraph, typeIncrement.AutoIncrementReference!));
-                autoIncrementReferences.Add(typeIncrement.AutoIncrementReference!);
             }
 
-            autoIncrementTypes.Add(new AutoIncrementType(ckTypeGroup.Key, ckTypeGraph, attributes,
-                ckTypeGroup.ToList()));
+            // Only auto-increment types are read, in the session (transaction) of the write.
+            var storedEntities = await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource, ckTypeGraph,
+                ckTypeGroup);
+            autoIncrementTypes.Add(ckTypeGroup.Key, new AutoIncrementType(ckTypeGroup.Key, attributes, storedEntities));
         }
 
         if (autoIncrementTypes.Count == 0)
+        {
+            return;
+        }
+
+        // The numbers to allocate, in batch order (also across types that share a counter).
+        var requests = new List<NumberRequest>();
+        foreach (var rtEntity in documentList)
+        {
+            if (!autoIncrementTypes.TryGetValue(rtEntity.GetRtCkTypeId(), out var autoIncrementType))
+            {
+                continue;
+            }
+
+            autoIncrementType.StoredEntities.TryGetValue(rtEntity.RtId, out var storedEntity);
+            foreach (var (ckTypeAttributeGraph, reference) in autoIncrementType.Attributes)
+            {
+                var attributeName = ckTypeAttributeGraph.AttributeName;
+                if (HasValue(rtEntity.GetAttributeValueOrDefault(attributeName)))
+                {
+                    // A supplied value is kept: never renumber, never advance the counter for it.
+                    continue;
+                }
+
+                if (storedEntity != null)
+                {
+                    // Already stored (replace): carry the existing number over instead of numbering again.
+                    var storedValue = storedEntity.GetAttributeValueOrDefault(attributeName);
+                    if (HasValue(storedValue))
+                    {
+                        rtEntity.SetAttributeValue(attributeName, ckTypeAttributeGraph.ValueType, storedValue);
+                    }
+
+                    continue;
+                }
+
+                requests.Add(new NumberRequest(rtEntity, ckTypeAttributeGraph, reference, autoIncrementType.CkTypeId));
+            }
+        }
+
+        if (requests.Count == 0)
         {
             return;
         }
@@ -80,58 +150,24 @@ public class AutoIncrementModifier(
             SystemCkIds.CkAutoIncrementTypeId.ToRtCkId());
         var autoIncrementCollection = repositoryDataSource.GetRtCollection<RtAutoIncrement>(autoIncrementGraphType);
 
-        var autoIncrementerSet = await autoIncrementCollection.FindManyAsync(session,
-            f => f.RtWellKnownName != null && autoIncrementReferences.Contains(f.RtWellKnownName));
-
-        foreach (var autoIncrementType in autoIncrementTypes)
+        foreach (var counterRequests in requests.GroupBy(r => r.Reference))
         {
-            // Only auto-increment types are read, in the session (transaction) of the write.
-            var storedEntities = await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource,
-                autoIncrementType.CkTypeGraph, autoIncrementType.Entities);
+            var block = counterRequests.ToList();
+            var (counter, firstNumber) = await AllocateAsync(session, autoIncrementCollection, counterRequests.Key,
+                block.Count, block[0].CkTypeId);
 
-            foreach (var rtEntity in autoIncrementType.Entities)
+            for (var i = 0; i < block.Count; i++)
             {
-                storedEntities.TryGetValue(rtEntity.RtId, out var storedEntity);
-
-                foreach (var (ckTypeAttributeGraph, reference) in autoIncrementType.Attributes)
+                var attribute = block[i].Attribute;
+                var value = firstNumber + i;
+                if (!string.IsNullOrEmpty(counter.Format) && attribute.ValueType == AttributeValueTypesDto.String)
                 {
-                    var attributeName = ckTypeAttributeGraph.AttributeName;
-                    if (HasValue(rtEntity.GetAttributeValueOrDefault(attributeName)))
-                    {
-                        // A supplied value is kept: never renumber, never advance the counter for it.
-                        continue;
-                    }
-
-                    if (storedEntity != null)
-                    {
-                        // Already stored (replace): carry the existing number over instead of numbering again.
-                        var storedValue = storedEntity.GetAttributeValueOrDefault(attributeName);
-                        if (HasValue(storedValue))
-                        {
-                            rtEntity.SetAttributeValue(attributeName, ckTypeAttributeGraph.ValueType, storedValue);
-                        }
-
-                        continue;
-                    }
-
-                    var autoIncrement = autoIncrementerSet.FirstOrDefault(x => x.RtWellKnownName == reference);
-                    if (autoIncrement == null)
-                    {
-                        throw InvalidAttributeException.AutoIncrementReferenceNotFound(autoIncrementType.CkTypeId,
-                            reference);
-                    }
-
-                    var value = await ExecuteAutoIncrementAsync(session, repositoryDataSource, autoIncrement);
-                    if (!string.IsNullOrEmpty(autoIncrement.Format) &&
-                        ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.String)
-                    {
-                        rtEntity.SetAttributeValue(attributeName, ckTypeAttributeGraph.ValueType,
-                            string.Format(autoIncrement.Format, value));
-                    }
-                    else
-                    {
-                        rtEntity.SetAttributeValue(attributeName, ckTypeAttributeGraph.ValueType, value);
-                    }
+                    block[i].Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType,
+                        string.Format(counter.Format, value));
+                }
+                else
+                {
+                    block[i].Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType, value);
                 }
             }
         }
@@ -145,33 +181,81 @@ public class AutoIncrementModifier(
             _ => true
         };
 
-    private async Task<long> ExecuteAutoIncrementAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
-        RtAutoIncrement autoIncrement)
+    /// <summary>
+    ///     Takes <paramref name="count" /> consecutive numbers from the counter <paramref name="reference" /> with one
+    ///     <c>findOneAndUpdate</c>: <c>$inc</c> by <paramref name="count" />, filtered on
+    ///     <c>currentValue + count &lt;= end</c>. Returns the counter after the increment and the first number of the
+    ///     block.
+    /// </summary>
+    private async Task<(RtAutoIncrement Counter, long FirstNumber)> AllocateAsync(IOctoSession session,
+        IDataSourceCollection<OctoObjectId, RtAutoIncrement> autoIncrementCollection, string reference, int count,
+        RtCkId<CkTypeId> requestingCkTypeId)
     {
-        var end = autoIncrement.End;
+        var mongoCollection = ((IMongoDbDataSourceCollection<OctoObjectId, RtAutoIncrement>)autoIncrementCollection)
+            .GetMongoCollection();
+        var octoSession = (IOctoSessionInternal)session;
 
-        var currentValue = autoIncrement.CurrentValue;
+        var filter = Builders<RtAutoIncrement>.Filter.And(
+            Builders<RtAutoIncrement>.Filter.Eq(c => c.RtWellKnownName, reference),
+            new BsonDocument("$expr", new BsonDocument("$lte", new BsonArray
+            {
+                new BsonDocument("$add", new BsonArray { "$" + CurrentValueField, count }),
+                "$" + EndField
+            })));
+        var update = Builders<RtAutoIncrement>.Update.Inc(CurrentValueField, (long)count);
+        var options = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
 
-        currentValue++;
-
-        if (currentValue > end)
+        RtAutoIncrement? counter;
+        for (var attempt = 1;; attempt++)
         {
-            throw AutoIncrementFailedException.AutoIncrementEndReached(autoIncrement.RtId);
+            try
+            {
+                if (BeforeAllocationAttemptAsync != null)
+                {
+                    await BeforeAllocationAttemptAsync();
+                }
+
+                counter = await mongoCollection.FindOneAndUpdateAsync(octoSession.SessionHandle, filter, update,
+                    options);
+                break;
+            }
+            catch (Exception ex) when (!octoSession.IsTransactionActive && attempt < MaxAllocationAttempts &&
+                                       RepositoryDistributedLockService.IsTransientTransactionError(ex))
+            {
+                // Outside a transaction the failed $inc did not apply, so retrying it hands out the block once.
+                // Inside a transaction the server has aborted it: the exception goes to the owner unchanged.
+                logger.LogWarning(
+                    "Transient error while allocating {Count} number(s) from counter {Reference} (attempt {Attempt}/{MaxAttempts}), retrying",
+                    count, reference, attempt, MaxAllocationAttempts);
+                await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt));
+            }
         }
 
-        var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId,
-            autoIncrement.CkTypeId ?? throw OperationFailedException.CkTypeIdUndefined());
+        if (counter != null)
+        {
+            return (counter, counter.CurrentValue - count + 1);
+        }
 
-        autoIncrement.CurrentValue = currentValue;
-        await repositoryDataSource.GetRtCollection<RtEntity>(ckTypeGraph)
-            .ReplaceByIdAsync(session, autoIncrement.RtId, autoIncrement);
+        // Nothing matched: either there is no such counter, or it cannot take the block without passing End.
+        var existing = await autoIncrementCollection.FindManyAsync(session, c => c.RtWellKnownName == reference);
+        var stored = existing.FirstOrDefault();
+        if (stored == null)
+        {
+            throw InvalidAttributeException.AutoIncrementReferenceNotFound(requestingCkTypeId, reference);
+        }
 
-        return currentValue;
+        throw AutoIncrementFailedException.AutoIncrementEndReached(stored.RtId, reference, stored.CurrentValue,
+            stored.End, count);
     }
 
     private sealed record AutoIncrementType(
         RtCkId<CkTypeId> CkTypeId,
-        CkTypeGraph CkTypeGraph,
         IReadOnlyList<(CkTypeAttributeGraph Attribute, string Reference)> Attributes,
-        IReadOnlyList<RtEntity> Entities);
+        IReadOnlyDictionary<OctoObjectId, RtEntity> StoredEntities);
+
+    private sealed record NumberRequest(
+        RtEntity Entity,
+        CkTypeAttributeGraph Attribute,
+        string Reference,
+        RtCkId<CkTypeId> CkTypeId);
 }
