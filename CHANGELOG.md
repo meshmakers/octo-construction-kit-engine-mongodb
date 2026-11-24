@@ -16,6 +16,32 @@
   can then differ from the sequential order, all of them are idempotent guarded upserts, and a retry of the same insert
   converges. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#9302 Fix: a CK import no longer waits for the whole tenant of a running tiebreak index upgrade: the upgrade releases
+  the lock between collections and lets a waiting import take it. This reduces contention; it is no bound - the import
+  keeps its 90 s wait and can still time out when one collection's builds, or several sections before it gets its turn,
+  take longer. `UpgradeTiebreakIndexesAsync` holds `index_update_lock` per collection instead of for
+  the whole tenant: each lock section re-reads the CK metadata, upgrades the next collection root not processed in this
+  run (also one an import created meanwhile) and releases the lock. A waiting index update (CK import,
+  `UpdateIndexesAsync`) keeps a short-lived waiter marker in `SysLock` (opt-in per lock, only `index_update_lock`; every
+  other lock is unchanged); the upgrade gives it the chance to take the lock after the current collection (a yield of up
+  to 3 s, not a guaranteed turn) and then waits up to one hour for the lock itself. Measured locally: 2.1 s for a
+  collection of 1,000,000 documents with one legacy index. A section never drops or replaces an index of a collection
+  holding a type of a model that is still being imported: such a collection is retried after the others and otherwise
+  left for the next run (warning). Cancellation stops before the next collection; a lost lock, once detected (heartbeat,
+  every 15 s), aborts the current collection and persists no more index states - also in the normal index update, which
+  before stopped only between collections; the index-state write checks the loss again after reading the stored
+  states and before each type it writes. A lock acquire never polls after its deadline (a delay or a slow waiter-marker
+  write that overruns it ends in the `TimeoutException`, not in a late acquire), and it fails with the cancelled
+  `LockLostToken` (`OperationCanceledException`) instead of returning success when the heartbeat found the lock taken
+  while the waiter marker was being cleaned up. The normal index update keeps its whole-tenant lock; the public API is
+  unchanged. Per-collection start/finish logs (information) and lock acquire/release (debug) name tenant and collection.
+  Index states (AB#9391 follow-ups): a failed build is named after every definition of the collection was processed, so
+  a failure under the alternate name is visible in the same run in either order, also when a legacy index carries the
+  tiebreak name; the index a failed build would have replaced stays a candidate for the later definitions of the run;
+  `ClearIndexStatesForCollectionAsync` writes only `IndexStates` (`$set`); the slot-name check of the holder log accepts
+  only engine slot names. Tests: `TiebreakIndexUpgradeLockTests`, `TiebreakUpgradeSectionPerformanceTests`
+  (`Category=Performance`), `RepositoryDistributedLockServiceTests`, `RepositoryDistributedLockServiceDeadlineTests`,
+  `SharedIndexKeySpecTests.IndexStates.cs`.
 - AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
   (owned-only for every action, Write and Delete for all with Read owned-only, or Write and Delete without Read), a
   hidden record answers exactly like a missing rtId (update, replace and delete, valid and invalid payload), also when

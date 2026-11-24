@@ -33,7 +33,8 @@ public interface ICkMongoDbRepositoryDataSource
     /// <summary>
     ///     Updates the indexes of every collection root like <see cref="UpdateIndexAsync" /> and rebuilds each CK
     ///     Ascending index that is still in the legacy shape in the paging tiebreak shape (AB#8960): the new index is
-    ///     built first, the legacy one dropped after it. Idempotent.
+    ///     built first, the legacy one dropped after it. Idempotent. AB#9302: the index update lock is held per
+    ///     collection, not for the whole tenant; each collection is upgraded from freshly read CK metadata.
     /// </summary>
     Task UpgradeTiebreakIndexesAsync(IOctoSession session, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This data source does not support the tiebreak index upgrade.");

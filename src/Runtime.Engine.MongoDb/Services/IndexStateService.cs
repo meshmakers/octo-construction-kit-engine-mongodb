@@ -3,6 +3,8 @@ using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
+using System.Text.RegularExpressions;
+
 using Microsoft.Extensions.Logging;
 
 using MongoDB.Driver;
@@ -23,13 +25,15 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 ///     keep a legacy index without rebuilding it. After a completed run a <c>Failed</c> state under a name no definition
 ///     of the type expected in that run is removed (the definition is gone).</item>
 ///     <item>A <c>Failed</c> state never replaces an <c>Applied</c> state tracked in the same run for the same index
-///     name; the caller records a failure that collides with one under another name.</item>
+///     name. AB#9302: a build failure is recorded with <see cref="TrackFailure" /> and gets its name in
+///     <see cref="ResolveFailures" />, after every definition of the collection was processed: the expected name, or
+///     the alternate name when an <c>Applied</c> state is tracked under the expected name by then.</item>
 ///     <item>A run that changes nothing writes nothing: the merged states are compared with the stored ones by name,
 ///     collection, state and error message (not by <see cref="CkIndexState.AppliedAt" />); a state that is unchanged
 ///     keeps its stored <c>AppliedAt</c>. A change writes only the <c>IndexStates</c> field of the CkType.</item>
 /// </list>
 /// </summary>
-internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> ckTypes, ILogger logger)
+internal partial class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> ckTypes, ILogger logger)
 {
     private static readonly IndexState[] AllStates = [IndexState.Applied, IndexState.Failed];
 
@@ -48,6 +52,49 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
     public void EndTracking()
     {
         _currentTracker = null;
+    }
+
+    /// <summary>AB#9302: true while a collection run is tracked (between <see cref="BeginTracking" /> and
+    /// <see cref="EndTracking" />).</summary>
+    public bool IsTracking => _currentTracker != null;
+
+    /// <summary>
+    /// AB#9302: records the failed build of the index a definition of the type expects under
+    /// <paramref name="indexName" />. The state is named in <see cref="ResolveFailures" />: under
+    /// <paramref name="indexName" />, or under <paramref name="alternateName" /> when by then the run tracks an
+    /// <see cref="IndexState.Applied" /> state under <paramref name="indexName" /> for the type (the index there serves the
+    /// type: a legacy index the failed upgrade keeps, or another definition, also one processed after this one).
+    /// </summary>
+    public void TrackFailure(CkId<CkTypeId> typeId, string indexName, string alternateName, string collectionName,
+        string errorMessage)
+    {
+        if (_currentTracker == null)
+        {
+            logger.LogWarning("TrackFailure called without active tracking context");
+            return;
+        }
+
+        _currentTracker.Failures.Add((typeId, indexName, alternateName, collectionName, errorMessage));
+    }
+
+    /// <summary>
+    /// AB#9302: names and records the failures of <see cref="TrackFailure" />; called once per collection run, after every
+    /// definition was processed and before <see cref="Reconcile" />.
+    /// </summary>
+    public void ResolveFailures()
+    {
+        if (_currentTracker == null)
+        {
+            return;
+        }
+
+        var failures = _currentTracker.Failures.ToList();
+        _currentTracker.Failures.Clear();
+        foreach (var (typeId, indexName, alternateName, collectionName, errorMessage) in failures)
+        {
+            var name = _currentTracker.IsTrackedApplied(typeId, indexName, collectionName) ? alternateName : indexName;
+            TrackIndexOperation(typeId, name, collectionName, IndexState.Failed, errorMessage);
+        }
     }
 
     public void TrackIndexOperation(CkId<CkTypeId> typeId, string indexName, string collectionName,
@@ -152,36 +199,50 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
     /// <see cref="IndexState.Applied" /> state under a name that is not in it is removed (stored and tracked). With
     /// <paramref name="runCompleted" /> (every definition of the collection was processed) a stored
     /// <see cref="IndexState.Failed" /> state under a name no definition of the type expected in this run is removed
-    /// too; after an aborted run the <c>Failed</c> states stay as they are.
+    /// too. After an aborted run no <c>Failed</c> state is removed for that reason (the definitions not processed yet
+    /// expected nothing); the changes the run made before the abort - a failure recorded, a failure removed because its
+    /// definition is served in its target shape - are persisted.
     /// </summary>
     public void Reconcile(IEnumerable<string> existingIndexNames, bool runCompleted) =>
         _currentTracker?.Reconcile(existingIndexNames, runCompleted);
 
-    public async Task BulkUpdateIndexStatesAsync(IOctoSession session)
+    /// <summary>
+    ///     Persists the tracked index states of the current collection (only the <c>IndexStates</c> field of each type).
+    ///     AB#9302: <paramref name="lockLostToken" /> is the lost-lock token of the index update; it is checked after the
+    ///     read of the stored states and before each write, so a loss noticed meanwhile persists nothing more. A token
+    ///     check cannot fence a write already started; the next index update reconciles the states.
+    /// </summary>
+    /// <returns>False when the lost lock stopped the update before a write, otherwise true.</returns>
+    public async Task<bool> BulkUpdateIndexStatesAsync(IOctoSession session, CancellationToken lockLostToken = default)
     {
         if (_currentTracker == null)
         {
             logger.LogWarning("BulkUpdateIndexStatesAsync: No active tracking context, skipping index state update");
-            return;
+            return true;
         }
 
         var typeIds = _currentTracker.AffectedTypeIds();
         if (typeIds.Count == 0)
         {
-            return;
+            return true;
         }
 
         IReadOnlyCollection<CkType> types;
         try
         {
-            // Read just before the write: the whole document is replaced.
+            // Read just before the write: the merge starts from the stored states; only IndexStates is written.
             types = await LoadTypesAsync(session, typeIds);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to load the CkTypes of collection '{CollectionName}' for the index state update",
                 _currentTracker.CollectionName);
-            return;
+            return true;
+        }
+
+        if (lockLostToken.IsCancellationRequested)
+        {
+            return false;
         }
 
         foreach (var missing in typeIds.Where(id => types.All(t => t.CkTypeId != id) &&
@@ -214,6 +275,11 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
                 // read above and this write.
                 foreach (var ckType in typesToUpdate)
                 {
+                    if (lockLostToken.IsCancellationRequested)
+                    {
+                        return false;
+                    }
+
                     await ckTypes.UpdateOneAsync(session, ckType.CkTypeId,
                         Builders<CkType>.Update.Set(t => t.IndexStates, ckType.IndexStates));
                 }
@@ -224,6 +290,8 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
                 throw;
             }
         }
+
+        return true;
     }
 
     public async Task ClearIndexStatesForCollectionAsync(IOctoSession session, string collectionName,
@@ -231,7 +299,7 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
     {
         var typesToUpdate = new List<CkType>();
 
-        foreach (var typeId in affectedTypes)
+        foreach (var typeId in affectedTypes.Distinct())
         {
             try
             {
@@ -263,7 +331,14 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
         {
             try
             {
-                await ckTypes.ReplaceManyAsync(session, typesToUpdate);
+                // AB#9302 (as AB#9391 for BulkUpdateIndexStatesAsync): only the IndexStates field is written. Replacing
+                // the whole document would revert a CkType change committed between the read above and this write.
+                foreach (var ckType in typesToUpdate)
+                {
+                    await ckTypes.UpdateOneAsync(session, ckType.CkTypeId,
+                        Builders<CkType>.Update.Set(t => t.IndexStates, ckType.IndexStates));
+                }
+
                 logger.LogInformation("Cleared index states for collection '{CollectionName}' in {Count} CkTypes",
                     collectionName, typesToUpdate.Count);
             }
@@ -287,13 +362,21 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
         return (await ckTypes.FindManyAsync(session, t => ids.Contains(t.CkTypeId))).ToList();
     }
 
-    /// <summary>The engine names a CK index of a type <c>&lt;collection name of the type&gt;_&lt;n&gt;[...]</c>.</summary>
-    private static bool IsSlotNameOf(string indexName, CkId<CkTypeId> typeId)
+    /// <summary>
+    /// The engine names a CK index of a type <c>&lt;collection name of the type&gt;_&lt;n&gt;</c>, in the tiebreak shape
+    /// with the suffix <c>_id</c> (<see cref="TiebreakIndexShape.NameSuffix" />), and either name with an alternate-name
+    /// hash (<see cref="TiebreakIndexShape.AlternateName" />). AB#9302: nothing else - a hand-made name such as
+    /// <c>&lt;type&gt;_0_manual</c> is not a slot name.
+    /// </summary>
+    internal static bool IsSlotNameOf(string indexName, CkId<CkTypeId> typeId)
     {
         var prefix = typeId.ToRtCkId().GetCkTypeCollectionName() + "_";
         return indexName.StartsWith(prefix, StringComparison.Ordinal) &&
-               indexName.Length > prefix.Length && char.IsDigit(indexName[prefix.Length]);
+               SlotSuffix().IsMatch(indexName[prefix.Length..]);
     }
+
+    [GeneratedRegex("^[0-9]+(?:_id)?(?:_[0-9a-f]{6})?$", RegexOptions.CultureInvariant)]
+    private static partial Regex SlotSuffix();
 
     private static bool SameCollection(string? a, string? b) =>
         string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
@@ -344,6 +427,10 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
 
         private HashSet<string>? _existingIndexNames;
         private bool _runCompleted;
+
+        /// <summary>AB#9302: the failed builds of the run, named in <see cref="IndexStateService.ResolveFailures" />.</summary>
+        public List<(CkId<CkTypeId> TypeId, string IndexName, string AlternateName, string CollectionName, string Error)>
+            Failures { get; } = [];
 
         public string CollectionName { get; } = collectionName;
 

@@ -1,0 +1,29 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 507f1f77bcf86cd7994396a1
+    ckTypeId: Test/Country
+    rtWellKnownName: DeferredAustria
+    attributes:
+      - id: Test/Name
+        value: Austria
+      - id: Test/ISOCode
+        value: AT
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 507f1f77bcf86cd7994396a0
+        targetCkTypeId: Test/Continent
+  - rtId: 507f1f77bcf86cd7994396a2
+    ckTypeId: Test/Country
+    rtWellKnownName: DeferredGermany
+    attributes:
+      - id: Test/Name
+        value: Germany
+      - id: Test/ISOCode
+        value: DE
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 507f1f77bcf86cd7994396a0
+        targetCkTypeId: Test/Continent

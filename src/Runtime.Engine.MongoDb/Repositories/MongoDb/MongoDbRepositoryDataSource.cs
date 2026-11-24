@@ -14,6 +14,8 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 
+using System.Diagnostics;
+
 using Microsoft.Extensions.Logging;
 
 using MongoDB.Driver;
@@ -25,6 +27,22 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 {
     /// <summary>Prefix of the lock id of a CK model import lock; the model name follows it.</summary>
     internal const string ModelImportLockIdPrefix = "ck_model_import_";
+
+    /// <summary>The distributed lock every index update of the tenant takes (CK import, update, tiebreak upgrade).</summary>
+    internal const string IndexUpdateLockId = "index_update_lock";
+
+    /// <summary>
+    ///     AB#9302: how long a section of the tiebreak index upgrade (after the first) waits for
+    ///     <see cref="IndexUpdateLockId" />: it yielded the lock to a CK import between two collections and waits until
+    ///     that import's index update is done, not the 90 s a CK import waits.
+    /// </summary>
+    internal static readonly TimeSpan UpgradeSectionMaxWait = TimeSpan.FromHours(1);
+
+    /// <summary>
+    ///     AB#9302: after a section, while a waiter marker is fresh, the upgrade gives the waiter this long to take the
+    ///     lock (it polls once per second) before it acquires the lock for the next collection itself.
+    /// </summary>
+    internal static readonly TimeSpan YieldToWaiterMaxWait = TimeSpan.FromSeconds(3);
 
     private readonly IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> _ckTypeInheritances;
     private readonly IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> _ckTypes;
@@ -441,6 +459,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
     }
 
+    /// <summary>
+    ///     AB#9302, tests only: called at each stage of a lock section of the tiebreak index upgrade (lock acquired,
+    ///     about to be released, released, yield to a waiter checked).
+    /// </summary>
+    internal Func<IndexUpgradeSectionEvent, Task>? UpgradeSectionObserver { get; set; }
+
+    // AB#9302: the section of the collection run in progress (tests only: the TrackingStarted stage).
+    private int? _upgradeSection;
+
     public Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting,
         CkModelId? scopeToModelId = null, CancellationToken cancellationToken = default) =>
         UpdateIndexCoreAsync(session, includeModelsInStateImporting, scopeToModelId, upgradeTiebreakIndexes: false,
@@ -454,19 +481,22 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     ///     The index update of every collection root (or of those of one model). With
     ///     <paramref name="upgradeTiebreakIndexes" /> a CK Ascending index in the legacy shape is rebuilt in the
     ///     tiebreak shape (AB#8960, <see cref="TiebreakIndexShape" />): the new index is built first, the legacy one is
-    ///     dropped after it, collection by collection. Without it (CK import, <c>UpdateIndexesAsync</c>) a legacy index
-    ///     is kept as it is - a model import must not rebuild the indexes of large collections while a tenant is
-    ///     resolved - and only indexes that do not exist yet are created, in the tiebreak shape.
+    ///     dropped after it, collection by collection, each collection in a lock section of its own
+    ///     (<see cref="UpgradeTiebreakIndexesPerCollectionAsync" />, AB#9302). Without it (CK import,
+    ///     <c>UpdateIndexesAsync</c>) a legacy index is kept as it is - a model import must not rebuild the indexes of
+    ///     large collections while a tenant is resolved - and only indexes that do not exist yet are created, in the
+    ///     tiebreak shape; that update holds <see cref="IndexUpdateLockId" /> for the whole tenant, as before.
     /// </summary>
     private async Task UpdateIndexCoreAsync(IOctoSession session, bool includeModelsInStateImporting,
         CkModelId? scopeToModelId, bool upgradeTiebreakIndexes, CancellationToken cancellationToken)
     {
         if (upgradeTiebreakIndexes)
         {
-            _logger.LogInformation("Upgrading the indexes of tenant '{TenantId}' to the paging tiebreak shape (AB#8960)",
-                TenantId);
+            await UpgradeTiebreakIndexesPerCollectionAsync(session, cancellationToken);
+            return;
         }
-        else if (scopeToModelId != null)
+
+        if (scopeToModelId != null)
         {
             _logger.LogInformation(
                 "Updating indexes of tenant '{TenantId}' scoped to model '{ModelId}'", TenantId, scopeToModelId);
@@ -476,8 +506,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             _logger.LogInformation("Updating indexes of tenant '{TenantId}'", TenantId);
         }
 
-        await using var lockService =
-            new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, "index_update_lock");
+        // AB#9302: the waiter marker lets a running tiebreak upgrade yield the lock to this update between two
+        // collections.
+        await using var lockService = new RepositoryDistributedLockService(_repositoryClient, _repository, _logger,
+            IndexUpdateLockId, markWaiters: true);
         await lockService.AcquireLockAsync(cancellationToken);
 
         // Abort the index update if either the caller cancels or the lock is lost mid-flight.
@@ -485,13 +517,318 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             cancellationToken, lockService.LockLostToken);
         var effectiveToken = linkedCts.Token;
 
+        var plan = await ReadIndexUpdatePlanAsync(session, includeModelsInStateImporting, scopeToModelId,
+            effectiveToken);
+
+        foreach (var ckTypeInfo in plan.CollectionRoots)
+        {
+            effectiveToken.ThrowIfCancellationRequested();
+            await UpdateIndexesForCollectionRoot(ckTypeInfo, plan.BaseTypesOf(ckTypeInfo), plan.Attributes,
+                plan.Records, upgradeTiebreakIndexes: false, lockService.LockLostToken);
+        }
+
+        // Create indexes for RtAssociations collection (model-independent, only needed for full updates)
+        if (scopeToModelId == null)
+        {
+            effectiveToken.ThrowIfCancellationRequested();
+            await CreateModelIndependentIndexesAsync(effectiveToken);
+        }
+
+        _logger.LogInformation("Updating indexes of tenant '{TenantId}' completed", TenantId);
+    }
+
+    /// <summary>
+    ///     AB#9302: the tiebreak index upgrade holds <see cref="IndexUpdateLockId" /> only while it works on one
+    ///     collection. Each lock section re-reads the CK metadata (a CK import between two sections may change, add or
+    ///     remove collection roots and index definitions; a stale definition would drop an index the import just
+    ///     built), takes the next collection root it has not processed in this run and upgrades it - so a collection an
+    ///     import created meanwhile is upgraded in the same run. A last section creates the model-independent indexes.
+    ///     <para>
+    ///         Invariant: a section never drops or replaces an index of a collection that holds a type of a model in state
+    ///         <see cref="ModelState.Importing" /> (root, base chain or descendant; <see cref="InvolvesImportingModel" />).
+    ///         A CK import releases the lock after its index update and only then makes its model Available; a section
+    ///         that ran in between would not see that model's index definitions and drop its indexes. Such a root is
+    ///         skipped, retried once after every other collection, and left for the next run if it is still involved
+    ///         (named in the log). The section reads the metadata with the Importing models only to recognise them.
+    ///     </para>
+    ///     Between two sections the upgrade yields the lock to a waiting index update (a fresh waiter marker,
+    ///     <see cref="RepositoryDistributedLockService.HasWaitersAsync" />) and then waits up to
+    ///     <see cref="UpgradeSectionMaxWait" /> for it. The caller's token stops before the next section; a lost lock
+    ///     aborts the current collection (<see cref="UpdateIndexesForCollectionRoot" />). Every index state tracking scope
+    ///     lies inside one section.
+    /// </summary>
+    private async Task UpgradeTiebreakIndexesPerCollectionAsync(IOctoSession session,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation(
+            "Upgrading the indexes of tenant '{TenantId}' to the paging tiebreak shape (AB#8960), one collection per " +
+            "lock section (AB#9302)", TenantId);
+
+        // By collection name: a CK import between two sections can raise the model version (new type ids, same collection).
+        var processed = new HashSet<string>(StringComparer.Ordinal);
+        var skipped = new List<string>();
+        var left = new List<string>();
+        var retrying = false;
+        var tenantStopwatch = Stopwatch.StartNew();
+        var longest = TimeSpan.Zero;
+        string? longestCollection = null;
+        var section = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? collectionName;
+            await using (var lockService = new RepositoryDistributedLockService(_repositoryClient, _repository,
+                             _logger, IndexUpdateLockId, LogLevel.Debug, markWaiters: true))
+            {
+                if (section == 0)
+                {
+                    await lockService.AcquireLockAsync(cancellationToken);
+                }
+                else
+                {
+                    await lockService.AcquireLockAsync(UpgradeSectionMaxWait, cancellationToken);
+                }
+
+                var lockLostToken = lockService.LockLostToken;
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lockLostToken);
+                var plan = await ReadIndexUpdatePlanAsync(session, true, null, linkedCts.Token);
+
+                // The next root: first every root not processed yet, then once more the roots skipped because a model of
+                // their collection was being imported.
+                CkTypeInfo? next = null;
+                while (next == null)
+                {
+                    // In the retry also a root that appeared meanwhile (a collection an import created) is taken.
+                    var candidate = plan.CollectionRoots.FirstOrDefault(r =>
+                        !processed.Contains(CollectionNameOf(r)) && !left.Contains(CollectionNameOf(r)) &&
+                        (retrying || !skipped.Contains(CollectionNameOf(r))));
+                    if (candidate == null)
+                    {
+                        if (!retrying && skipped.Count > 0)
+                        {
+                            retrying = true;
+                            continue;
+                        }
+
+                        // A skipped root that is gone from the metadata (its model was removed) needs nothing.
+                        skipped.Clear();
+                        break;
+                    }
+
+                    var candidateName = CollectionNameOf(candidate);
+                    if (InvolvesImportingModel(candidate, plan.BaseTypesOf(candidate)))
+                    {
+                        if (retrying)
+                        {
+                            skipped.Remove(candidateName);
+                            left.Add(candidateName);
+                            await NotifyUpgradeObserverAsync(IndexUpgradeSectionStage.LeftForNextRun, candidateName,
+                                section, lockLostToken);
+                        }
+                        else
+                        {
+                            skipped.Add(candidateName);
+                            _logger.LogInformation(
+                                "Tiebreak index upgrade of tenant '{TenantId}': collection '{CollectionName}' holds a " +
+                                "type of a model that is being imported; it is retried after the other collections",
+                                TenantId, candidateName);
+                        }
+
+                        continue;
+                    }
+
+                    skipped.Remove(candidateName);
+                    next = candidate;
+                }
+
+                collectionName = next != null ? CollectionNameOf(next) : null;
+
+                _logger.LogDebug("Acquired '{LockId}' of tenant '{TenantId}' for {Target}", IndexUpdateLockId, TenantId,
+                    collectionName != null ? $"collection '{collectionName}'" : "the model-independent indexes");
+                await NotifyUpgradeObserverAsync(IndexUpgradeSectionStage.Acquired, collectionName, section,
+                    lockLostToken);
+
+                if (next != null)
+                {
+                    processed.Add(collectionName!);
+                    _logger.LogInformation(
+                        "Tiebreak index upgrade of tenant '{TenantId}': collection '{CollectionName}' started " +
+                        "({Number} of {Count})", TenantId, collectionName, processed.Count,
+                        processed.Count + plan.CollectionRoots.Count(r => !processed.Contains(CollectionNameOf(r))));
+                    var stopwatch = Stopwatch.StartNew();
+                    _upgradeSection = section;
+                    try
+                    {
+                        await UpdateIndexesForCollectionRoot(next, plan.BaseTypesOf(next), plan.Attributes,
+                            plan.Records, upgradeTiebreakIndexes: true, lockLostToken);
+                    }
+                    finally
+                    {
+                        _upgradeSection = null;
+                    }
+
+                    stopwatch.Stop();
+
+                    // A lock lost after the collection's last index operation still ends the run here.
+                    lockLostToken.ThrowIfCancellationRequested();
+                    if (stopwatch.Elapsed > longest)
+                    {
+                        longest = stopwatch.Elapsed;
+                        longestCollection = collectionName;
+                    }
+
+                    _logger.LogInformation(
+                        "Tiebreak index upgrade of tenant '{TenantId}': collection '{CollectionName}' finished in " +
+                        "{Seconds:F1} s", TenantId, collectionName, stopwatch.Elapsed.TotalSeconds);
+                }
+                else
+                {
+                    await CreateModelIndependentIndexesAsync(lockLostToken);
+                }
+
+                await NotifyUpgradeObserverAsync(IndexUpgradeSectionStage.Releasing, collectionName, section,
+                    lockLostToken);
+            }
+
+            _logger.LogDebug("Released '{LockId}' of tenant '{TenantId}' after {Target}", IndexUpdateLockId, TenantId,
+                collectionName != null ? $"collection '{collectionName}'" : "the model-independent indexes");
+            await NotifyUpgradeObserverAsync(IndexUpgradeSectionStage.Released, collectionName, section,
+                CancellationToken.None);
+            section++;
+
+            if (collectionName == null)
+            {
+                break;
+            }
+
+            var waiterSeen = await YieldToWaitersAsync(cancellationToken);
+            await NotifyUpgradeObserverAsync(IndexUpgradeSectionStage.Yielded, collectionName, section - 1,
+                CancellationToken.None, waiterSeen);
+        }
+
+        if (left.Count > 0)
+        {
+            _logger.LogWarning(
+                "Tiebreak index upgrade of tenant '{TenantId}': {Count} collection(s) left for the next run, a model of " +
+                "theirs was still being imported: {Collections}", TenantId, left.Count, string.Join(", ", left));
+        }
+
+        _logger.LogInformation(
+            "Upgrading the indexes of tenant '{TenantId}' to the paging tiebreak shape completed: {Count} collection(s) " +
+            "in {Seconds:F1} s, longest '{LongestCollection}' {LongestSeconds:F1} s, {Left} left for the next run",
+            TenantId, processed.Count, tenantStopwatch.Elapsed.TotalSeconds, longestCollection ?? "-",
+            longest.TotalSeconds, left.Count);
+    }
+
+    /// <summary>
+    ///     AB#9302: true when a type stored in the collection of <paramref name="collectionRoot" /> - the root, its base
+    ///     chain or a descendant - belongs to a model in state <see cref="ModelState.Importing" />.
+    /// </summary>
+    private static bool InvolvesImportingModel(CkTypeInfo collectionRoot, IEnumerable<CkType> baseTypes) =>
+        collectionRoot.ModelState == ModelState.Importing ||
+        baseTypes.Any(t => t.ModelState == ModelState.Importing) ||
+        collectionRoot.Inheritances.Any(t => t.ModelState == ModelState.Importing);
+
+    private static string CollectionNameOf(CkTypeInfo collectionRoot) =>
+        collectionRoot.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
+
+    /// <summary>
+    ///     AB#9302: while a waiter marker of <see cref="IndexUpdateLockId" /> is fresh, gives the waiter up to
+    ///     <see cref="YieldToWaiterMaxWait" /> to take the lock. Returns whether a waiter was seen. A dead waiter's marker
+    ///     expires (<see cref="RepositoryDistributedLockService.WaiterMarkerTimeToLive" />), so the upgrade never waits
+    ///     for it longer than that bound.
+    /// </summary>
+    private async Task<bool> YieldToWaitersAsync(CancellationToken cancellationToken)
+    {
+        bool waiterSeen;
+        try
+        {
+            waiterSeen = await RepositoryDistributedLockService.HasWaitersAsync(_repository, IndexUpdateLockId,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Could not read the waiters of '{LockId}' of tenant '{TenantId}'", IndexUpdateLockId,
+                TenantId);
+            return false;
+        }
+
+        if (!waiterSeen)
+        {
+            return false;
+        }
+
+        _logger.LogDebug("Tiebreak index upgrade of tenant '{TenantId}' yields '{LockId}' to a waiting index update",
+            TenantId, IndexUpdateLockId);
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < YieldToWaiterMaxWait)
+        {
+            try
+            {
+                if (await RepositoryDistributedLockService.IsHeldAsync(_repository, IndexUpdateLockId,
+                        cancellationToken))
+                {
+                    break;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A courtesy probe: on a failed read the upgrade goes on to its normal acquisition.
+                _logger.LogDebug(ex, "Could not read '{LockId}' of tenant '{TenantId}' while yielding",
+                    IndexUpdateLockId, TenantId);
+                break;
+            }
+
+            await Task.Delay(100, cancellationToken);
+        }
+
+        return true;
+    }
+
+    private async Task NotifyUpgradeObserverAsync(IndexUpgradeSectionStage stage, string? collectionName, int section,
+        CancellationToken lockLostToken, bool waiterSeen = false)
+    {
+        if (UpgradeSectionObserver != null)
+        {
+            await UpgradeSectionObserver(new IndexUpgradeSectionEvent(stage, collectionName, section, lockLostToken,
+                _indexStateService.IsTracking, waiterSeen));
+        }
+    }
+
+    /// <summary>The indexes of the RtAssociations collection and the GridFS owner index (AB#6538).</summary>
+    private async Task CreateModelIndependentIndexesAsync(CancellationToken cancellationToken)
+    {
+        await CreateRtAssociationIndexesAsync(cancellationToken);
+
+        // AB#6538: owner lookup of linked binaries
+        if (_repository is MongoRepository mongoRepository)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await GridFsOwnerIndex.EnsureAsync(mongoRepository.Database, cancellationToken);
+        }
+    }
+
+    /// <summary>The CK metadata an index update works from, read once per update (or per upgrade section).</summary>
+    private sealed record IndexUpdatePlan(
+        List<CkTypeInfo> CollectionRoots,
+        Dictionary<CkId<CkTypeId>, List<CkType>> BaseTypes,
+        IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute> Attributes,
+        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord> Records)
+    {
+        public List<CkType> BaseTypesOf(CkTypeInfo collectionRoot) =>
+            BaseTypes.TryGetValue(collectionRoot.CkTypeId, out var types) ? types : [];
+    }
+
+    private async Task<IndexUpdatePlan> ReadIndexUpdatePlanAsync(IOctoSession session,
+        bool includeModelsInStateImporting, CkModelId? scopeToModelId, CancellationToken cancellationToken)
+    {
         var aggregate = _ckTypes.Aggregate(session);
         aggregate = aggregate.Match(x => x.IsCollectionRoot == true &&
             (includeModelsInStateImporting
                 ? (x.ModelState == ModelState.Available || x.ModelState == ModelState.Importing)
                 : x.ModelState == ModelState.Available));
 
-        var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync(effectiveToken);
+        var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync(cancellationToken);
         var collectionRootTypes = ckTypeInfoList.ToList();
 
         // D3 / review M6: $graphLookup matches base and inheritor ids as strings; a range-retaining model stores
@@ -523,28 +860,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // Pre-fetch attribute metadata for resolving index attribute paths
         var (allCkAttributes, allCkRecords) = await FetchAttributeMetadataAsync();
 
-        foreach (var ckTypeInfo in collectionRootTypes)
-        {
-            effectiveToken.ThrowIfCancellationRequested();
-            var baseTypes = baseTypesMap.TryGetValue(ckTypeInfo.CkTypeId, out var types) ? types : [];
-            await UpdateIndexesForCollectionRoot(ckTypeInfo, baseTypes, allCkAttributes, allCkRecords,
-                upgradeTiebreakIndexes);
-        }
-
-        // Create indexes for RtAssociations collection (model-independent, only needed for full updates)
-        if (scopeToModelId == null)
-        {
-            effectiveToken.ThrowIfCancellationRequested();
-            await CreateRtAssociationIndexesAsync();
-
-            // AB#6538: owner lookup of linked binaries
-            if (_repository is MongoRepository mongoRepository)
-            {
-                await GridFsOwnerIndex.EnsureAsync(mongoRepository.Database, effectiveToken);
-            }
-        }
-
-        _logger.LogInformation("Updating indexes of tenant '{TenantId}' completed", TenantId);
+        return new IndexUpdatePlan(collectionRootTypes, baseTypesMap, allCkAttributes, allCkRecords);
     }
 
     private async Task<Dictionary<CkId<CkTypeId>, List<CkType>>> CollectBaseTypesForCollectionRoots(
@@ -667,10 +983,19 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return (attributeDict, recordDict);
     }
 
+    /// <summary>
+    ///     The index update of one collection root, inside the caller's lock section. AB#9302: a lost lock
+    ///     (<paramref name="lockLostToken" />) aborts the collection before its next index operation (an index build
+    ///     already started finishes); its index states are then not persisted - the lock section is over and another
+    ///     holder may work on the collection; the next run reconciles them.
+    /// </summary>
     private async Task UpdateIndexesForCollectionRoot(CkTypeInfo collectionRootType, List<CkType> baseTypes,
         IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute> allCkAttributes,
-        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord> allCkRecords, bool upgradeTiebreakIndexes)
+        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord> allCkRecords, bool upgradeTiebreakIndexes,
+        CancellationToken lockLostToken)
     {
+        lockLostToken.ThrowIfCancellationRequested();
+
         var name = collectionRootType.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
         var collection = _repository.GetCollection(mapper, name);
@@ -692,6 +1017,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         try
         {
+            if (_upgradeSection is { } upgradeSection)
+            {
+                await NotifyUpgradeObserverAsync(IndexUpgradeSectionStage.TrackingStarted, name, upgradeSection,
+                    lockLostToken);
+            }
+
             // We need to merge text indexes from inherited types, because MongoDB does not support more than one text index
             Dictionary<CkType, List<CkTypeIndex>> regularIndices = new();
             CkTypeIndex? textIndex = null;
@@ -727,6 +1058,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // an index was removed in the CK model.
             if (regularIndices.Count == 0 && textIndex == null)
             {
+                lockLostToken.ThrowIfCancellationRequested();
                 _logger.LogDebug("Dropping all indexes for '{CkTypeId}'", collectionRootType.CkTypeId);
                 await collection.DropAllIndexesAsync(name);
 
@@ -753,6 +1085,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
                 foreach (CkTypeIndex ckTypeIndex in keyValuePair.Value)
                 {
+                    lockLostToken.ThrowIfCancellationRequested();
                     await PrepareAndCreateIndex(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
                         uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes,
                         upgradeTiebreakIndexes, keySpecs);
@@ -764,6 +1097,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 {
                     if (textIndex != null)
                     {
+                        lockLostToken.ThrowIfCancellationRequested();
                         await PrepareAndCreateIndex(keyValuePair.Key, textIndex, repositoryIndices, collection,
                             uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes,
                             upgradeTiebreakIndexes, keySpecs);
@@ -774,6 +1108,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                             repositoryIndices.SingleOrDefault(i => i.IndexType == IndexTypes.Text);
                         if (repositoryTextIndex != null)
                         {
+                            lockLostToken.ThrowIfCancellationRequested();
                             _logger.LogDebug("Dropping text index '{IndexName}' for '{CkTypeId}'",
                                 repositoryTextIndex.Name, keyValuePair.Key.CkTypeId);
                             await DropIndexWithTracking(collection, repositoryTextIndex.Name,
@@ -797,6 +1132,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     }
                 ]
             };
+            lockLostToken.ThrowIfCancellationRequested();
             await CreateOrUpdateIndex(collection.CollectionName, rtStateIndex, repositoryIndices, collection,
                 uniqueIndexNumber: 9000, keySpecs: keySpecs);
 
@@ -817,13 +1153,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     }
                 ]
             };
+            lockLostToken.ThrowIfCancellationRequested();
             await CreateOrUpdateIndex(collection.CollectionName, rtCreatedByIndex, repositoryIndices, collection,
                 uniqueIndexNumber: 9001, keySpecs: keySpecs);
 
             // Drop any remaining indexes that are no longer needed. A legacy index replaced by its tiebreak-shape
             // successor (AB#8960) is among them: it is dropped only now, after the successor was built.
-            foreach (var repositoryIndex in repositoryIndices)
+            foreach (var repositoryIndex in repositoryIndices.Where(i => !keySpecs.IsKeptAfterFailedBuild(i.Name)))
             {
+                lockLostToken.ThrowIfCancellationRequested();
                 _logger.LogInformation("Dropping obsolete index '{IndexName}' for '{CollectionName}'",
                     repositoryIndex.Name, collection.CollectionName);
                 await collection.DropIndexAsync(repositoryIndex.Name);
@@ -837,31 +1175,71 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // query (AB#8960, AB#9138).
             CollectionIndexCache.Invalidate(collection.GetMongoCollection());
 
-            // AB#9391: the index states of the collection's types name exactly the indexes that exist, whatever dropped
-            // an index (the cleanup above, a replaced text index, an earlier run aborted before it persisted its
-            // states). Read once, after the cleanup; without the list the states are persisted as tracked.
             try
             {
-                var finalIndexes = await collection.GetIndexListAsync();
-                _indexStateService.Reconcile(finalIndexes.Select(i => i.Name), runCompleted);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Could not read the indexes of '{CollectionName}' to reconcile the index states of its types",
-                    collection.CollectionName);
-            }
+                if (lockLostToken.IsCancellationRequested)
+                {
+                    // AB#9302: the lock section is over; persisting now could overwrite the states of another holder.
+                    _logger.LogWarning(
+                        "Lost '{LockId}' while updating the indexes of '{CollectionName}'; its index states are not " +
+                        "persisted, the next index update reconciles them", IndexUpdateLockId, collection.CollectionName);
+                }
+                else
+                {
+                    // AB#9302: the failures of the run get their names only now, after every definition was processed
+                    // (a later definition may be served by the index under a failed definition's expected name).
+                    _indexStateService.ResolveFailures();
 
-            // Always save tracked index states before ending tracking
-            try
-            {
-                using var updateSession = await GetSessionAsync();
-                await _indexStateService.BulkUpdateIndexStatesAsync(updateSession);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to persist index states for collection of CkTypeId '{CkTypeId}'",
-                    collectionRootType.CkTypeId);
+                    // AB#9391: the index states of the collection's types name exactly the indexes that exist, whatever
+                    // dropped an index (the cleanup above, a replaced text index, an earlier run aborted before it
+                    // persisted its states). Read once, after the cleanup; without the list the states are persisted as
+                    // tracked.
+                    try
+                    {
+                        var finalIndexes = await collection.GetIndexListAsync();
+                        _indexStateService.Reconcile(finalIndexes.Select(i => i.Name), runCompleted);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Could not read the indexes of '{CollectionName}' to reconcile the index states of its types",
+                            collection.CollectionName);
+                    }
+
+                    // AB#9302: checked again after the read. A token check cannot fence a write already started, and a
+                    // loss is noticed only by the heartbeat (every 15 s): the states are written with $set on IndexStates
+                    // only, and the next run reconciles them.
+                    if (lockLostToken.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            "Lost '{LockId}' while updating the indexes of '{CollectionName}'; its index states are not " +
+                            "persisted, the next index update reconciles them", IndexUpdateLockId,
+                            collection.CollectionName);
+                    }
+                    else
+                    {
+                        // Always save tracked index states before ending tracking
+                        try
+                        {
+                            // AB#9302: the token is checked again after the session and the read of the stored states
+                            // and before each write.
+                            using var updateSession = await GetSessionAsync();
+                            if (!await _indexStateService.BulkUpdateIndexStatesAsync(updateSession, lockLostToken))
+                            {
+                                _logger.LogWarning(
+                                    "Lost '{LockId}' while persisting the index states of '{CollectionName}'; the " +
+                                    "remaining states are not persisted, the next index update reconciles them",
+                                    IndexUpdateLockId, collection.CollectionName);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Failed to persist index states for collection of CkTypeId '{CkTypeId}'",
+                                collectionRootType.CkTypeId);
+                        }
+                    }
+                }
             }
             finally
             {
@@ -1120,6 +1498,24 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         public (string Name, string HolderType)? Holder(CkTypeIndex index) =>
             KeySpec(index) is { } keySpec && _holders.TryGetValue(keySpec, out var holder) ? holder : null;
 
+        private readonly HashSet<string> _keptAfterFailedBuild = new(StringComparer.Ordinal);
+
+        /// <summary>
+        ///     AB#9302: the index <paramref name="name" /> stays because the build of its replacement failed. It remains a
+        ///     candidate for the later definitions of the run (one of them may have its definition and adopt it) and the
+        ///     cleanup at the end of the collection does not drop it.
+        /// </summary>
+        public void KeepAfterFailedBuild(string name) => _keptAfterFailedBuild.Add(name);
+
+        /// <summary>AB#9302: true when <see cref="KeepAfterFailedBuild" /> kept <paramref name="name" />.</summary>
+        public bool IsKeptAfterFailedBuild(string name) => _keptAfterFailedBuild.Contains(name);
+
+        /// <summary>
+        ///     AB#9302: a later build of the run replaced the kept index <paramref name="name" />: the cleanup drops it
+        ///     after that build, as any replaced index.
+        /// </summary>
+        public void Replaced(string name) => _keptAfterFailedBuild.Remove(name);
+
         /// <summary>The holder of a system-level index (no defining type).</summary>
         public const string SystemHolder = "(system)";
 
@@ -1291,28 +1687,33 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
         catch (MongoCommandException)
         {
-            // The new index was not built: the index it replaces stays.
-            if (occupant != null)
+            // The new index was not built: the index it replaces stays. AB#9302: in a CK collection run it stays in
+            // repositoryIndices, protected from the cleanup, so a later definition with its keys still finds and adopts it
+            // (two definitions whose existing indexes hold each other's keys, the failing one processed first).
+            foreach (var kept in new[] { occupant, replaced, previous }.OfType<CkTypeIndexWithName>())
             {
-                repositoryIndices.Remove(occupant);
-            }
-
-            if (replaced != null)
-            {
-                repositoryIndices.Remove(replaced);
-            }
-
-            if (previous != null)
-            {
-                repositoryIndices.Remove(previous);
+                if (keySpecs != null)
+                {
+                    keySpecs.KeepAfterFailedBuild(kept.Name);
+                }
+                else
+                {
+                    repositoryIndices.Remove(kept);
+                }
             }
 
             throw;
         }
 
         keySpecs?.Remember(ckTypeIndex, targetName, SharedIndexKeySpecs.HolderOf(indexDefiningType));
-        return new IndexCreation(targetName,
-            new[] { occupant, previous, replaced }.OfType<CkTypeIndexWithName>().Select(i => i.Name).Distinct().ToList());
+        var replacedNames = new[] { occupant, previous, replaced }.OfType<CkTypeIndexWithName>().Select(i => i.Name)
+            .Distinct().ToList();
+        foreach (var name in replacedNames)
+        {
+            keySpecs?.Replaced(name);
+        }
+
+        return new IndexCreation(targetName, replacedNames);
     }
 
     private static async Task CreateIndexAsync<TKey, TDocument>(IMongoDbDataSourceCollection<TKey, TDocument> collection,
@@ -1564,6 +1965,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
             if (legacy != null)
             {
+                keySpecs?.Replaced(legacy.Name);
                 _logger.LogInformation(
                     "Index '{IndexName}' of '{CollectionName}' is in the tiebreak shape; the legacy index '{LegacyName}' " +
                     "is dropped after the collection's other indexes (AB#8960)",
@@ -1587,15 +1989,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // ReSharper disable once ConditionIsAlwaysTrueOrFalse
             if (indexDefiningType != null && indexName != null)
             {
-                // AB#9391: a failure never replaces the Applied state of an index that exists. When another definition
-                // of the type is served by the index under this definition's expected name in this run (two definitions
-                // whose existing indexes hold each other's keys), the failure is recorded under the alternate name the
-                // definition's index gets while the expected name is taken - the name a later successful build uses.
-                var failedName = _indexStateService.IsTrackedApplied(indexDefiningType.CkTypeId, indexName,
-                    collection.CollectionName)
-                    ? alternateName
-                    : indexName;
-
                 // AB#9391: the legacy index the upgrade could not replace still serves the definition - the type's own
                 // or one another type kept earlier in this run after its build failed too: Applied under it, next to the
                 // failure of the build.
@@ -1615,8 +2008,14 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                         targetShape: false);
                 }
 
-                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, failedName,
-                    collection.CollectionName, IndexState.Failed, ex.Message);
+                // AB#9391: a failure never replaces the Applied state of an index that exists. When the index under this
+                // definition's expected name serves the type in this run - the legacy index that keeps serving it (above,
+                // CodeRabbit on PR #269), or another definition of the type (two definitions whose existing indexes hold
+                // each other's keys), also one processed after this one (AB#9302) - the failure is recorded under the
+                // alternate name the definition's index gets while the expected name is taken, the name a later successful
+                // build uses. The name is chosen after every definition of the collection was processed.
+                _indexStateService.TrackFailure(indexDefiningType.CkTypeId, indexName, alternateName,
+                    collection.CollectionName, ex.Message);
             }
             else
             {
@@ -1814,7 +2213,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return await _repositoryClient.GetSessionAsync();
     }
 
-    public async Task CreateRtAssociationIndexesAsync()
+    public Task CreateRtAssociationIndexesAsync() => CreateRtAssociationIndexesAsync(CancellationToken.None);
+
+    /// <summary>
+    ///     AB#9302: the RtAssociations indexes; <paramref name="lockLostToken" /> (an index update's lost lock) stops
+    ///     before the next create or drop.
+    /// </summary>
+    private async Task CreateRtAssociationIndexesAsync(CancellationToken lockLostToken)
     {
         _logger.LogDebug("Creating indexes for RtAssociations collection");
 
@@ -2004,6 +2409,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         foreach (CkTypeIndex ckTypeIndex in ckTypeIndices)
         {
+            lockLostToken.ThrowIfCancellationRequested();
             _ = await CreateOrUpdateIndex(collection.CollectionName, ckTypeIndex, existingIndexes, collection,
                 uniqueIndexNumber++);
         }
@@ -2011,6 +2417,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // We cleanup old indexes that are not defined anymore
         foreach (var repositoryIndex in existingIndexes)
         {
+            lockLostToken.ThrowIfCancellationRequested();
             _logger.LogDebug("Dropping old index '{IndexName}' for RtAssociations collection",
                 repositoryIndex.Name);
             await collection.DropIndexAsync(repositoryIndex.Name);
