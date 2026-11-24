@@ -118,6 +118,46 @@ public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
+    ///     An ordinary model whose name is a pattern for a System model (<c>Sy.tem.Identity</c>, <c>S.*</c>) passes the
+    ///     name refusal, but its import must not touch the element rows of System.Identity: the element delete of an
+    ///     import selects rows by the escaped model name.
+    /// </summary>
+    [Theory]
+    [InlineData("Sy.tem.Identity")]
+    [InlineData("S.*")]
+    public async Task OrdinaryModelWhoseNameIsAPatternForSystemIdentity_LeavesTheSystemIdentityRowsAlone(string name)
+    {
+        await WithIdentityTenantAsync("refregex", async (tenant, tenantId) =>
+        {
+            var before = await SnapshotAsync(tenantId, IdentityName);
+            Assert.NotEmpty(before);
+
+            // Whether the odd name imports or fails later does not matter here; the System.Identity rows must not change.
+            await Record.ExceptionAsync(() => tenant.ImportCkModelAsync(SmallModel(new CkModelId(name, new CkVersion(1, 0, 0)))));
+            await Record.ExceptionAsync(() => tenant.ImportCkModelAsync(SmallModel(new CkModelId(name, new CkVersion(1, 1, 0)))));
+
+            Assert.Equal(before, await SnapshotAsync(tenantId, IdentityName));
+            await AssertGenericUserWriteRefusedAsync(tenant);
+        });
+    }
+
+    [Theory]
+    [InlineData("System.Identity", "System.Identity-3.8.0", true)]
+    [InlineData("System.Identity", "SystemXIdentity-3.8.0", false)]
+    [InlineData("Sy.tem.Identity", "System.Identity-3.8.0", false)]
+    [InlineData(".*", "System.Identity-3.8.0", false)]
+    [InlineData("Foo", "Foo-Bar-1.0.0", false)]
+    [InlineData("System", "System.Identity-3.8.0", false)]
+    [InlineData("System", "System-2.8.0", true)]
+    public void ModelElementsPattern_MatchesOnlyTheVersionsOfThatModel(string modelName, string ckModelId, bool matches)
+    {
+        var pattern = Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.DatabaseCkModelRepository
+            .ModelElementsPattern(modelName);
+
+        Assert.Equal(matches, System.Text.RegularExpressions.Regex.IsMatch(ckModelId, pattern));
+    }
+
+    /// <summary>
     ///     Abuse case (b): an ordinary model that pins a self-built System.Identity cannot bring it along - a compiled
     ///     model carries only its own elements - and does not resolve: no System.Identity is installed, and the model does
     ///     not become <c>Available</c>.
@@ -247,8 +287,12 @@ public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture)
         await session.CommitTransactionAsync();
     }
 
-    /// <summary>Every CK document of the tenant (all <c>Ck*</c> collections), as a comparable text.</summary>
-    private async Task<string> SnapshotAsync(string tenantId)
+    /// <summary>
+    ///     Every CK document of the tenant (all <c>Ck*</c> collections), or only those of the model
+    ///     <paramref name="modelName" /> (its <c>CkModel</c> row and the element rows of any of its versions), as a
+    ///     comparable text.
+    /// </summary>
+    private async Task<string> SnapshotAsync(string tenantId, string? modelName = null)
     {
         var database = GetTenantDatabase(tenantId);
         var names = (await (await database.ListCollectionNamesAsync(cancellationToken: TestContext.Current.CancellationToken))
@@ -258,7 +302,13 @@ public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture)
         var parts = new List<string>();
         foreach (var name in names)
         {
-            var documents = await database.GetCollection<BsonDocument>(name).Find(FilterDefinition<BsonDocument>.Empty)
+            var filter = modelName == null
+                ? FilterDefinition<BsonDocument>.Empty
+                : Builders<BsonDocument>.Filter.Or(
+                    Builders<BsonDocument>.Filter.Eq("modelId", modelName),
+                    Builders<BsonDocument>.Filter.Regex("ckModelId",
+                        new BsonRegularExpression($"^{System.Text.RegularExpressions.Regex.Escape(modelName)}-[0-9]")));
+            var documents = await database.GetCollection<BsonDocument>(name).Find(filter)
                 .Sort(Builders<BsonDocument>.Sort.Ascending("_id")).ToListAsync(TestContext.Current.CancellationToken);
             parts.Add($"{name}:{string.Join("|", documents.Select(d => d.ToJson()))}");
         }
@@ -275,6 +325,15 @@ public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture)
 
     private IMongoDatabase GetTenantDatabase(string tenantId)
     {
+        // One client per test class instance: a MongoClient holds a connection pool.
+        _client ??= CreateClient();
+        return _client.GetDatabase(tenantId.ToLowerInvariant());
+    }
+
+    private MongoClient? _client;
+
+    private MongoClient CreateClient()
+    {
         var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
         var urlBuilder = new MongoUrlBuilder
         {
@@ -285,6 +344,6 @@ public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture)
             DatabaseName = config.AuthenticationDatabaseName,
             DirectConnection = config.UseDirectConnection
         };
-        return new MongoClient(urlBuilder.ToMongoUrl()).GetDatabase(tenantId.ToLowerInvariant());
+        return new MongoClient(urlBuilder.ToMongoUrl());
     }
 }

@@ -39,9 +39,13 @@
   CK import (bot `ImportCk` / `ImportCkBatch` jobs, whoever queued them) - refuses every service-managed model (`System`,
   `System.*`, case-insensitive, trimmed) in every version, also when the tenant does not have it, before anything is
   written: `ServiceManagedCkModelImportRefusedException` with code `CK_SERVICE_MANAGED_MODEL` (the asset repository's REST
-  code), WARN log, counter `octo.ck.explicit_import.refused`. Operators lose the explicit System downgrade of decision Q5;
-  the repair path is the owning service's embedded import (restart, `ClearCache`, `ReRunTenantSetup`). Non-System models
-  keep the explicit downgrade with WARN. New public predicate `ServiceManagedCkModels.IsServiceManaged` (single source;
+  code), WARN log, counter `octo.ck.explicit_import.refused`. Operators lose the explicit System downgrade of decision Q5:
+  the owning service's embedded import (restart, `ClearCache`, `ReRunTenantSetup`) only brings in a missing or older
+  version; a damaged model of the same version or a too new one needs a manual database repair. Non-System models
+  keep the explicit downgrade with WARN. The element delete of an import (`DeletePreviousVersion`,
+  `PreserveExtensibleEnumValues`) escapes the model name in its pattern (`ModelElementsPattern`): before, a caller
+  import of an ordinary model named `Sy.tem.Identity` or `.*` deleted the element rows of System.Identity or of every
+  model. New public predicate `ServiceManagedCkModels.IsServiceManaged` (single source;
   the tenant upgrade guard uses it). No `ITenantContext` member changed. Tests in other repositories that installed a
   System model through the caller overload must load it into a test catalog and import it by id (consumer PRs merge
   first).

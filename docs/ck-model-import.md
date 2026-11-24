@@ -253,7 +253,11 @@ lacks the installed `Available` version (next bullet but one).
   import of service-managed CK model ...` and counts `octo.ck.explicit_import.refused` (no tags: the name is
   caller-supplied). The predicate is platform-wide on purpose: service-managed descriptors are registered per host (the bot
   knows only System.Bot), so they cannot decide it. Service-managed models reach a tenant only through the `CkModelId`
-  overload (embedded/startup import, blueprint provider, `ClearCache` / `ReRunTenantSetup`), which is unchanged. Engine
+  overload (embedded/startup import, blueprint provider, `ClearCache` / `ReRunTenantSetup`), which is unchanged; it only
+  brings in a missing or older version (a damaged same-version or a too new System needs a manual database repair).
+  The element delete of every import selects rows by `ModelElementsPattern(name)` = `^<escaped name>-[0-9]`: an
+  unescaped name (`Sy.tem.Identity`, `.*`) of an ordinary caller model used to match and delete the element rows of
+  System models. Engine
   tests that must put a tenant on a specific System version use the internal seam
   `TenantContext.ImportServiceManagedCompiledCkModelForTestsAsync` (`CkModelImportGuardTests.InstallAsServiceAsync`); tests
   in other repositories load the model into a test catalog and import it by id. Tests:
