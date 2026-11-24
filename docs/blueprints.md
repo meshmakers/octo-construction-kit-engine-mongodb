@@ -1,3 +1,8 @@
+---
+description: "Blueprint integration in the MongoDB runtime engine: models, seed data, history, update flow"
+applies_to: src/Runtime.Engine.MongoDb/Blueprints/**, tests/Runtime.Engine.MongoDb.IntegrationTests/Blueprint*.cs
+---
+
 # Blueprint Integration for MongoDB
 
 This documentation describes the blueprint integration in the MongoDB Runtime Engine.
@@ -420,6 +425,6 @@ Blueprints from GitHub repositories.
 
 ## See Also
 
-- [Blueprint Documentation (Engine)](../../octo-construction-kit-engine/docs/blueprints.md) - Detailed blueprint specification
+- `octo-construction-kit-engine/docs/blueprints.md` (Blueprint Documentation, Engine) - Detailed blueprint specification
 - [ITenantContext](../src/Runtime.Contracts.MongoDb/ITenantContext.cs) - Tenant management interface
-- [IBlueprintCatalogManager](../../octo-construction-kit-engine/src/ConstructionKit.Engine/BlueprintCatalogs/IBlueprintCatalogManager.cs) - Catalog manager interface
+- `octo-construction-kit-engine/src/ConstructionKit.Engine/BlueprintCatalogs/IBlueprintCatalogManager.cs` (IBlueprintCatalogManager) - Catalog manager interface

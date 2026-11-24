@@ -1,3 +1,8 @@
+---
+description: StreamData archive concept and implementation plan across engine, repositories and adapters
+background: true
+---
+
 # StreamData Archive — Concept & Implementation Plan
 
 **Status:** Implemented (T1–T17 of the plan + UI/Authz/Observability follow-ups, see §20)

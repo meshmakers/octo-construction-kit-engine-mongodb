@@ -1,3 +1,8 @@
+---
+description: StreamData retention and downsampling design per archive (design only)
+background: true
+---
+
 # StreamData Retention & Downsampling — Design
 
 **Status**: Design only (concept §8 T17). No implementation in this commit; the doc captures the

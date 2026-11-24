@@ -1,3 +1,8 @@
+---
+description: "Tenant lifecycle stalled-tenant reconciler claim: lease, attempt count, minimum age"
+applies_to: src/Runtime.Contracts.MongoDb/TenantLifecycle/**, src/Runtime.Engine.MongoDb/Repositories/TenantLifecycle/**
+---
+
 # Tenant lifecycle: stalled-tenant reconciler claim (AB#4348, AB#8117)
 
 `ITenantLifecycleStore` keeps one record per tenant (state `Creating` / `Active` / `Failed` / `Deleting`).

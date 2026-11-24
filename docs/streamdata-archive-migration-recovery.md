@@ -1,3 +1,8 @@
+---
+description: Manual recovery procedure for tenants hit by the System.StreamData 1.1.0 to 1.2.0 migration bug
+background: true
+---
+
 # StreamData Archive Migration Recovery (System.StreamData 1.1.0 → 1.2.0)
 
 The Phase 2 type-rename migration that introduced the abstract `Archive` base

@@ -1,3 +1,8 @@
+---
+description: "Linked binaries (GridFS) and transactions: deferred destructive work after commit"
+applies_to: src/Runtime.Engine.MongoDb/Repositories/MongoDb/MongoLinkedBinaryDataSource*.cs
+---
+
 # Linked binaries (GridFS) and transactions
 
 GridFS is not part of the MongoDB transaction of an `IOctoSession`. To keep bytes consistent with the

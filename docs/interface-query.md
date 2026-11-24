@@ -1,3 +1,8 @@
+---
+description: "Interface query GetRtEntitiesByInterfaceAsync: global order across all implementers of a CK interface"
+applies_to: tests/Runtime.Engine.MongoDb.IntegrationTests/InterfaceQuery/**
+---
+
 # Interface query: `ITenantRepository.GetRtEntitiesByInterfaceAsync` (AB#7019)
 
 Developer documentation of the engine method that returns the entities of **all implementers of a CK interface** in one

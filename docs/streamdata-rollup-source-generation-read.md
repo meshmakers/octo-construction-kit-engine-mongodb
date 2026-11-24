@@ -1,3 +1,8 @@
+---
+description: "Rollup ladders: how one rollup level reads the level below it during recompute"
+applies_to: src/Runtime.Engine.CrateDb/**, src/Runtime.Engine.MongoDb/StreamData/**
+---
+
 # Rollup Ladders — Reading a Rollup as the Source of the Next Level
 
 Concept for how one rollup level reads the level below it, so that every level of a ladder
