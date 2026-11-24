@@ -178,6 +178,48 @@ public class EnergyCommunityAutoIncrementUpgradeTests(CkModelImportGuardFixture 
     }
 
     /// <summary>
+    ///     AC 5: the counter seeds of the demo data (energy-community-deployment and pipeline-editor) still import into a
+    ///     tenant on the embedded System, and numbering continues from the current value they carry, in their own
+    ///     format. The pipeline-editor seed used the CK v1 ids <c>System-1.0.0/AutoIncrement-1.0.0</c>, which
+    ///     <c>CkTypeId</c> refuses whatever the System version (run b320); it was moved to the current ids with AB#9756
+    ///     (pipeline-editor 0032172), and the copy here is that fixed file.
+    /// </summary>
+    [Theory]
+    [InlineData("energy-community-deployment-rt-autoincrement.yaml")]
+    [InlineData("pipeline-editor-rt-autoincrement.yaml")]
+    public async Task DemoCounterSeeds_ImportOnTheEmbeddedSystem_AndNumberingContinues(string seedFile)
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"ecupdemo{Guid.NewGuid():N}"[..20];
+        try
+        {
+            var tenant = await CreateChildTenantAsync(systemContext, tenantId);
+            foreach (var file in new[] { "ck-basic-2.yaml", "ck-basic.energy-2.yaml", "ck-energycommunity-5.yaml" })
+            {
+                await tenant.ImportCkModelAsync(await CompiledModelAsync(file));
+            }
+
+            var repository = tenant.GetTenantRepository();
+            await ImportRtAsync(repository, await File.ReadAllTextAsync(Path.Combine(TestDataFolder, seedFile),
+                TestContext.Current.CancellationToken));
+            var database = GetTenantDatabase(tenant.DatabaseName);
+            Assert.Equal(0, await CounterValueAsync(database, DocumentCounterId));
+            Assert.Equal(274, await CounterValueAsync(database, CustomerCounterId));
+
+            var document = BillingDocument();
+            var customer = Customer();
+            await ApplyAsync(repository, Insert(document), Insert(customer));
+
+            Assert.Equal("25-0001", Number(document, "DocumentNumber"));
+            Assert.Equal("275", Number(customer, "CustomerNumber"));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
     ///     The System 2.8.0 of the fixture really is the 2.8.0 shape: the AutoIncrement type has only End, Format and
     ///     CurrentValue, and nothing System 2.9.0 added is left.
     /// </summary>
