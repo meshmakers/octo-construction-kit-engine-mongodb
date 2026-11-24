@@ -325,7 +325,7 @@ the catalog side.
   (cache rebuilt from Mongo) and `CkMetaModelLegacyDocumentTests` (`MethodAuthorizationDataAccess_*`,
   `MethodAuthorization_WrittenBefore*`) cover it. A service whose persistence predates the field would drop it on import and then
   treat a `Read` method as `Write` (fail-closed, but wrong); the engine's `minEngineVersion` makes a service with an older engine
-  refuse the model (message 126). A separate gateway reads the value.
+  refuse the model (message 126). Reading the value (method-authorization gateway) is not part of this repository.
 **Phase 3 addition (touch-point row 10 of the method result marker `sensitive`):**
 - `sensitive` (`CkMethodResultDto.Sensitive`, `bool`) marks the whole result of a method as never to be logged, audited or
   traced. It is persisted on the embedded `CkMethodResultDto` (class map `CkMethodResultDto` in `MongoRepositoryClient`,
@@ -369,7 +369,7 @@ the catalog side.
   inherited attribute (`Name`) resolves to the very string the fallback built (`attributes.` + camelCase of the written
   path), so no index is rebuilt. Inherited record paths (`attributes.timeRange.attributes.from` instead of the fallback
   `attributes.timeRange.From`) and array paths (`attributes.tags`) change the key spec once - the old index pointed at
-  a field that is never stored (decided by Odin 2026-11-24; no shipped model indexes such a path).
+  a field that is never stored (decided 2026-11-24; no shipped model indexes such a path).
 - A path that still does not resolve logs `Could not resolve attribute path ... using fallback` and falls back as
   before. Known limitation: the merged text index is defined on the collection root and takes fields of descendants;
   those resolve against the root's chain only. Tests: `IndexAttributePathsTests` (unit, one per abuse case),

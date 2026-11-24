@@ -366,7 +366,7 @@ guard (`_serviceManagedCkModelsAttempted`, keyed `{TenantId}:{modelName}`) makes
 at most once per (tenant, model) — it breaks the `ImportCkModelAsync → RetryPendingMigrations →
 tenant-resolve → here` recursion. `_streamDataAutoImportAttempted` is the StreamData analogue.
 
-**Guard invalidation on tenant delete/update (fix).** Because the guard is per-process
+**Guard invalidation on tenant delete/update.** Because the guard is per-process
 and keyed only by tenant, a **delete+recreate of a tenant within one process lifetime** (e.g.
 `om_initialize_tenant` re-provisioning) would hit the still-armed guard and skip the auto-import,
 leaving the fresh tenant without its service-managed model. `ISystemContext.InvalidateTenantResolveImportGuards(tenantId)`
@@ -375,7 +375,7 @@ clears both guards for a tenant; the Pre-delete / Pre-update tenant lifecycle co
 unload, so the next resolve re-imports. Regression test:
 `ServiceManagedCkModelDescriptorTests.InvalidateTenantResolveImportGuards_ReenablesImportAfterTenantRecreate`.
 
-**Blueprint floor → descriptor version redirect (fix).** The cockpit blueprints declare
+**Blueprint floor → descriptor version redirect.** The cockpit blueprints declare
 `ckModelDependencies: System.UI-[2.2.0,3.0)` as a *pure satisfiability floor* — the actual install
 target is the descriptor's embedded version, NOT the floor's lower bound. But `BlueprintService`
 still passes the range's `MinVersion` (2.2.0) to `EnsureCkModelInstalledAsync` when the dependency

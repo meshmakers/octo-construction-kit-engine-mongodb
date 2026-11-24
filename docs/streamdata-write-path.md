@@ -88,7 +88,7 @@ the computed columns derived from them (current or pending formula, transitively
 - The COPY projection names top-level columns only: `information_schema` also lists object sub-columns (`obj['member']`), which
   are copied with their object column and are kept in the manifest description (`StagingCopyRunner.TopLevelColumn`).
 - When the CK model cannot be read, a backup leaves out the recorded columns only (warning). Failing the dump instead was
-  rejected (Odin, 2026-11-16): a tenant with a broken model (ResolveFailed) must stay backupable for its recovery. Residual
+  rejected (decided 2026-11-16): a tenant with a broken model (ResolveFailed) must stay backupable for its recovery. Residual
   risk: a column made Hidden by a model that cannot be read, and not yet recorded by the re-validation, can end up in the backup.
   Test: `HiddenColumnExclusionTests.AModelThatCannotBeRead_LeavesTheRecordedColumnsOut`.
 

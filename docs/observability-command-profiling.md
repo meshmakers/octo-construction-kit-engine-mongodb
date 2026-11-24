@@ -14,7 +14,7 @@ without changing any application code path.
 ### Metrics
 
 Meter name: **`Meshmakers.Octo.MongoDb`** (registered in
-`octo-common-services/Observability/ObservabilityBuilder.cs` — every service that calls
+`ObservabilityBuilder` (repository octo-common-services) — every service that calls
 `builder.AddObservability()` exposes the metrics over Prometheus automatically).
 
 | Instrument | Type | Tags | Purpose |

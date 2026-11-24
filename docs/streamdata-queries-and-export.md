@@ -180,7 +180,7 @@ Semantics preserved:
   runs; at one window per bin an empty result evicts the phase and re-probes once). Never put the probe back
   under `GetDataAsync`: ten parallel chart queries with retried probes exhausted the pool of 32 of a large tenant. Before the bin edges followed the stored phase the raw
   `From` was the origin: a relative "last 2 days" request (From 18:37:42) put every bin edge inside a stored 15-minute
-  window and the §7 predicate dropped all of them (FH lab: 0/192 bins with a value, resolution-aware charts empty until
+  window and the §7 predicate dropped all of them (a test lab: 0/192 bins with a value, resolution-aware charts empty until
   the resolver switched to a rollup).
   Only a time-range archive without a `Period` still uses the probe route.
   The grain route snaps the origin itself (rollups on the grain, time-range archives in their window phase); callers
@@ -211,7 +211,7 @@ Rules to keep:
   any SQL.
 - **`Limit` does not decide the bin count** for local-day bins and is not required;
   From and To stay required. Without the options From, To and Limit are required as before.
-- **Every bin is a whole local day** (review of PR #226, decided by Odin 2026-11-04). The source range is the axis,
+- **Every bin is a whole local day** (review of PR #226, decided 2026-11-04). The source range is the axis,
   `[binStarts[0], end of the last bin)`, not the requested From/To: a `From` inside a day gives a first bin that counts
   that whole day (hourly raw, gas day 06:00 Vienna, From 2026-03-27T00:00Z: first bin 2026-03-26T05:00Z, Count 24, not 5),
   and a `To` inside a day gives a last bin that counts that whole day, as the grain route reads from its snapped origin.

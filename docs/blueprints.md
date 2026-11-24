@@ -427,4 +427,4 @@ Blueprints from GitHub repositories.
 
 - `octo-construction-kit-engine/docs/blueprints.md` (Blueprint Documentation, Engine) - Detailed blueprint specification
 - [ITenantContext](../src/Runtime.Contracts.MongoDb/ITenantContext.cs) - Tenant management interface
-- `octo-construction-kit-engine/src/ConstructionKit.Engine/BlueprintCatalogs/IBlueprintCatalogManager.cs` (IBlueprintCatalogManager) - Catalog manager interface
+- `IBlueprintCatalogManager` (repository octo-construction-kit-engine) - Catalog manager interface

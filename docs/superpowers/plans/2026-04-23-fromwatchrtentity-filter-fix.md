@@ -19,7 +19,7 @@ background: true
 
 ## Repo paths
 
-All paths in this plan are relative to the monorepo root `<monorepo root>`. Always use `git -C <repo-folder>` for git — never `cd` into sub-repos (see `AGENTS.md`).
+All paths in this plan are relative to the monorepo root `<monorepo root>`. Always use `git -C <repo-folder>` for git — never `cd` into sub-repos.
 
 - **CK engine repo:** `octo-construction-kit-engine`
 - **MongoDB repo:** `octo-construction-kit-engine-mongodb`
@@ -54,7 +54,7 @@ dotnet test octo-construction-kit-engine-mongodb/tests/StreamData.UnitTests/Stre
 dotnet test octo-construction-kit-engine-mongodb/tests/Runtime.Engine.MongoDb.IntegrationTests/Runtime.Engine.MongoDb.IntegrationTests.csproj -c DebugL
 ```
 
-After changes in `octo-construction-kit-engine`, **always re-run `Invoke-BuildAll`** before rebuilding the MongoDB repo — it repacks the CK engine NuGet packages into `../nuget/` where the MongoDB repo picks them up (see `AGENTS.md` → Build System).
+After changes in `octo-construction-kit-engine`, **always re-run `Invoke-BuildAll`** before rebuilding the MongoDB repo — it repacks the CK engine NuGet packages into `../nuget/` where the MongoDB repo picks them up.
 
 ---
 
@@ -952,7 +952,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ## Phase F — Integration tests (Testcontainers MongoDB replica set)
 
-These tests require Docker to be running locally (or `USE_LOCAL_MONGODB=true` against a local replica-set instance — see `octo-construction-kit-engine-mongodb/AGENTS.md`).
+These tests require Docker to be running locally (or `USE_LOCAL_MONGODB=true` against a local replica-set instance — see `docs/test-configuration.md`).
 
 ### Task 8: Add test CK types for watch scenarios
 
@@ -1550,7 +1550,7 @@ Expected:
 
 ## Cross-cutting reminders
 
-- **Never chain bash commands with `&&`, `||`, `;`** — the user's memory insists on separate Bash tool calls (see `AGENTS.md`).
+- **Never chain bash commands with `&&`, `||`, `;`** — the user's memory insists on separate Bash tool calls.
 - **Never `cd` into sub-repos** — always `git -C <repo-folder>`.
 - **Commit messages** follow `<Fix|New>: <description>` with the Co-Authored-By trailer. If an Azure DevOps work item is referenced, prefix with `AB#<number>`.
 - **Pre-image capture is a collection-level MongoDB setting.** Flipping the YAML flag after a collection is already created requires re-running `MongoDbRepositoryDataSource.CreateCollectionIfNotExistsAsync` logic; Testcontainers avoids this problem because each test run starts from a fresh replica set.

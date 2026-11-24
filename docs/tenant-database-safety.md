@@ -1,6 +1,6 @@
 ---
 description: Tenant delete as two-phase drop, tenant namespace gate, database ownership marker
-applies_to: src/Runtime.Engine.MongoDb/Repositories/Tenant*/**, src/Runtime.Contracts.MongoDb/TenantOwnership/**
+applies_to: src/Runtime.Engine.MongoDb/Repositories/Tenant*/**, src/Runtime.Contracts.MongoDb/TenantOwnership/**, src/**/*Context.cs, src/**/TenantDeletionHandle.cs
 ---
 
 ### Race-safe Tenant Delete — Two-phase Drop
@@ -186,7 +186,7 @@ parent has no marker and no registration anywhere; the earlier rule "not registe
 registry" refused every re-attach and restore of a tenant with children), and a corrupt own row that
 registers another instance's system database does not hide it. A system database whose rows all predate
 `parentTenantId` is recognised by its marker only (every instance stamps it on start). The marker
-recognises the system database of an instance without any tenant. Accepted gap (Odin 2026-11-11): the system
+recognises the system database of an instance without any tenant. Accepted gap (decided 2026-11-11): the system
 database of an instance that runs an older version and has no tenant carries neither signal, so it is not
 recognised; rollout rule: upgrade all instances on one MongoDB server together. This snapshot is the ONE
 classification; attach, restore and delete all decide with `TenantDatabaseForeignOwnership.FindAsync`

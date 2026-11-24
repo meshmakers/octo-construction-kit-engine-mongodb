@@ -1,7 +1,7 @@
 # Runtime.Engine.MongoDb.IntegrationTests
 
 Integration tests of the MongoDB runtime engine against a Testcontainers MongoDB replica set (and, for the stream data
-tests, a Testcontainers CrateDB). Layout, parallelism rules and the CI time budget: repository `CLAUDE.md`, section
+tests, a Testcontainers CrateDB). Layout, parallelism rules and the CI time budget: `docs/test-configuration.md`, section
 *Test layout, parallelism rules and the CI time budget*.
 
 ## Container resources and parallelism (AB#9250)
@@ -192,7 +192,7 @@ dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category
 dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait "Category=Performance"
 ```
 
-Numbers measured on a developer machine: repository `CLAUDE.md`, section *Interface query*.
+Numbers measured on a developer machine: `docs/interface-query.md`.
 
 ## Stress tests (`Category=Stress`, AB#8679 / AB#8680)
 
