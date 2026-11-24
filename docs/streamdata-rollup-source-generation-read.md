@@ -10,7 +10,7 @@ Concept for how one rollup level reads the level below it, so that every level o
 including while the source is being recomputed.
 
 Related: `streamdata-archive-concept.md` (archives, storage layout), the *Optimistic Recompute —
-Per-Window Generation Pointer* section of the repository `CLAUDE.md` (the recompute itself).
+Per-Window Generation Pointer* section of `streamdata-rollups.md` (the recompute itself).
 
 ## 1. Background: what a rollup table holds
 

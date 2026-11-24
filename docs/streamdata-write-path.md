@@ -5,7 +5,7 @@ applies_to: src/Runtime.Engine.CrateDb/**, src/Runtime.Engine.MongoDb/StreamData
 
 ## StreamData: Archives and Rollups
 
-### Schema Instance Prefix (AB#4946 / Epic AB#4944)
+### Schema Instance Prefix
 
 `TenantSchema.SchemaName` derives the per-tenant CrateDB schema from the tenant id alone, so two
 OctoMesh instances sharing one CrateDB cluster collide on identical tenant ids.
@@ -16,7 +16,7 @@ services) prepends an instance prefix: `{prefix}_{tenant}`. Rules:
 - **Empty prefix ⇒ byte-identical legacy naming** — pinned by
   `TenantSchemaInstancePrefixTests.SchemaName_WithoutPrefix_IsByteIdenticalToLegacyNaming`.
   Existing instances must never set it, or their tenants' schemas would move. Deliberately a
-  separate setting, NOT derived from the RabbitMQ `instancePrefix` (test-2 main already runs
+  separate setting, NOT derived from the RabbitMQ `instancePrefix` (an existing test environment already runs
   prefix `main` with un-prefixed CrateDB schemas).
 - The prefix is cleaned (lowercase alphanumeric) and applied **process-wide, set-once**
   (`TenantSchema.SetInstancePrefix`, initialized from the bound instance options in the
@@ -33,7 +33,7 @@ services) prepends an instance prefix: `{prefix}_{tenant}`. Rules:
   on `StreamData.UnitTests` (pure-logic assembly, serialization costs ~nothing); the naming
   matrix itself tests the pure `SchemaName(tenantId, prefix)` core.
 
-### CrateDB connection pool: failed statements give their connection back (AB#8266)
+### CrateDB connection pool: failed statements give their connection back
 
 Every CrateDB access leases its connection through `CrateDatabaseClient.LeaseConnectionAsync`; the pool is per tenant
 (`StreamData:MaxPoolSize`, default 32, one `NpgsqlDataSource` per tenant in `CrateDbConnectionAccess`). Rules to keep:
@@ -41,17 +41,17 @@ Every CrateDB access leases its connection through `CrateDatabaseClient.LeaseCon
 - **A failed statement used to cost a pool slot for the life of the process.** CrateDB reports the failed-transaction
   state after every failed statement, Npgsql's reset on close then sends a `ROLLBACK`, CrateDB rejects it (5.x `XX000`,
   6.x `42601`), and the exception leaves `NpgsqlConnection.CloseAsync` **before** the connector goes back to the pool.
-  `DisposeConnectionSafelyAsync` swallowed the error (AB#4189, AB#7138) but the connection stayed open. A rollup over a
+  `DisposeConnectionSafelyAsync` swallowed the error but the connection stayed open. A rollup over a
   missing table (every tick) drained the 32 slots within a minute of each pod start; after that every statement of the
   tenant, a `DROP TABLE` of `DeleteArchive` too, waited 15 s for a slot, was retried and ended as a "35.0 s"
-  `StreamDataStatementTimeoutException` (test-2 `scratch-eiq-adopt-a`, 2026-11-04).
+  `StreamDataStatementTimeoutException` (a scratch tenant on a test environment, 2026-11-04).
 - **Now:** after the rejected `ROLLBACK` the still-open connection runs `SELECT 1` (CrateDB answers with the idle state,
   so the next reset sends no `ROLLBACK`) and is disposed again, which returns it to the pool. If that fails too, the
   physical connection is broken through the driver's internal `NpgsqlConnector.Break` (reflection, resolved once; there is
   no public API) so the pool drops it and frees the slot; if even that is impossible it is logged as an error (slot lost).
   `CrateDatabaseClient.CanDiscardConnections` is pinned by a unit test, so an Npgsql update that renames the internals turns
   the build red. Npgsql has no setting that skips the rollback (`No Reset On Close` only covers `DISCARD ALL`), and
-  `PoolingEnabled=false` would cost a new connection per statement again (AB#4278).
+  `PoolingEnabled=false` would cost a new connection per statement again.
 - **An exhausted pool fails fast.** `LeaseConnectionAsync` turns the driver's "connection pool has been exhausted"
   (`NpgsqlException` + inner `TimeoutException`, `IsConnectionPoolExhausted`) into
   `StreamDataConnectionPoolExhaustedException` (tenant id in the message). It is not an `NpgsqlException`, so
@@ -65,7 +65,7 @@ error; a discarded connection frees its slot; red without the fix),
 `StreamData.UnitTests/CrateDatabaseClientConnectionPoolTests` (classification, no retry, breaker stays closed, driver
 internals present).
 
-### Backups leave Hidden columns out (AB#9141)
+### Backups leave Hidden columns out
 
 **Changelog entry (this repository has no CHANGELOG file; this is the entry).** A tenant backup leaves out the values of every column
 known to reach a Hidden attribute (residual risk below). `CrateDbStreamDataRepository.FindHiddenColumnExclusion(snapshot, includeRecorded)` is the one
@@ -96,7 +96,7 @@ Tests: `ComputedColumns/ArchiveHiddenColumnBackupIntegrationTests` (real CrateDB
 redaction), `StreamData.UnitTests/Copy/HiddenColumnExclusionTests`, `CopyStatementTests`. Rule and restore: engine
 `octo-construction-kit-engine/docs/archive-hidden-columns.md`, "Backups".
 
-### Conflict Precedence — the upsert stops being last-write-wins (AB#5247)
+### Conflict Precedence — the upsert stops being last-write-wins
 
 Every archive write is an upsert on the row key, and the `DO UPDATE SET` was unconditional: the
 **last** delivery won regardless of the data, so the stored value reflected arrival order. Replaying
@@ -119,7 +119,7 @@ before.**
 - **The guard wraps every assignment**, `rtchangeddatetime` and `was_updated` included
   (`Guarded(...)` → `CASE WHEN <guard> THEN <incoming> ELSE "col" END`), so a losing write leaves no
   trace at all. For `was_updated` the fallback is `COALESCE("was_updated", FALSE)` (next rule).
-- **No column of an upsert relies on a deterministic column DEFAULT (AB#6647).** CrateDB before
+- **No column of an upsert relies on a deterministic column DEFAULT.** CrateDB before
   5.10.12 (measured: 5.9.10, 5.9.13, 5.10.10) stores the NEW rows of an `INSERT … ON CONFLICT DO
   UPDATE` that also hits an existing key in the same shard without such defaults on the **replica**
   copy. `was_updated BOOLEAN NOT NULL DEFAULT FALSE` then reads as NULL there (`IS NULL` finds
@@ -143,35 +143,35 @@ before.**
 
 Full write-up incl. the rendered SQL: `docs/streamdata-archive-concept.md` → *Conflict precedence*.
 
-### Row Origin — manual or automated (AB#5356)
+### Row Origin — manual or automated
 
 Every raw and time-range row records `row_origin` (`manual` / `automated`; `NULL` = written before the origin
 was recorded = automated), and a manual row `manual_written_by` / `manual_written_at` / `manual_reason`
-(AB#7593: writer from the caller, time from the repository clock, reason optional; NULL on automated rows; a
+(writer from the caller, time from the repository clock, reason optional; NULL on automated rows; a
 manual point without a writer is refused). Selectable in queries by these names, not in the default projection.
 Rules to keep:
 
 - **Platform column, not a user column.** `ArchiveRowOriginColumns` owns the name, DDL and SQL fragments. Rollup
   tables do not carry it; the windowed insert names it only when `generationTracked` is false. A rollup reports its
   manual values in its own platform columns instead (next section).
-- **Always written explicitly** (AB#6647), nullable without a DEFAULT, so `ALTER TABLE … ADD COLUMN` can add it to
+- **Always written explicitly**, nullable without a DEFAULT, so `ALTER TABLE … ADD COLUMN` can add it to
   populated tables. `EnsureOriginColumnsAsync` does that at activation and before the first write/import of each
   table per process (`RecomputeProcessState.EnsuredOriginColumns`). Do not remove that step: every insert names
   the column, so a table without it would refuse every write.
 - **`$Origin` precedence key** (`ArchiveConflictKey.OriginKey`, `HigherWins` only): manual beats automated,
   automated never beats manual, manual vs manual = the later write wins (no fall-through), automated vs automated =
   the following keys. It is the one key that is not a user column; `BuildConflictGuard` skips the column check for it.
-- **Manual wins by default on raw and time-range archives (AB#7656)**: `ResolveConflictPrecedence` prepends `$Origin`
+- **Manual wins by default on raw and time-range archives**: `ResolveConflictPrecedence` prepends `$Origin`
   when the archive does not name it (also with no precedence at all: the guard is then `$Origin` alone, automated vs
   automated stays last-write-wins). Named explicitly, `$Origin` applies at the author's position; `Order: Ignore` on it is
   the opt-out (the key is dropped; with no other key there is no guard). `LowerWins` on `$Origin`, `Ignore` on a column
-  and `$Origin` named twice are refused at activation. The skip reason names the key that decided (AB#8637,
-  `ConflictOutcome.DecidingReason`: the first key in which the stored row differs from the write; a ranking column the
-  write does not send ties, AB#8622): `ManualValueProtected` only
+  and `$Origin` named twice are refused at activation. The skip reason names the key that decided
+  (`ConflictOutcome.DecidingReason`: the first key in which the stored row differs from the write; a ranking column the
+  write does not send ties): `ManualValueProtected` only
   when `$Origin` decided (origin first, or every key before it tied), `LowerPrecedence` when a column key before it decided,
   also against a manual row; never `ManualValueProtected` when the origin is ignored. Rollups and the import path are unchanged.
 
-- **Reading the origin (AB#7616)**: `row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason` are
+- **Reading the origin**: `row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason` are
   selectable/filterable/groupable on raw and time-range archives. Every read-path column reference goes through
   `ArchiveRowOriginColumns.ColumnRef` / `SelectRef`, which reads `row_origin` as `COALESCE(…, 'automated')` (legacy
   rows hold NULL). A new SQL builder that references a column must use them too.
@@ -180,7 +180,7 @@ Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `Ar
 `ArchiveRowOriginQuerySqlTests` (unit), `StreamDataOrigin/ArchiveRowOriginIntegrationTests` and
 `ArchiveRowOriginReadIntegrationTests` (real CrateDB).
 
-### Changes an activated archive cannot apply (AB#7872)
+### Changes an activated archive cannot apply
 
 `ArchiveDefinitionGuard` (engine) refuses them, also on a disabled archive with `FirstActivatedAt` (`SetStatusAsync` stamps it), on the ways an operator or a blueprint writes: the repository's public
 `ApplyChanges` and the Upsert import. The stream data stores of this repository write through `UpdateOneRtEntityById`
@@ -189,16 +189,16 @@ scope: `docs/streamdata-archive-concept.md` §10. `RollupOrchestrator` records a
 (`MongoRollupArchiveRuntimeStore.RecordRunFailureAsync`, `ClearRunFailureAsync`). Tests: `ArchiveDefinitionGuardIntegrationTests`
 (real MongoDB, blueprint `TestBlueprints/.../ArchiveGuardBp`).
 
-Adding a column to an activated archive (AB#7997): never write it into `Columns` without the storage change. The direct path is `ArchiveLifecycleService.AddArchiveColumnAsync` (storage via `CrateDbStreamDataRepository.AddIngestedColumnStorageAsync`, then the definition); a seed's additions are taken out of the import and applied after the commit through `IArchiveLifecycleServiceProvider` (`TenantArchiveLifecycleServiceProvider`, resolves `ISystemContext` lazily to avoid a DI cycle). Rules: `docs/streamdata-archive-concept.md` §10, *Adding a column to an active archive*.
+Adding a column to an activated archive: never write it into `Columns` without the storage change. The direct path is `ArchiveLifecycleService.AddArchiveColumnAsync` (storage via `CrateDbStreamDataRepository.AddIngestedColumnStorageAsync`, then the definition); a seed's additions are taken out of the import and applied after the commit through `IArchiveLifecycleServiceProvider` (`TenantArchiveLifecycleServiceProvider`, resolves `ISystemContext` lazily to avoid a DI cycle). Rules: `docs/streamdata-archive-concept.md` §10, *Adding a column to an active archive*.
 
-Archives a blueprint seed creates (AB#7991): the blueprint engine activates them after the import and queues the backfill of new rollups
+Archives a blueprint seed creates: the blueprint engine activates them after the import and queues the backfill of new rollups
 through `IStreamDataTenantServicesProvider`, implemented here by `TenantStreamDataServicesProvider` (registered next to the lifecycle provider,
 resolves `ISystemContext` lazily for the same DI-cycle reason; returns `null` without a stream-data backend, `IsStreamDataEnabled` from the tenant
 flag). Rules: engine `docs/blueprints.md`, "Archives and rollups in a blueprint". Test: `BlueprintArchiveActivationIntegrationTests` (fixture
 `BlueprintArchiveActivationFixture`: MongoDB plus a real CrateDB container wired into the tenant context; test blueprints `ArchiveActivationBp`,
 `ArchiveBackfillBp`; drives the backfill with `IRecomputeOrchestrator.TickAsync` and checks the rollup of a rollup converges).
 
-### Rollups report their manual values (AB#7727)
+### Rollups report their manual values
 
 Every rollup table carries `manual_count` (`BIGINT`) and `last_manual_at` (`TIMESTAMP WITH TIME ZONE`), platform columns
 like `row_origin` on raw rows: not in `Aggregations[]`, not in `Columns`, no definition or blueprint changes. Rules to keep:
@@ -207,7 +207,7 @@ like `row_origin` on raw rows: not in `Aggregations[]`, not in `Columns`, no def
   `COUNT(CASE WHEN "row_origin" = 'manual' THEN 1 END)` and `MAX("manual_written_at")`, from a rollup source
   `SUM("manual_count")` and `MAX("last_manual_at")` (`sourceIsRollup`). `SUM`/`MAX` skip the `NULL` of a source row
   aggregated before the column existed, so a bucket over a mix is right. The carry row of the LOCF statement is excluded.
-- **Nullable without a DEFAULT, always named** (AB#6647). `NULL` means "no manual values" and reads as 0
+- **Nullable without a DEFAULT, always named**. `NULL` means "no manual values" and reads as 0
   (`ArchiveRowOriginColumns.ColumnRef`, also in filters and `RollupQueryAggregationResolver.ResolveManualCount`). A new read
   path must use `ColumnRef` too.
 - **`ArchivePlatformColumnGuard` adds what a table lacks**, once per table and process (memo `EnsuredOriginColumns`, shared by
@@ -226,12 +226,12 @@ like `row_origin` on raw rows: not in `Aggregations[]`, not in `Columns`, no def
 Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `ArchivePlatformColumnGuardTests`. Check whether a tenant
 needs a backfill: `scripts/rollup-manual-rows-check.sh`. Write-up: `docs/streamdata-archive-concept.md`, *Rollups report their manual values*.
 
-### Write Result — stored and skipped rows (AB#7598)
+### Write Result — stored and skipped rows
 
 The repository inserts return `StreamDataWriteResult` (`Stored`, `Skipped` with reason `CkTypeMismatch` /
 `LowerPrecedence` / `ManualValueProtected`). A guarded statement ends with `RETURNING` key + ranking columns +
 `row_origin`; `ConflictOutcome.Decide` decides stored ⇔ the returned values equal the sent ones (exact because
-the last key admits equality); the reason of a skipped row is the key that decided (AB#8637;
+the last key admits equality); the reason of a skipped row is the key that decided (
 **changelog entry:** an automated write that loses on a column key placed before `$Origin` was reported as
 `ManualValueProtected` whenever the stored row was manual, now `LowerPrecedence`; storage is unchanged). Tests:
 `StreamDataOrigin/SkipReasonDecidingKeyIntegrationTests` (raw and time-range). The client inserts return the skipped rows as `SkippedArchiveRow(Index, Reason)`;
@@ -240,7 +240,7 @@ not stored throws `ManualStreamDataNotAppliedException`. The single-point `Inser
 Tests: `ConflictOutcomeTests`, `StreamDataOrigin/ArchiveRowOriginIntegrationTests` (multi-statement exactness on
 CrateDB). Write-up: `docs/streamdata-archive-concept.md` → *Write result*.
 
-**A dropped shard request is a failed write (AB#8679).** When CrateDB's memory circuit breaker trips it ends a shard request
+**A dropped shard request is a failed write.** When CrateDB's memory circuit breaker trips it ends a shard request
 of a multi-row INSERT and answers **without an error**. A guarded statement then lacks the `RETURNING` rows of the dropped rows
 (`ConflictOutcome.Decide` reports them as `Missing`, never as a skip: an upsert returns a row for every row it processed), an
 unguarded statement reports fewer affected rows than rows sent (CrateDB counts a key repeated in one statement once per row, also two points less than 1 ms apart that are one stored row; `ArchiveWriteRepeatedKeyIntegrationTests`). `CrateDatabaseClient.InsertGroupedAsync` writes the
@@ -251,7 +251,7 @@ missing rows once more (`MissingRowRetry`) (guarded: those rows, unguarded: the 
 CrateDB drop rows of a multi-row INSERT without an error, the same signature), and the stress test (`Category=Stress`, not in the CI)
 `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (own CrateDB container, 512 MB heap, query breaker set per
 test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never trips; ~15 s; red without the check).
-**The rollup statements check their rows too (AB#8680).** The forward aggregation, the recompute's staging aggregation (both
+**The rollup statements check their rows too.** The forward aggregation, the recompute's staging aggregation (both
 through `RollupSourceBucketAggregator`) and the staging-to-live copy are `INSERT … SELECT` statements that CrateDB answers the
 same way. Each compares its affected rows with the rows it must write: the aggregation with
 `RollupAggregationSqlBuilder.BuildExpectedRowCount` (same source predicate and generations, `GROUP BY rtid` of the key only,
@@ -279,9 +279,9 @@ was right). The tests of the `CrateMemoryPressure` collection therefore drop the
 and the later tests lost rows without any breaker setting. Their set-up steps run without a retry: at the default limits they must
 not lose a row.
 
-### Value check on raw and time-range writes (AB#7643, raw path AB#8606)
+### Value check on raw and time-range writes (raw path)
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8606: `InsertAsync` (raw archives) now
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** `InsertAsync` (raw archives) now
 runs the same value check as `InsertTimeRangeAsync`: `ArchiveWriteValueValidator.Normalize` has a `StreamDataPoint`
 overload, called first thing after the archive snapshot is loaded. A value that does not fit its column's CK type refuses
 the whole batch with an `ArgumentException` (asset repository: 400) naming point (index, rtId, timestamp), column and
@@ -290,7 +290,7 @@ expected type; nothing is written, no origin column is added, no dirty window is
 text in a Double column is now refused up front with this message instead of being handed to CrateDB. Rules to keep:
 
 - One core (`NormalizeCore`) for both point types; the overloads differ only in how a point is named and rebuilt. Both
-  get the points already flattened (`ArchiveRecordFlattening`, AB#8666), so the check reads exactly the keys the write
+  get the points already flattened (`ArchiveRecordFlattening`), so the check reads exactly the keys the write
   maps to columns. Checking a shape the write does not use would refuse or pass the wrong value.
 - Manual protection and the rollup recompute of raw manual writes are proven against CrateDB:
   `StreamDataOrigin/RawArchiveManualWriteIntegrationTests` (manual value, writer and reason survive an automated delivery
@@ -298,9 +298,9 @@ text in a Double column is now refused up front with this message instead of bei
   the recomputed hourly bucket holds the corrected value, replaced, not added; a mismatched batch stores nothing).
 - Unit tests: `ArchiveWriteValueValidatorRawTests`. Write-up: `docs/streamdata-archive-concept.md` → *Value check before the write*.
 
-### Partial delivery: a column the point does not name keeps its value (AB#8622)
+### Partial delivery: a column the point does not name keeps its value
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8622: raw and time-range writes
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** Raw and time-range writes
 update only the columns a point names. A column not named keeps its stored value, a column named with `null` is
 cleared, a new row stores NULL for every column not named (decided by Reimar 2026-11-09). **Behaviour change for
 automated deliveries:** a partial re-delivery no longer clears the columns it did not send. Rules to keep:
@@ -319,7 +319,7 @@ automated deliveries:** a partial re-delivery no longer clears the columns it di
   written (asset repository: 400), raw and time-range, automated and manual. Ranking columns are always in the INSERT
   list (bound NULL when not sent) and only replaced when sent. Two earlier variants are withdrawn: refusing points
   without every ranking column (C) and writing an unsent ranking column as NULL (D).
-- No column of an upsert relies on a constant DEFAULT (AB#6647): user columns have none, `was_updated` stays a literal.
+- No column of an upsert relies on a constant DEFAULT: user columns have none, `was_updated` stays a literal.
 - Computed columns at ingest are evaluated on the **merged row** (decided by Reimar 2026-11-09): left out when the
   point names none of the columns the formula reads (`ComputedColumnPlanItem.ReferencedColumns`,
   `ApplyComputedColumns(..., ingest: true)`); when it names only some, the others are the stored values of the row
@@ -332,15 +332,15 @@ automated deliveries:** a partial re-delivery no longer clears the columns it di
 Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`,
 `ArchiveRankingColumnValidatorTests`, `ConflictOutcomeTests`, `StreamDataOrigin/PartialDeliveryOriginPrecedenceIntegrationTests`
 (EC case, merged-row ranking, explicit null refused, mixed batches),
-`CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`,
+`CrateDbStreamDataComputedColumnIngestTests` (cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`,
 `StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests` (merged row on raw and time-range, rollup over the column).
 
-### Record values become their member columns on both write paths (AB#8666)
+### Record values become their member columns on both write paths
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8666: `InsertAsync` (raw archives)
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** `InsertAsync` (raw archives)
 dropped every record value a point carried. A pipeline (`CreateUpdateInfo@1` → `SaveStreamDataInArchive@1`) delivers the
 entity's attributes as they are, so a column on a record sub-path (`NamePlate.SerialNumber`) arrived as one key
-`NamePlate` → `RtRecord`, which is no column: the member was neither written nor cleared, and since AB#8622 the stored
+`NamePlate` → `RtRecord`, which is no column: the member was neither written nor cleared, and since that change the stored
 value simply stayed. The time-range path expanded records (`FlattenRecordValues`); the raw path did not. The REST raw
 `insert` was not affected because the asset repository accepts only dotted column paths (`ArchivePointValidation`
 refuses a record key with 400), so its points carry no record values. **Behaviour change for raw writes from pipelines:**
@@ -352,7 +352,7 @@ Rules to keep:
   same dotted keys. The validators no longer take a flatten function. Do not flatten again further down, and do not add a
   second expansion elsewhere.
 - **Members, not records.** A member with a value is named with it, a member set to `null` is named with null (clears the
-  column), a member the record does not contain is not named (keeps the stored value, AB#8622). Nested records expand
+  column), a member the record does not contain is not named (keeps the stored value). Nested records expand
   recursively; a record without members names nothing. A whole record sent as `null` (`NamePlate: null`) names the key
   `NamePlate`, which is no column, so the members keep their values (unchanged, same on both paths).
 - **No double work for REST.** Points without a record value pass through as the same instance (same list when no point

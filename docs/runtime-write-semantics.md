@@ -3,7 +3,7 @@ description: "Runtime write behaviour: GridFS reads, write-concern failures, tra
 applies_to: src/Runtime.Engine.MongoDb/Repositories/**, src/Runtime.Contracts.MongoDb/Repositories/**
 ---
 
-## GridFS read preference and read-your-writes (AB#7256)
+## GridFS read preference and read-your-writes
 
 `MongoRepository.GetGridFsBucket()` reads with `SecondaryPreferred`, writes with `w:majority`. A secondary can lag behind
 a write that was acknowledged by a majority, so a consumer that reads a file right after another process wrote it (the
@@ -16,7 +16,7 @@ A file that is missing on the primary too still throws `EntityNotFoundException`
 Tests: `MongoLinkedBinaryDataSourceReadYourWritesTests` (unit), `TemporaryBinaryTests.Cache_UploadThenImmediateDownload_FindsTheFile`
 (integration, replica set).
 
-## Write-concern-only failures keep their cause (AB#8020)
+## Write-concern-only failures keep their cause
 
 `MongoDbDataSourceCollection.CreateWriteException` maps a `MongoWriteException` of a single-document write. When only the write
 concern failed (the `wtimeout` of the hard-coded `w:majority`, see `MongoRepositoryClient`; any other write-concern error),
@@ -28,11 +28,11 @@ answers such a call `METHOD_OUTCOME_UNKNOWN` instead of `METHOD_HANDLER_FAILED` 
 wrapped by `OperationFailedException.BulkImportError`) and commands/commits (`MongoWriteConcernException`, not wrapped) kept their
 cause already. Test: `StreamData.UnitTests/MongoDbWriteExceptionMappingTests`.
 
-## A failed commit is never masked by an abort (AB#9561)
+## A failed commit is never masked by an abort
 
 `OctoSession.CommitTransactionAsync` sets `_commitAttempted` before it calls the driver. When the driver commit throws (a
 `w:majority` wtimeout under load, a write concern error, a cancelled token), the session stops counting as active, the
-rollback side effects are kept (outcome unknown, see AB#6248) and the **original exception is rethrown unchanged** (type,
+rollback side effects are kept (outcome unknown) and the **original exception is rethrown unchanged** (type,
 message, error labels such as `UnknownTransactionCommitResult`). After a commit attempt `AbortTransactionAsync` returns
 without calling the driver (Debug log) and `Dispose` does not abort either: the driver refuses an abort after a commit
 ("Cannot call AbortTransaction after calling CommitTransaction"), and in the usual caller block
@@ -41,7 +41,7 @@ used to replace the real commit error. Callers therefore need no guard of their 
 failed commit; a retry starts a new session (`DatabaseCkModelRepository.RunInTransactionWithRetryAsync` does). Tests:
 `StreamData.UnitTests/OctoSessionTransactionCallbackTests` (`Commit_ThatThrows_*`, `Abort_AfterASuccessfulCommit_*`).
 
-## Re-importing an archived entity (AB#7018)
+## Re-importing an archived entity
 
 The default delete (GraphQL `deleteEntities`, `DeleteOptions` default) is `DeleteStrategies.Archive`: the document
 stays in the collection with its `_id` (= rtId), `rtState = Archived`, and its associations are archived too. Only
@@ -67,13 +67,13 @@ Rules:
   the key text is parsed from the server message by `DuplicateKeyMessageParser`, the lookup runs outside the aborted
   transaction and falls back to the raw message if it fails).
 - A seed item that an operator deleted (archived) comes back with the next Upsert / blueprint update and with an
-  InsertOnly import of the same rtId (AB#7018). Whether that is wanted is an open product question, tracked there.
+  InsertOnly import of the same rtId. Whether that is wanted is an open product question, tracked there.
 - Tests: `ImportAfterArchiveTests` (rtId, Upsert, Erase, to-one and N:M edges, `Unique` vs `UniqueNotDeleted`),
   `DuplicateKeyMessageParserTests`.
 
-## Atomic update of one RecordArray item (AB#7445)
+## Atomic update of one RecordArray item
 
-Engine contract and rules: engine `CLAUDE.md`, "Atomic update of one RecordArray item". This repository executes it:
+Engine contract and rules: engine `octo-construction-kit-engine/docs/runtime-semantics.md`, "Atomic update of one RecordArray item". This repository executes it:
 `MongoDbDataSourceCollection.UpdateOneWithRecordArrayItemsAsync` (called by `BulkRtMutation` for an update info with
 `RecordArrayItemUpdates`) builds ONE `updateOne` with `RecordArrayItemUpdateStatement`:
 
@@ -96,7 +96,7 @@ options: arrayFilters: [ { "i0.attributes.<matchMember>": <value> } ... ]
   An entry that matches no item while others match is a silent no-op for that entry.
 - `rtVersion` is incremented once and `rtChangedDateTime` set by the shared `ApplyUpdate`; the change stream shows a normal
   `update` event (`updatedFields`: `rtVersion`, `rtChangedDateTime`, `attributes.<arr>.<index>.attributes.<member>`).
-- **AB#5148 `attributes: null` repair only on the fallback (AB#7466).** The item statement needs no repair: its filter requires every
+- **`attributes: null` repair only on the fallback.** The item statement needs no repair: its filter requires every
   referenced array to be `$type: array`, which a stored `attributes: null` can never satisfy, so the statement either does not
   match or runs on an object `attributes`. Happy path (array present) = **1 command** (it was 2 with a repair `updateOne` before
   the statement). Fallback (mixed update, array missing or null) = the statement plus ONE ordered `BulkWrite` `[repair, plain update]`
@@ -112,9 +112,9 @@ options: arrayFilters: [ { "i0.attributes.<matchMember>": <value> } ... ]
   `ItemOnlyUpdate_WithoutMatch_CostsOneCommand_AndNeverRepairs`). The test model
   (`tests/TestCkModel`) got the record `DataPoint` and the type `ItemUpdateHolder` for it.
 
-## Expected rtVersion (AB#7769)
+## Expected rtVersion
 
-Engine contract and rules: engine `CLAUDE.md`, "Expected rtVersion - optimistic concurrency for update and replace". This
+Engine contract and rules: engine `octo-construction-kit-engine/docs/runtime-semantics.md`, "Expected rtVersion - optimistic concurrency for update and replace". This
 repository executes it in `MongoDbDataSourceCollection` (called by `BulkRtMutation` for an update or replace info with
 `ExpectedRtVersion`):
 
@@ -131,7 +131,7 @@ replace : replaceOne { _id, rtVersion: <n> }  <document with rtVersion = n + 1> 
   with MongoDB's `WriteConflict` (code 112, `TransientTransactionError`); both methods report that as the same conflict (`false`), and
   the transaction is already aborted, so the retry must start a new session / transaction. If the other writer committed before this
   transaction started, the filter mismatch path applies.
-- `UpdateOneIfVersionMatchesAsync` applies the AB#5148 `attributes: null` repair first (separate statement, as
+- `UpdateOneIfVersionMatchesAsync` applies the `attributes: null` repair first (separate statement, as
   `UpdateOneIfGuardMatchesAsync`).
 - A replace without an expected version still goes through `ReplaceManyAsync` / `BulkImportAsync` unchanged; entities with an expected
   version in the same batch are written one by one (the bulk upsert cannot compare a version).
@@ -142,7 +142,7 @@ replace : replaceOne { _id, rtVersion: <n> }  <document with rtVersion = n + 1> 
   exactly +2, version +2, at least one `RtVersionConflictException` surfaced). The counter is `GuardCount` of the test model's
   `SeedGuardEntity` (the CK round-trip gate compares the whole test model, so no type was added). `ConditionalUpdateTests` (`AttributeNewerThanGuard`) is unchanged.
 
-## Validate a CK model without importing it (AB#8492)
+## Validate a CK model without importing it
 
 `ITenantContext.ValidateCkModelAsync(CkCompiledModelRoot)` → `OperationResult` (via `IDatabaseCkModelRepository.ValidateModelAsync`) runs the
 checks the import runs **before it writes**, against the models installed in the tenant, and writes nothing (no import lock, no `Importing` row,
@@ -154,7 +154,7 @@ but **throws** for a dependency the tenant does not have, which becomes message 
 the caller). Consumer: asset repository `Models/ValidateCk` / MCP `validate_ck_model`. Tests: `CkModelImportGuard/ValidateCkModelTests` (valid model
 not imported and the CK collections unchanged, missing dependency, 91 with the import's text, 126).
 
-## Runtime query time limit (AB#8897)
+## Runtime query time limit
 
 `RuntimeQueries/`: a host that calls `AddRuntimeQueryTimeLimit()` (the asset repository) sends every runtime-entity query
 and count by type, by id, by type with navigation and by CK interface to MongoDB with `maxTimeMS` =
@@ -165,7 +165,7 @@ count of a paged query each get the full limit). Rules to keep:
   run every pipeline and count of a runtime query through `RuntimeQueryTimeLimiter`, which puts the limit into
   `AggregateOptions` / `CountOptions`, turns `MongoExecutionTimeoutException` into `RuntimeQueryTimeoutException` and
   logs a warning above 80 % of the limit. A new MongoDB call in these query classes goes through them too; the hinted page read and the capped count of
-  AB#9138 do (hint and limit in one `AggregateOptions`, the retry without the hint as well).
+  do (hint and limit in one `AggregateOptions`, the retry without the hint as well).
 - **Opt-in per host.** `TenantRepository.CreateRuntimeQueryTimeLimiter` returns null (no limit, the code path of
   before) when the host did not register `RuntimeQueryTimeLimitSettings` and no override scope is active. CK queries
   never get a limiter.
@@ -173,37 +173,37 @@ count of a paged query each get the full limit). Rules to keep:
   `Disable()` (`AsyncLocal`, holds across `await` and for tasks started inside, restores the previous limit on dispose).
   In this repository: the CK migrations of `TenantContext` (`RunCkModelMigrationsForImportAsync`,
   `RetryPendingMigrationsAsync`) and the blueprint of a new child tenant run inside `Disable()`.
-- **Not covered yet**: the association and deep-graph queries (`MultipleOrigin*`), follow-up story under AB#8793.
+- **Not covered yet**: the association and deep-graph queries (`MultipleOrigin*`).
 - Tests: `StreamData.UnitTests/RuntimeQueries/RuntimeQueryTimeLimitTests`,
   `Repositories/Query/RuntimeQueryTimeLimitIntegrationTests` (a `$range`/`$unwind` fan-out that MongoDB stops with
   `MaxTimeMSExpired`; server-side JavaScript is interrupted with another error and is not a valid fixture),
   `InterfaceQuery/InterfaceQueryTimeLimitTests`.
 
 
-## JSON ImportRt against MongoDB (AB#8325)
+## JSON ImportRt against MongoDB
 
 `ImportRtJsonAwaitIntegrationTests` (own collection and fixture, throw-away child tenants, CK model `JsonAwait` built in C#)
-pins the engine fix of AB#8325 against a real MongoDB: a JSON `ImportRt` (`IImportRtModelCommand.ImportAsync` /
+pins the engine fix against a real MongoDB: a JSON `ImportRt` (`IImportRtModelCommand.ImportAsync` /
 `ImportAsCallerAsync` with `application/json`) returns only after its entities are committed (readable at once), a record
 member that only a CK method may write is carried over by record key, a keyless (also derived) record array with a stored
 protected value is refused with message 141 and writes nothing, and a duplicate key in the file fails the call and commits no
 entity of the file. Before the engine fix all five were red (the JSON bulks were written from an `async void` handler after the
-call had committed, and record values arrived as JSON objects). The engine side: engine `CLAUDE.md`, "JSON import writes its
+call had committed, and record values arrived as JSON objects). The engine side: engine `octo-construction-kit-engine/docs/blueprint-engine.md`, "JSON import writes its
 bulks inside the awaited call".
 
 
-## Caller ImportRt keeps protected record members (AB#8141)
+## Caller ImportRt keeps protected record members
 
-Engine rule: engine `CLAUDE.md`, "Omission inside records (AB#8141): merge". `ImportRtRecordMemberPreservationIntegrationTests`
+Engine rule: engine `octo-construction-kit-engine/docs/blueprint-engine.md`, "Omission inside records: merge". `ImportRtRecordMemberPreservationIntegrationTests`
 (own collection, throw-away tenant per test, C#-built `ckLanguage: 2` model `RecMem` imported through `ImportCkModelAsync`, so
 records are resolved by the engine like any installed model) pins it against MongoDB: the stored values are written through the
 repository, a caller `ImportAsCallerAsync` upsert (YAML) omits the `MethodOnly` member, and the document read back keeps it - single
 record (position), record array (record key, reordered, a new element keeps nothing), a member that exists only on a record derived
 from the declared one; a keyless record array (also of a derived record) with a stored value is refused with message 141 and the
-stored document is unchanged. Two limits of the import path the test works around, both outside AB#8141:
+stored document is unchanged. Two limits of the import path the test works around, both outside the scope of that test:
 
 - the YAML reader of `ImportRt` (`RtRecordConverter`) reads only scalar member values inside a record, so nested records cannot be
   written by a YAML file (covered by the engine unit tests);
 - the JSON path writes its bulks from an `async void` event handler (`BulkDeserialized += async ...` in `ImportFileAsync`):
   `ImportAsync` / `ImportAsCallerAsync` return and commit before the entities are written, and an exception of the write (141
-  included) is lost. Measured here: the entity is not there right after the call, it is there 3 s later. Bug AB#8325.
+  included) is lost. Measured here: the entity is not there right after the call, it is there 3 s later.

@@ -3,9 +3,9 @@ description: Data-permission checks, deep graph permissions, AuditOnly read viol
 applies_to: src/Runtime.Engine.MongoDb/Repositories/Query/**, src/Runtime.Engine.MongoDb/RuntimeQueries/**
 ---
 
-### Public data-permission check agrees with the repository (AB#7035)
+### Public data-permission check agrees with the repository
 
-The engine exposes `IRtDataPermissionEvaluator` (see the engine CLAUDE.md, "Data permissions: one rule set, one
+The engine exposes `IRtDataPermissionEvaluator` (see the engine `octo-construction-kit-engine/docs/data-permissions.md`, "Data permissions: one rule set, one
 public check"). `DataPermissionEvaluatorDifferentialTests` pins, against real MongoDB, that its verdict equals
 what a session bound to the same `RtSecurityContext` experiences: a record the filtered repository returns is
 exactly the one the evaluator calls visible (`NotVisible` = not found), and a change set the write guard accepts
@@ -13,15 +13,15 @@ is exactly the one the evaluator allows (creator-owned `Test/Continent`, owner-a
 full / owned-only / read-only / write-only grants, AuditOnly, system context, type-level vs insert). A new
 data-permission rule in the read filter or the guard must keep that test green.
 
-Since AB#7126 the write guard applies the read visibility first, so the "write but not visible" cell is refused too
+Since that change the write guard applies the read visibility first, so the "write but not visible" cell is refused too
 (the evaluator says `NotVisible`, the repository raises "not found"): the differential test compares every record for
 Write and Delete, `HiddenRecord_IsRefusedExactlyLikeAMissingOne` pins that a hidden record raises the very exception
 (type and message) of a missing one for update, archive and erase, and `WriteWithoutRead_CanInsert_ButNotUpdateOrDeleteExistingRecords`
 pins the compatibility change. `TenantRepository.CreateEntityNotFoundException` (override of the engine hook) must mirror
 the "not found" exception of `MongoDbDataSourceCollection` (update/replace/archive: `IdNotFound`, erase:
-`FilterNotMatching`). Needs the engine package that contains the guard change (engine PR of AB#7126).
+`FilterNotMatching`). Needs the engine package that contains the guard change.
 
-Since AB#7212 `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
+Since that change `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
 (Read, Write and Delete owned-only; Write and Delete for all with Read owned-only; Write and Delete without Read), a
 hidden record answers exactly like a missing rtId with a valid or an invalid payload, also when addressed as a sibling
 type of the shared `Location` collection (`Test/Country`, run without a transaction; the stored record stays
@@ -32,9 +32,9 @@ for a missing record only: an invalid payload is a validation error, a valid one
 two answers: a delete through an abstract type of an rtId that does not exist answers not found instead of returning,
 for every caller including a system session, and a valid update by a non-system caller under policies of a record
 addressed through a sibling type (a type outside the stored type's subtree that shares its collection) answers not
-found and writes nothing, also for a full reader. Needs the engine package of engine PR 383 (AB#7212).
+found and writes nothing, also for a full reader. Needs the engine package of engine PR 383.
 
-### Deep graph honours the caller's data permissions (AB#6734)
+### Deep graph honours the caller's data permissions
 
 Both `ITenantRepository.GetRtDeepGraphAsync` overloads (ParentChild traversal and the directed
 follow-spec traversal) apply the caller's data-permission filter. The traversals themselves run over
@@ -55,13 +55,13 @@ afterwards (`TotalCount` = pruned count):
   the pruned set).
 - Pinned by `DeepGraphDataPermissionTests` (denied type, owned-only, system bypass, unrestricted
   byte-identical, paging after pruning; both overloads) with the real filter and a restricted policy
-  table. Consumers: the export-by-deep-graph job of octo-bot-services (AB#6734).
+  table. Consumers: the export-by-deep-graph job of octo-bot-services.
 
-### AuditOnly read violations: action and aggregation (AB#7279)
+### AuditOnly read violations: action and aggregation
 
 `TenantRepository.CreateSecurityFilterAsync` publishes `DataPermissions.ReadViolation` once per repository
 call whose type graph hits `AuditDeniedCkTypeIds` (16 call sites; a `ForEach` of single queries makes
-thousands per run). Since AB#7279:
+thousands per run). Since that change:
 
 - The event is built by the engine's `DataPermissionAudit.PublishReadViolationAsync` with the real
   action: queries pass `read` (default parameter), the update/replace/delete overrides pass
@@ -73,14 +73,14 @@ thousands per run). Since AB#7279:
   engine's write funnel publish first occurrence + one summary per window per (tenant, subject,
   type, action). Other events through that sink carry no aggregation key and pass through unchanged.
 - Pinned by `DataPermissionEnforcementTests.AuditOnlyViolations_NameTheRealAction_AndRepeatedReadsAreAggregated`
-  (fixture `DataPermissionTestFixture.AuditSink`). Details of the aggregation: engine `CLAUDE.md`,
+  (fixture `DataPermissionTestFixture.AuditSink`). Details of the aggregation: engine `octo-construction-kit-engine/docs/audit-trail.md`,
   "Aggregation of repeated audit events".
 
-### Interface query: `ITenantRepository.GetRtEntitiesByInterfaceAsync` (AB#7019)
+### Interface query: `ITenantRepository.GetRtEntitiesByInterfaceAsync`
 
 One method returns the entities of **all implementers of a CK interface** (derived types included), filtered, sorted, paged
-and optionally counted over all their collections in one global order (GraphQL interface types AB#6932 and the pipeline node
-AB#6933 call it). Decision of spike AB#6930 (Gerald, 2026-10-19, option A): type list from the CK cache
+and optionally counted over all their collections in one global order (GraphQL interface types and the pipeline node
+call it). Decision of the interface-query spike (Gerald, 2026-10-19, option A): type list from the CK cache
 (`CkInterfaceGraph.ImplementingTypes`), fan-out over the collections of the implementers, application-side k-way merge of the
 top `skip + take` rows per collection; NOT `$unionWith` (about 1 s at 1M), no denormalized `CkInterfaceIds`, **no migration,
 no index created or changed, no change of the persisted `RtEntity`**. Full design: `docs/interface-query.md`. Code:
@@ -113,9 +113,9 @@ contract `ITenantRepository` + `RtInterfaceQueryResult` + `InterfaceQueryExcepti
   promise). There is deliberately no default index on `Name` (decision 2026-10-19; re-check on real tenants).
 * **Budget and measured numbers** (`GetRtEntitiesByInterfacePerformanceTests`, trait `Category=Performance`, default 100 000
   entities over 30 collection roots, `OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000` for the opt-in 1M run; not in the PR/main CI,
-  nightly in `azure-pipelines-performance.yml` (AB#8004); .NET end to end through
+  nightly in `azure-pipelines-performance.yml`; .NET end to end through
   `ITenantRepository`, MongoDB 8.0.15 Testcontainer, Mac mini, page size 50, index on Name on every root, 20 runs after 3
-  warm-ups, median / p95 in ms). Budget (decision AB#6930): one collection at most 1.25x of the type query with the same rows;
+  warm-ups, median / p95 in ms). Budget: one collection at most 1.25x of the type query with the same rows;
   indexed first page over 30 collections p95 at most 100 ms; unindexed: no promise (printed, not asserted).
 
   | Measure | 100k, transaction | 100k, no transaction | 1M, transaction | 1M, no transaction |

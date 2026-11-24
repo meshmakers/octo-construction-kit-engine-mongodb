@@ -3,11 +3,11 @@ description: "Interface query GetRtEntitiesByInterfaceAsync: global order across
 applies_to: tests/Runtime.Engine.MongoDb.IntegrationTests/InterfaceQuery/**
 ---
 
-# Interface query: `ITenantRepository.GetRtEntitiesByInterfaceAsync` (AB#7019)
+# Interface query: `ITenantRepository.GetRtEntitiesByInterfaceAsync`
 
 Developer documentation of the engine method that returns the entities of **all implementers of a CK interface** in one
-global order. Decision: spike AB#6930 (Gerald, 2026-10-19, option A). Consumers: the GraphQL interface types (AB#6932) and
-the pipeline node (AB#6933); a consumer calls this one method and never fans out or merges itself.
+global order. Decision: the interface-query spike (Gerald, 2026-10-19, option A). Consumers: the GraphQL interface types and
+the pipeline node; a consumer calls this one method and never fans out or merges itself.
 
 ```csharp
 Task<RtInterfaceQueryResult> GetRtEntitiesByInterfaceAsync(IOctoSession session,
@@ -33,7 +33,7 @@ new index, no change of the persisted `RtEntity` contract.
    rtWellKnownName, rtCreatedBy). Each refusal is an `InterfaceQueryException` (below).
 2. **Implementers** come from the CK cache: `ICkCacheService.GetRtCkInterface` → `CkInterfaceGraph.ImplementingTypes` (derived
    types included). Abstract types are dropped, the rest is grouped by `CkTypeGraph.DefiningCollectionRootCkTypeId`, i.e. by
-   collection. More than 64 collection roots → refusal (same cap as the abstract navigation target, AB#5000).
+   collection. More than 64 collection roots → refusal (same cap as the abstract navigation target).
 3. **Security.** The caller's data-permission filter is built once (`IDataSecurityFilterFactory`, audit event for AuditOnly
    policies as in the type query). It is a predicate on `ckTypeId`, so it composes with the per-collection `$in` list of
    implementing types. A type that is protected and neither allowed nor owned-only for the caller can never match; it is
@@ -90,7 +90,7 @@ sort field: first-page p95 at most 100 ms (30 collections, 1M entities); unindex
 The test `GetRtEntitiesByInterfacePerformanceTests` (trait `Category=Performance`; 100 000 entities by default,
 `OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000` for the 1M run) asserts the first two and prints the third. Measured numbers
 (.NET end to end through `ITenantRepository`, MongoDB 8.0.15 in a Testcontainer on a Mac mini, page size 50, 30 collection
-roots, index `(ckTypeId, attributes.name, rtState)` on every root): see the table in `CLAUDE.md`, "Interface query".
+roots, index `(ckTypeId, attributes.name, rtState)` on every root): see the table in `permissions-and-interface-query.md`, "Interface query".
 
 **Guidance: index the sort field of heavily used interface members.** The method creates and changes no index. A type that
 implements an interface declares the index of the member that clients sort by in its own CK type (`indexes:`); without it the

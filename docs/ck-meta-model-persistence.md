@@ -3,7 +3,7 @@ description: "CK meta-model persistence: owner paths, runtime state, range reten
 applies_to: src/Runtime.Engine.MongoDb/Repositories/Entities/**, src/Runtime.Contracts.MongoDb/Repositories/Entities/**
 ---
 
-### CkType.ownerAttributePath Round-Trip + OwnedOnly Owner Attribute (AB#4978)
+### CkType.ownerAttributePath Round-Trip + OwnedOnly Owner Attribute
 
 `CkTypeDto.OwnerAttributePath` (the CK-model-declared owner attribute for owned-only data
 permissions — a top-level String attribute compared against the caller's subject id instead of the
@@ -33,7 +33,7 @@ Consumers in this layer:
   record-path case `Test/ReviewTask` (`ownerAttributePath: Owner.UserId`).
 
 
-### CkAttribute.isRuntimeState Round-Trip (AB#4589)
+### CkAttribute.isRuntimeState Round-Trip
 
 The runtime CK cache is rebuilt by reading each model **back out of MongoDB**
 (`RepositoryDependencyResolver` → `IModelRepository.TryLookupCkModelAsync` → the
@@ -45,7 +45,7 @@ the full Mongo round-trip, in **three** places (same pattern as `CkEnum.IsExtens
 2. `DatabaseCkModelRepository.ProcessCkAttributes` (import, `CkAttributeDto → CkAttribute`) must copy it;
 3. `DatabaseCkModelRepository.TryLookupCkModelAsync` (read-back, `CkAttribute → CkAttributeDto`) must copy it.
 
-`isRuntimeState` (AB#4582/AB#4589 runtime-state preservation) originally shipped with the DTO +
+`isRuntimeState` (runtime-state preservation) originally shipped with the DTO +
 compiler emitting it but **all three** Mongo steps missing, so the stored `CkAttribute` doc had no
 `isRuntimeState` field and the cache always read `false` — the preservation
 (`ImportRtModelCommand.PreserveRuntimeStateAttributesAsync`) silently never fired at runtime even
@@ -56,10 +56,10 @@ required to repopulate the flag — which is why the fix is paired with a `Syste
 patch bump (`ImportCkModelAsync` short-circuits on an already-installed version). Field name in
 Mongo is camelCase `isRuntimeState` (global `CamelCaseElementNameConvention`).
 
-### CK v2 Range Retention Round-Trip (AB#5665, AB#5914)
+### CK v2 Range Retention Round-Trip
 
-**Contract for classic models (decided 2026-10-14, AB#6675 / AB#6691): "unchanged semantics", not "unchanged bytes".**
-Range retention is the compiler default since AB#6675 (the property/option `OctoCkRangeRetention` / `-rr` is gone; the code-level
+**Contract for classic models (decided 2026-10-14): "unchanged semantics", not "unchanged bytes".**
+Range retention is the compiler default since that change (the property/option `OctoCkRangeRetention` / `-rr` is gone; the code-level
 `CkCompilerOptions.RangeRetention = false` remains for tests and re-pin tooling), and engines below 3.5.1 refuse a range-retaining
 model (`minEngineVersion` 3.5.1) - so a model newly compiled from unchanged sources is persisted with `dependencyRanges`,
 `minEngineVersion` and major-qualified references, and a rollback to an older engine can no longer read it. What stays: a classic
@@ -71,7 +71,7 @@ golden on a classic variant of Test-1.0.0 (`Fixtures/ClassicModelFactory`: no ra
 (`ResolveFailedModel_..._ExactPinModel` with a minor System bump, `..._WhenItsRangeBecomesSatisfiable` with a System of the next major;
 a minor bump keeps a range-retaining model `Available`).
 
-A model compiled with range retention (the default, see the engine CLAUDE.md) carries
+A model compiled with range retention (the default, see `octo-construction-kit-engine/docs/ck-versioning.md`) carries
 `CkCompiledModelRoot.DependencyRanges` (`{range, floor}` per direct dependency) and stores references into
 its dependencies **major-qualified** (`System@2/Entity-1`). The three-place rule applies:
 
@@ -125,12 +125,12 @@ a range-retaining dependent stays `Available` across an additive minor of its de
 exact-pinned one goes `ResolveFailed`, the rebuilt cache binds to the new version, and a downgrade below the
 floor goes `ResolveFailed` with the range/floor/installed description. The test bumps a test base model, not
 System, to stay independent of the System the test host embeds.
-`UsedSurface_PersistsThroughTenantImport_ExactPinnedModelHasNone` (AB#4472 / AB#6273) imports a range-retaining
+`UsedSurface_PersistsThroughTenantImport_ExactPinnedModelHasNone` imports a range-retaining
 dependent with `usedSurface` / `usedSurfaceHash` per range through `ITenantContext.ImportCkModelAsync` (the bot-services
 ImportCk path) and checks the `CkModel` document (list verbatim, hash recomputable) and the typed read-back; the
 exact-pinned twin has no such field.
 
-### CK v2 Meta-Model Persistence — interfaces, access, methods, ckLanguage, visibility, derivable, interface extends/associations/methods/deprecated (AB#5667 / AB#5668 / AB#5669 / AB#5914 / AB#5915)
+### CK v2 Meta-Model Persistence — interfaces, access, methods, ckLanguage, visibility, derivable, interface extends/associations/methods/deprecated
 
 CK v2 adds these constructs to the compiled model. All of them follow the three-place rule
 (entity + class map → write in `ExecuteImport` → read-back in `TryLookupCkModelAsync`):
@@ -145,9 +145,9 @@ CK v2 adds these constructs to the compiled model. All of them follow the three-
 | `minEngineVersion` (`CkCompiledModelRoot.MinEngineVersion`, Phase 1) | `CkModel.MinEngineVersion`, `SetIgnoreIfNull`, `Unset` on full update | as `ckLanguage` | model root |
 | `visibility` (Phase 1) | `Visibility` (Int32 enum, nullable, `SetIgnoreIfNull`) on `CkType`, `CkRecord`, `CkEnum`, `CkAttribute`, `CkAssociationRole`, `CkInterface`; embedded on `CkMethodDto` | the matching `Process*` | the matching element |
 | `derivable` (Phase 1) | `Derivable` on `CkType`, `CkRecord` (same mapping) | `ProcessCkTypesAndAssociations`, `ProcessCkRecords` | types, records |
-| `writeAccess` (AB#8574, `CkTypeDto.WriteAccess`) | `CkType.WriteAccess` = the Contracts `CkTypeWriteAccessDto` **embedded verbatim** (class map in `MongoRepositoryClient`, `Principals` / `Channels` `SetIgnoreIfNull`; the member itself `SetIgnoreIfNull`, so unrestricted types keep their document shape and legacy documents read back as `null` = unrestricted) | `ProcessCkTypesAndAssociations`; `CkTypeMongoDataSourceMapper.ApplyUpdate` (`Unset` when null) | types. **Required for enforcement**: without it a tenant drops the block and the engine's `TypeWriteAccessGuard` sees an unrestricted type. Gates: C# kitchen sink `Thing` declares a block (`CkMetaModelReflectionGateTests`), `CkMetaModelLegacyDocumentTests.TypeWriteAccess_*`, end to end `TypeWriteAccessEnforcementTests` (real repository: Client/Unknown refused with 144 and nothing persisted, Interactive and system sessions write, derived type refused through its base) |
-| `usedSurface` / `usedSurfaceHash` (AB#4472, Phase 2) | `CkModelDependency.UsedSurface` / `UsedSurfaceHash` inside `CkModel.DependencyRanges` (class map `SetIgnoreIfNull`; legacy entries read as null) | `CkModelDependency.FromDto` | `CkModelDependency.ToDto` |
-| `securitySensitive` (AB#6269, Phase 2) | `CkAttribute.SecuritySensitive` (`bool?`, `SetIgnoreIfNull`, `Unset` on full update) | `ProcessCkAttributes` | attributes |
+| `writeAccess` (`CkTypeDto.WriteAccess`) | `CkType.WriteAccess` = the Contracts `CkTypeWriteAccessDto` **embedded verbatim** (class map in `MongoRepositoryClient`, `Principals` / `Channels` `SetIgnoreIfNull`; the member itself `SetIgnoreIfNull`, so unrestricted types keep their document shape and legacy documents read back as `null` = unrestricted) | `ProcessCkTypesAndAssociations`; `CkTypeMongoDataSourceMapper.ApplyUpdate` (`Unset` when null) | types. **Required for enforcement**: without it a tenant drops the block and the engine's `TypeWriteAccessGuard` sees an unrestricted type. Gates: C# kitchen sink `Thing` declares a block (`CkMetaModelReflectionGateTests`), `CkMetaModelLegacyDocumentTests.TypeWriteAccess_*`, end to end `TypeWriteAccessEnforcementTests` (real repository: Client/Unknown refused with 144 and nothing persisted, Interactive and system sessions write, derived type refused through its base) |
+| `usedSurface` / `usedSurfaceHash` (Phase 2) | `CkModelDependency.UsedSurface` / `UsedSurfaceHash` inside `CkModel.DependencyRanges` (class map `SetIgnoreIfNull`; legacy entries read as null) | `CkModelDependency.FromDto` | `CkModelDependency.ToDto` |
+| `securitySensitive` (Phase 2) | `CkAttribute.SecuritySensitive` (`bool?`, `SetIgnoreIfNull`, `Unset` on full update) | `ProcessCkAttributes` | attributes |
 | interface `extends` / `associations` / `methods` / `deprecated` (Phase 1) | on the `CkInterface` document: `Extends` (`CkId<CkInterfaceId>` list), `Associations` (the Contracts `CkInterfaceAssociationDto` embedded, own class map), `Methods` (`CkMethodDto` embedded), `Deprecated` — all `SetIgnoreIfNull`, empty lists stored as absent | `ProcessCkInterfaces` | interfaces |
 | `targetCkInterfaceId` on a type association (Phase 1) | `CkTypeAssociation.TargetCkInterfaceId` (`SetIgnoreIfNull`; `TargetCkTypeId` stays set — the interface narrows the target) | `ProcessCkTypesAndAssociations` | type associations |
 
@@ -174,11 +174,11 @@ is above the running engine (`CkEngineVersion.IsSatisfiedBy`) next to the ckLang
 before `InsertModelWithImportingState` deletes the installed rows of the model name. The resolver's own 126 check runs
 only after that delete and left the installed version without its `CkModel` row
 (`ModelRequiringANewerEngine_IsRefusedBeforeTheInstalledVersionIsTouched`). That test pins the running engine with
-`CkEngineVersion.OverrideCurrentForTests` (engine test seam, AB#6274): the assembly version differs per build (DebugL
+`CkEngineVersion.OverrideCurrentForTests` (engine test seam): the assembly version differs per build (DebugL
 `999.0.0`, main CI `0.1.*` where `Current` is `null` and the check is skipped, r-tag builds `3.x`), so tests of
 message 126 must never depend on it.
 
-**A failed import keeps the installed version (AB#7381).** `InsertModelWithImportingState` deletes the installed `CkModel` row(s) of the
+**A failed import keeps the installed version.** `InsertModelWithImportingState` deletes the installed `CkModel` row(s) of the
 model name (any version) before the system-reference pre-validation (`ValidateSystemReferencesAsync`) and the dependency resolution
 (`HardResolveAsync`) run, and returns the deleted rows. When the import then fails *before the element rows were committed* (G-L3 below
 keeps its behaviour afterwards), the failure path deletes the `Importing` row and **puts the previous rows back** in one transaction, still
@@ -186,15 +186,15 @@ under the model import lock: version, state (`Available` or `ResolveFailed`), de
 are as before (field order of the document may differ). The installed elements are untouched at that point (they are replaced only inside the
 import transaction, which did not commit), so LibraryStatus shows the old version and its RT entities are not affected. Before the fix a failed
 import - a forced one whose dependency is `ResolveFailed`, a stale System reference, a concurrent tenant change - left the model uninstalled
-(test-2 meshtest, 2026-10-23: Industry.Energy 3.5.0 vanished after a failed 3.6.0). Tests: `CkRangeRetentionImportTests.FailedImport_*`
+(a test environment, 2026-10-23: Industry.Energy 3.5.0 vanished after a failed 3.6.0). Tests: `CkRangeRetentionImportTests.FailedImport_*`
 (dependency resolution fails after a forced Basic update; system reference mismatch), red without the restore.
 
-**Readers wait for a running import (AB#8677).** Between `InsertModelWithImportingState` and the state flip the tenant holds no `Available`
+**Readers wait for a running import.** Between `InsertModelWithImportingState` and the state flip the tenant holds no `Available`
 version of the imported model (about a second for System.Bot; longer for big models), and the element rows are replaced in between. A
 service that resolved a dependency on the model in that window failed (`ModelValidationException` "no Available version ... (installed:
 3.6.0 Importing)") and, for the system tenant, stopped the host. Keeping the old row `Available` until the flip was rejected: its element
 rows are replaced when the element transaction commits, long before the flip, so readers would see an `Available` model with missing or
-foreign elements, and `DeletePreviousVersion` and the AB#7381 restore assume one row per model name. Instead readers wait on the **model
+foreign elements, and `DeletePreviousVersion` and the restore assume one row per model name. Instead readers wait on the **model
 import lock**, which is held over the whole window: `IsExistingAsync(range)` waits (outside a transaction, up to
 `CkModelImportInProgress.DefaultWaitTimeout`, 2 min, **for the whole resolve**: the deadline is
 `TenantDatabaseSourceIdentifier.ImportWaitDeadline`, started by the first wait, so a resolve that meets several running imports does not
@@ -208,7 +208,7 @@ retry applies). Tests: `CkRangeRetentionImportTests.InPlaceUpgrade_WhileDependen
 `FailedInPlaceUpgrade_WhileDependentsResolve_*` (both red without the fix with the production message),
 `ModelsBeingImported_ReflectTheHeldImportLocks`, `CkModelImportWaitDeadlineTests` (unit: one deadline per resolve, cancellation).
 
-**The resolve reads the held import locks from a cache (AB#8947).** `IsExistingAsync(range)` runs on every tenant lookup of every request
+**The resolve reads the held import locks from a cache.** `IsExistingAsync(range)` runs on every tenant lookup of every request
 (`SystemContext.TryFindTenantContextAsync` -> `IsSystemTenantExistingAsync` -> `IsCkModelSatisfiedAsync`), so a lock query per call was one
 MongoDB `find` on `SysLock` per request in every service. It asks `CkModelImportLockCache` first: one answer per tenant database
 (`ICkModelImportLockScope.ImportLockScopeKey` = servers + database, shared by the admin and user data source instances) and process, reused
@@ -223,7 +223,7 @@ reads again - also when no import runs any more (it may have finished between th
 them through the cache (a stale "running" would misclassify a failure, a stale "not running" would end a wait early); a new reader on a hot
 path uses the cache and re-checks its misses. Cost: one `SysLock` read per tenant database, process and TTL for hits; one `SysLock` and one
 more `CkModel` read per miss. The race
-of AB#8677 stays as it was: lock check and model read are separate statements, so an import that starts between them can still make a
+of the earlier fix stays as it was: lock check and model read are separate statements, so an import that starts between them can still make a
 reader miss or read elements being replaced. Tests:
 `CkModelImportLockCacheTests` (unit: once per TTL, local invalidation, a change during the query, single flight, a cancelled reader, a
 stalled query timing out, shared scope, `IsExistingAsync` with a counting fake, direct check on a miss, stale answer during an upgrade, import
@@ -240,16 +240,15 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
 **Round-trip gate (concept §4.6, the isRuntimeState lesson) — MANDATORY for every meta-model change** —
 `tests/.../RoundTrip/`:
 
-- `CkMetaModelReflectionGateTests` (F1.3-S3, AB#5916) is the hard gate: every compiled model of the repository
+- `CkMetaModelReflectionGateTests` (F1.3-S3) is the hard gate: every compiled model of the repository
   (installed System, System.StreamData, `Test-1.0.0`, `Test-2.0.0`, the MSBuild kitchen sink `KitchenSink-1.0.0`, the
   C# twin) → import → `TryLookupCkModelAsync` → `CkModelReflectionComparer`, a walk by **reflection over every public
   property** of the DTO graph (runtime types of both sides; DTO = class name ending in `Dto`/`Root`; DTO collections
   matched by identity, scalar collections in order). Intentionally unpersisted properties are in
   `CkModelReflectionComparer.AllowList` with a reason: `CkCompiledModelRoot.Migrations` (executed on import),
-  `CkCompiledModelRoot.Compatibility` (AB#6295: the author's `compatibility.acknowledge` entries are build and publish-time
+  `CkCompiledModelRoot.Compatibility` (the author's `compatibility.acknowledge` entries are build and publish-time
   metadata, the publish gate reads them from the catalog JSON; also listed in `CkModelJsonComparer.RoundTripIgnoredPaths`;
-  the C# kitchen sink carries a value, so removing the entry turns the gate red). `CkTypeDto.Indexes` is NOT on the list any more
-  (AB#7125): it is read back, and dropping the mapping fails the gate for System (`Entity-1` and five more types) and
+  the C# kitchen sink carries a value, so removing the entry turns the gate red). `CkTypeDto.Indexes` is NOT on the list any more: it is read back, and dropping the mapping fails the gate for System (`Entity-1` and five more types) and
   `TypeIndexes_AllMembers_SurviveTheMongoRoundTrip` (Text with language and weights, UniqueNotDeleted, Ascending, order).
   `UnpersistedDtoProperty_FailsTheGate` is the automated mutation check (a type
   DTO subclass with an unknown member goes through the real import and is reported); removing a read-back mapping
@@ -262,16 +261,16 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   `CkV2KitchenSinkModel` (`KitchenSinkCs-1.0.0`, also used for the next-version replacement test).
   A new DTO property that is not persisted fails here by itself. `RoundTripIgnoredPaths` lists what is
   legitimately not stored, each with a justification: `$schema`, `migrations` and `compatibility` (dependencies, dependency
-  ranges and, since AB#7125, `types[*].indexes` are compared). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
+  ranges and, since that change, `types[*].indexes` are compared). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
   because the import converts them to the attribute's value type by design.
 - `CkMetaModelCacheRoundTripTests`: the cache rebuilt from Mongo (YAML kitchen sink) exposes interfaces,
   declared AND inherited implements / methods (`AllImplementedInterfaces`, `AllMethods`, `ImplementingTypes`),
   methods field by field, `access` at all three assignment sites and `ckLanguage`.
 - `CkMetaModelLegacyDocumentTests`: BSON only — classic element sets, pre-v2 documents read back as
   `null`/default, every method field and the new collections round-trip.
-- The gate is the persistence half of the engine's touch-point checklist (octo-construction-kit-engine `CLAUDE.md`,
+- The gate is the persistence half of the engine's touch-point checklist (`octo-construction-kit-engine/docs/ck-field-touch-points.md`,
   CK v2 touch points): a new meta-model field is only done when both the engine checklist and the field checklist
-  below are complete and this gate is green. The gate's xmldoc points to that engine checklist directly (AB#6272):
+  below are complete and this gate is green. The gate's xmldoc points to that engine checklist directly:
   its row 10 is this gate, its row 7 is the engine's classification guard `CkSemVerClassificationGuardTests`, which
   fails when the new field has no diff, no probe or no classifier rule.
 
@@ -284,7 +283,7 @@ pre-Phase-1 services (they ignore `access`, so Hidden attributes would be expose
 before every service there runs the Phase 1 engine; `minEngineVersion` and the `ck-models/v3` catalog path enforce it on
 the catalog side.
 
-**Phase 1 additions (F1.3-S1, AB#5914):**
+**Phase 1 additions (F1.3-S1):**
 - `implements` order (review L20): each `CkTypeInterfaceImplementation` row stores its `Position` in the declared list;
   the read-back orders by it (interface id ordinal as tie-break), so multi-interface types round-trip in declared order
   (`TypeWithThreeInterfaces_ReadsBackInDeclaredOrder`).
@@ -292,7 +291,7 @@ the catalog side.
   back, so the repository resolver can refuse a model that needs a newer engine (message 126).
 - Method `Visibility` (embedded `CkMethodDto`) is left out of the document when undeclared.
 
-**Phase 3 addition (AB#6878, touch-point row 10 of `execution.handler`, engine AB#6877):**
+**Phase 3 addition (touch-point row 10 of `execution.handler`):**
 - `execution.handler` (`CkMethodExecutionDto.Handler`, `'service'` | `'pipeline'`) is persisted inside the embedded
   `CkMethodDto.Execution` (class map `CkMethodExecutionDto` in `MongoRepositoryClient.RegisterCkMethodClassMaps`,
   `SetIgnoreIfNull`). An undeclared handler is left out of the document, so models without the key stay
@@ -302,7 +301,7 @@ the catalog side.
   `TestCkModelKitchenSink` method `ChangePassword-2`) declare `handler: pipeline`; `CkMetaModelReflectionGateTests`,
   `CkMetaModelCacheRoundTripTests` (cache rebuilt from Mongo) and `CkMetaModelLegacyDocumentTests` cover it.
   Do not publish a model with `handler: pipeline` before this persistence is released: an older service drops the value on import.
-**Phase 3 addition (AB#7024, touch-point row 10 of `replacesGenericCreate`, engine AB#7024):**
+**Phase 3 addition (touch-point row 10 of `replacesGenericCreate`):**
 - `replacesGenericCreate` (`CkMethodDto.ReplacesGenericCreate`, `bool`) is persisted on the embedded `CkMethodDto` (class map
   `CkMethodDto` in `MongoRepositoryClient`, `SetIgnoreIfDefault`). A method that does not set the flag has no such key
   in the document, so models without the key stay byte-identical and documents written before the field read back as
@@ -314,7 +313,7 @@ the catalog side.
   `CkMetaModelLegacyDocumentTests` (`MethodReplacesGenericCreate_*`, `MethodDocument_WrittenBefore*`) cover it.
   Do not publish a model with `replacesGenericCreate` before this persistence is released: an older service drops the flag on import
   (the engine's `minEngineVersion` makes a service with an older engine refuse the model, message 126).
-**Phase 3 addition (AB#7036, touch-point row 10 of `authorization.dataAccess`, engine AB#7036):**
+**Phase 3 addition (touch-point row 10 of `authorization.dataAccess`):**
 - `dataAccess` (`CkMethodAuthorizationDto.DataAccess`, nullable enum `CkMethodDataAccessDto` `Read` | `Write`, stored as its integer
   like `kind`) is persisted on the embedded `CkMethodAuthorizationDto` (class map in `MongoRepositoryClient`,
   `SetIgnoreIfNull`): a method that does not declare it has no such key in the authorization document, so models without the key
@@ -326,8 +325,8 @@ the catalog side.
   (cache rebuilt from Mongo) and `CkMetaModelLegacyDocumentTests` (`MethodAuthorizationDataAccess_*`,
   `MethodAuthorization_WrittenBefore*`) cover it. A service whose persistence predates the field would drop it on import and then
   treat a `Read` method as `Write` (fail-closed, but wrong); the engine's `minEngineVersion` makes a service with an older engine
-  refuse the model (message 126). The gateway that reads the value is AB#7037.
-**Phase 3 addition (AB#7006, touch-point row 10 of the method result marker `sensitive`, engine AB#7006):**
+  refuse the model (message 126). A separate gateway reads the value.
+**Phase 3 addition (touch-point row 10 of the method result marker `sensitive`):**
 - `sensitive` (`CkMethodResultDto.Sensitive`, `bool`) marks the whole result of a method as never to be logged, audited or
   traced. It is persisted on the embedded `CkMethodResultDto` (class map `CkMethodResultDto` in `MongoRepositoryClient`,
   `SetIgnoreIfDefault`): a result without the marker has no such key in the document, so models without the key stay
@@ -340,7 +339,7 @@ the catalog side.
   A service whose persistence predates the marker would drop it on import, so a model with a sensitive result is only
   imported by a service whose engine knows the key: the model's raised `minEngineVersion` makes an older engine refuse it
   (message 126) instead of storing the model without the marker.
-**Phase 3 addition (AB#6926, touch-point row 10 of `execution.mode`, engine AB#6925):**
+**Phase 3 addition (touch-point row 10 of `execution.mode`):**
 - `mode` (`CkMethodExecutionDto.Mode`, `'sync'` | `'async'`) is persisted inside the embedded `CkMethodDto.Execution` (class
   map `CkMethodExecutionDto` in `MongoRepositoryClient.RegisterCkMethodClassMaps`, `SetIgnoreIfNull`). An undeclared mode is
   left out of the document, so models without the key stay byte-identical and documents written before the field read back
@@ -359,7 +358,7 @@ the catalog side.
   models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute
   metadata of all states is loaded anyway, and outside an import no `Importing` model exists.
 
-### Index attribute paths resolve against the inheritance chain (AB#9524)
+### Index attribute paths resolve against the inheritance chain
 
 - A stored `CkType` lists only the attributes it assigns itself. `PrepareAndCreateIndex` therefore resolves the paths of
   an index against the **inheritance chain of the index-defining type** (`IndexAttributePaths.BuildTypeChains`: base

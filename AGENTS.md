@@ -65,7 +65,7 @@ dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Ca
 dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=LoadSensitive"
 ```
 
-Versions come only from the pipeline (AB#6291): `Directory.Build.props` has no release fallback, so a
+Versions come only from the pipeline: `Directory.Build.props` has no release fallback, so a
 Debug/Release build without `-p:OctoVersion=X.Y.Z` (or `-p:OctoNugetPrivateServer=<feed>` for the main
 line `0.1.*`) fails fast with MSBuild error `OCTO0001`. Use `-c DebugL` locally.
 

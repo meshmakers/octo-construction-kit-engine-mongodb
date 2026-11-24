@@ -375,5 +375,5 @@ CI filter `Category!=Performance&Category!=Stress` (see "Load-sensitive tests" i
 `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`).
 
 The wall-clock performance budget tests (xUnit trait `Category=Performance`) are excluded from the PR and main CI and run in a
-separate nightly pipeline (`azure-pipelines-performance.yml`), as are the stress tests (`Category=Stress`, AB#8679/AB#8680). How to run them locally and where the nightly results are:
+separate nightly pipeline (`azure-pipelines-performance.yml`), as are the stress tests (`Category=Stress`). How to run them locally and where the nightly results are:
 [`tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`](tests/Runtime.Engine.MongoDb.IntegrationTests/README.md).

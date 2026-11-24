@@ -43,7 +43,7 @@ The shared `CkArchiveSnapshot` covers both subtypes. When the loaded entity is a
    slot is treated as a dehydrated cache; the spec list is authoritative).
 2. Sets `CkArchiveSnapshot.RollupAggregations` so the activation / DDL path can branch.
 
-### Tenant-level Disable is a verified precondition (AB#4255)
+### Tenant-level Disable is a verified precondition
 
 `TenantContext.DisableStreamDataAsync` enumerates the tenant's archives (`GetArchiveRuntimeStore().EnumerateAsync()`,
 gated on `System.StreamData/Archive` being in the CK cache — no model, no archives, no check) and
@@ -65,7 +65,7 @@ regardless of the current flag value. Read failures propagate — an unreadable 
   - `COUNT` → `BIGINT`
   - `AVG` → `{base}_sum DOUBLE PRECISION`, `{base}_count BIGINT`
   - `SUM` / `MIN` / `MAX` → `DOUBLE PRECISION`
-  - `First` / `Last` (AB#4188) → a single `DOUBLE PRECISION` column holding the value at the
+  - `First` / `Last` → a single `DOUBLE PRECISION` column holding the value at the
     earliest / latest observation in the bucket. CrateDB has no `arg_min`/`arg_max` and `MIN`/`MAX`
     reject arrays, so `RollupAggregationSqlBuilder` wraps the source in a `ROW_NUMBER()` sub-select
     (`AppendArgSourceSubquery`) ranked by the raw `timestamp` (raw source) or child `window_end`
@@ -74,7 +74,7 @@ regardless of the current flag value. Read failures propagate — an unreadable 
     only. In the LOCF path (a co-occurring TWA) the rank sorts the carry-in row last and the pick is
     `AND NOT is_carry`-guarded. The stored column is read back directly as its own series
     (`First`/`Last` are not ad-hoc query aggregates).
-  - `TimeWeightedAvg` (AB#4336) → `{base}_integral DOUBLE PRECISION` (Σ value × Δt in value·ms),
+  - `TimeWeightedAvg` → `{base}_integral DOUBLE PRECISION` (Σ value × Δt in value·ms),
     `{base}_duration BIGINT` (covered ms); default base name uses the short token `twavg`.
     Forward aggregation over a raw source uses a LOCF statement (carry-in row per rtId bounded
     by `RollupArchive.CarryLookbackMs`, default 35 d; interval weighting via `LEAD`) built by
@@ -86,7 +86,7 @@ regardless of the current flag value. Read failures propagate — an unreadable 
   Rollup column names are storage identifiers (e.g. `temperature_avg_sum`), not CK-type
   attribute paths — the path-resolver would fail to resolve them.
 
-### Computed Columns — Formula Names (AB#4779)
+### Computed Columns — Formula Names
 
 A computed-column formula is evaluated in .NET via mXparser at ingest, **never in SQL** — it appears
 in no DDL. Operands are bound as mXparser `Argument`s whose names cannot contain a dot, and the row
@@ -117,7 +117,7 @@ is physical, so comparing the caller's logical spelling against it would always 
 re-saving the identical formula from the UI would version the column (`power__v1`, `__v2`, …),
 backfill it and swap the pointer, every time.
 
-**Logical names in results (AB#8236).** The versioned physical column (`{base}__v{N}`) is SQL-internal.
+**Logical names in results.** The versioned physical column (`{base}__v{N}`) is SQL-internal.
 `StreamDataFieldResolver.RegisterComputedColumn` registers a computed column with `CrateDbName` = the
 unversioned base (the key of every result alias, `StreamDataRow.Values` entry and GraphQL wire mapping)
 and `PhysicalName` = the active versioned column. All SQL (SELECT, WHERE field filters, ORDER BY, aggregate
@@ -128,12 +128,12 @@ Never put `PhysicalName` into an alias — a second formula change would rename 
 queries and MeshBoard widgets. Tests: `CrateDbStreamDataComputedColumnLogicalNamingTests` (unit, SQL),
 `ComputedColumnLogicalNameQueryIntegrationTests` (real CrateDB, formula changed 0/1/2 times).
 
-### Computed Columns — No NULL for an aborted evaluation, repair (AB#8331)
+### Computed Columns — No NULL for an aborted evaluation, repair
 
 `ApplyComputedColumns` no longer stores NULL when the formula engine throws (`FormulaEvaluationException`, out of memory): ingest
 fails the write, the backfill (`EvaluateBackfillPage`) evaluates the page once more and then throws a contracts
 `StreamDataException` naming the column, the time slice and the last written key (nothing of the page is written). A formula that
-yields no value (NaN / null, AB#8060) still stores NULL. `RepairComputedColumnAsync` walks `[from, to)` in the backfill's slices
+yields no value (NaN / null) still stores NULL. `RepairComputedColumnAsync` walks `[from, to)` in the backfill's slices
 with the extra page filter `ComputedColumnBackfillSqlBuilder.BuildRepairFilter` (target NULL and an operand the formula references
 not NULL) and writes the active column. Tests: `CrateDbComputedColumnEvaluationFailureTests` (incl. a 2,000,000-row synthetic
 backfill: ~4.6 KB allocated per row, live heap flat).

@@ -24,7 +24,7 @@ USE_LOCAL_MONGODB=true dotnet test -c DebugL --filter "Category!=LoadSensitive"
 }
 ```
 
-### CrateDB image and the 5.x / 6.x compatibility tests (AB#7149)
+### CrateDB image and the 5.x / 6.x compatibility tests
 
 The CrateDB tests (`StagingCopy/`, `CrateCompat/`) run on `crate:6.4.6`. `OCTO_TEST_CRATEDB_IMAGE` replaces the image, so the same tests
 run on every supported CrateDB line (for example `crate:5.10.10`):
@@ -41,7 +41,7 @@ the format-1 import of array and record columns (`CrateFormatOneImportArrayTests
 CrateDB 6.2 renumbered its HTTP error codes (4100 to 40910, 5030 to 5005); the platform talks to CrateDB over the PostgreSQL wire
 protocol only and does not read them.
 
-### The integration suite is silent for most of its run — that is not a hang (AB#5436)
+### The integration suite is silent for most of its run — that is not a hang
 
 At the default `dotnet test` console verbosity **a passing test prints nothing**: only `[FAIL]` and
 `[SKIP]` lines reach the log. This suite reports its last failing test very early — the stream-data
@@ -74,7 +74,7 @@ Two consequences worth keeping:
   ~17 collection fixtures creates its own system tenant and imports the CK models; xUnit attributes
   that to no test at all. If this suite needs to get faster, that is the place, not the tests.
 
-### Progress and bounded teardown (AB#5436)
+### Progress and bounded teardown
 
 `Fixtures/RunProgress.cs` is the suite's progress channel. It writes **xUnit diagnostic messages**
 (`diagnosticMessages: true` in `xunit.runner.json`), which the runner prints as
@@ -99,7 +99,7 @@ and their databases behind in the shared container.
 Swallowing a teardown failure loses it as a test result, deliberately: the reported line is the only
 trace, and the run's red/green verdict is already decided by the tests themselves.
 
-### Test layout, parallelism rules and the CI time budget (AB#6292)
+### Test layout, parallelism rules and the CI time budget
 
 **Layout.** `tests/StreamData.UnitTests` (assembly `Runtime.Engine.UnitTests`, ~940 tests, seconds) and
 `tests/Runtime.Engine.MongoDb.IntegrationTests` (~590 tests against ONE shared Testcontainers MongoDB
@@ -115,12 +115,12 @@ round-trip gate lives in `RoundTrip/` (`CkMetaModelRoundTripTests`, `CkMetaModel
 - Tests inside one collection run serially; collections run concurrently. The wall clock is the
   longest collection chain plus fixture setup, not the sum of all tests. Today the critical path is
   `BlueprintServiceIntegrationTests` (~31 tests, one collection) and `DirectedRoleDeepGraphTests`.
-- `SeedValueGuardBlueprintIntegrationTests` (AB#6313/AB#6395, `TestBlueprints/.../SeedGuardBp`, CK type
+- `SeedValueGuardBlueprintIntegrationTests` (`TestBlueprints/.../SeedGuardBp`, CK type
   `Test/SeedGuardEntity`) proves the engine's seed value guard against a real tenant: a blueprint update
   with empty/omitted seed values keeps non-empty tenant values (Merge and Full), reports them, applies them
   only with `AllowBlanking` (or a `ConfirmedBlankings` pair), and an omitted attribute at its CK default is not
   reported. A non-empty JSON seed that empties a field is reported as `SeedEmptiesJsonField` with the field's
-  path, never as `SeedEmpty` (AB#8263). It has its own
+  path, never as `SeedEmpty`. It has its own
   collection. Adding CK elements to `TestCkModel` also requires the golden
   `testData/ckv2-golden-main-v1-ck-documents.txt` to be extended (`CkV2CompatibilityTests`).
 - Put a new long-running class into its own collection (own fixture or a fixture shared only where
@@ -128,14 +128,14 @@ round-trip gate lives in `RoundTrip/` (`CkMetaModelRoundTripTests`, `CkMetaModel
   setup (~2-5 s locally, 15-110 s on a loaded agent).
 - Never mutate process-wide state from a parallel collection (see the schema-prefix note below).
 
-**Measured (2026-10-09, AB#6292).** Locally (Mac mini, 14 cores, DebugL, `dotnet test <sln>`):
+**Measured (2026-10-09).** Locally (Mac mini, 14 cores, DebugL, `dotnet test <sln>`):
 integration suite 590 passed / 2 skipped in **4 m 07 s**; with the 45 new CK v2 / RoundTrip tests
 filtered out it is **also 4 m 07 s** - they add ~50 s of summed test time (7.5 %) but none to the
 critical path. On CI the same suite took 9 m 46 s (r3.5.0, 50936, 545 tests) and 21-31 min after
 the CK v2 work (51028, 51030, 51015), but every pre-existing class slowed down by the same factor
 (x2.8), the bare MongoDB container start went from 22 s (burst agent) / 43 s to 65 s, and the very
 same commit ran in 5 min on a burst agent (50769) and 38 min on a loaded one (50755). The CI growth is
-agent load (pve02 CPU steal, Epic AB#5711), not the new tests.
+agent load (CPU steal on the CI host), not the new tests.
 
 **CI time budget (`azure-pipelines.yml`).** Target: Test step < 15 min on an uncontended agent (today
 ~5-10 min). The Test step has **no** `retryCountOnTaskFailure` (a whole-step retry reran a deterministic
@@ -144,7 +144,7 @@ red suite three times into the job timeout, 51009/51014, and hid a mass failure,
 (no dump) so a single hung test aborts the run and is named in the log. Flaky tests are fixed or
 handled per test, never by retrying the step.
 
-**Container memory caps (AB#8511).** The shared mongod runs with `--wiredTigerCacheSizeGB 3`, closes idle WiredTiger
+**Container memory caps.** The shared mongod runs with `--wiredTigerCacheSizeGB 3`, closes idle WiredTiger
 data handles after 30 s (`wiredTigerFileHandleCloseIdleTime`) and has a 12 GiB container limit (measured peak 6.7 GiB,
 mostly the data handles of the fixture databases, not data). A 1 GB cache was full during the startup burst and
 WiredTiger rolled transactions back (`transaction rolled back because of cache overflow`, CI 70416/70685); every CrateDB test
@@ -153,7 +153,7 @@ container with a 1 GB heap and a 3 GiB limit (`Fixtures/TestContainerLimits.cs`,
 stalled until MongoDB aborted transactions after 60 s. Never raise `transactionLifetimeLimitSeconds` or a test budget
 to hide a stall. Details: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`.
 
-**Container CPU limits and bounded parallelism (AB#9250).** Every Testcontainer also has a CPU limit (Docker `NanoCpus`:
+**Container CPU limits and bounded parallelism.** Every Testcontainer also has a CPU limit (Docker `NanoCpus`:
 mongod 4 CPUs, every CrateDB container 2 CPUs; measured peaks 1.9 and 2.4 CPUs without a limit) and the CrateDB heap is set
 explicitly for all three CrateDB fixtures (1 GB, the stress container 512 MB), all in `Fixtures/TestContainerLimits.cs`
 (`Resources(memory, cpus)`, pinned by `TestContainerLimitsValueTests`, `TestContainerLimitsTests` and `CrateTestContainerLimitsTests`). `xunit.runner.json`
@@ -166,9 +166,9 @@ before the measured part (`StagingCopy/CrateTestConnect.cs`, `WarmUpAsync`): on 
 Desktop port proxy sometimes takes seconds while CrateDB is idle. The pool-wait tests keep their 3 s connect timeout on purpose. Local run on Windows and the measurements: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`,
 *Container resources and parallelism*.
 
-**Performance budget tests are not in the CI (AB#8004).** The Test step runs with
+**Performance budget tests are not in the CI.** The Test step runs with
 `--filter "Category!=Performance"`. Tests that assert a wall-clock budget carry
-`[Trait("Category", "Performance")]` (today `GetRtEntitiesByInterfacePerformanceTests`, budget AB#6930, and `DownsamplingManyIdsPerformanceTests`, budget AB#8993: < 5 s per downsampling call over 400 ids and 7 days) and run only in the
+`[Trait("Category", "Performance")]` (today `GetRtEntitiesByInterfacePerformanceTests`, with the interface-query budget, and `DownsamplingManyIdsPerformanceTests`, budget < 5 s per downsampling call over 400 ids and 7 days) and run only in the
 separate pipeline `octo-construction-kit-engine-mongodb-Performance` (`azure-pipelines-performance.yml`: daily 03:30 UTC on
 `main` + manual, pool `meshmakers-ci-agents`, a breach turns the run red and files/updates a Bug tagged `perf-budget-breach`
 under the Core Sustain Feature via `pipelines/report-perf-breach.ps1`). It is not a gate: no trigger, no branch policy, no
@@ -177,7 +177,7 @@ cascade. Correctness timeouts with a wide margin (`RepositoryDistributedLockServ
 `StagingCopyIntegrationTests` 30 s, the orchestrator tick waits, `TenantUpgradeGuardTests` 2 s for 100 in-memory models) stay in
 the CI. Local run, triage and the classification rule: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`.
 
-**Stress tests are not in the CI either (AB#8679/AB#8680).** Trait `[Trait("Category", "Stress")]`: the
+**Stress tests are not in the CI either.** Trait `[Trait("Category", "Stress")]`: the
 `StreamDataWriteLoss/*UnderMemoryPressureIntegrationTests` with their own small-heap CrateDB (`CrateMemoryPressureFixture`).
 They took a local full run from ~13 to more than 22 minutes (decision Reimar 2026-11-09: stress tests do not belong in the
 integration suite). The CI filter is `Category!=Performance&Category!=Stress`; the pipeline
@@ -221,7 +221,7 @@ Europe (Continent)
 ```
 
 
-### CK v2 Kitchen Sink (AB#5667 / AB#5668 / AB#5669)
+### CK v2 Kitchen Sink
 
 `TestCkModelKitchenSink` (`KitchenSink-1.0.0`, `ckLanguage: 2`) uses every CK v2 construct: interfaces
 `Named-1` (required + optional member) and `Coded-1`; abstract `Thing` implements Named, `Gadget` derives from
@@ -229,7 +229,7 @@ Thing (inherits Named) and implements Coded, unrelated `Widget` implements Named
 record (`Address`) assignments, and `ReadWrite` / `ReadOnly` / `MethodOnly` on the association role `Link` (Hidden is
 not allowed on association roles, engine rule 108); methods `ChangePassword-2` (every field),
 `Reindex-1` (static) and `Ping-1` (minimal) on Thing. Extend it whenever a new meta-model field is added.
-Since AB#6334 (message 129) internal elements may only be referenced by internal ones: `Gadget`, `Widget`, `Coded-1`,
+Since that change (message 129) internal elements may only be referenced by internal ones: `Gadget`, `Widget`, `Coded-1`,
 `Labeled-1` and `Legacy-1` are internal, and the internal attribute `Hint` (assigned by Widget) and the unreferenced
 internal record `Memo` keep every visibility kind covered (C# twin `CkV2KitchenSinkModel` likewise).
 

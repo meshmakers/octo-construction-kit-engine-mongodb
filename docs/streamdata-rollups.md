@@ -14,14 +14,14 @@ applies_to: src/Runtime.Engine.CrateDb/**, src/Runtime.Engine.MongoDb/StreamData
   archive store into `RollupArchiveLifecycleService`; the archive store is needed by
   `CreateAsync` to look up the source archive's `TargetCkTypeId`.
 
-### Gas-day rollups: DayStartOffsetMs (AB#7359)
+### Gas-day rollups: DayStartOffsetMs
 
 A `CalendarDay` rollup may declare `ReferenceTimeZone` and `DayStartOffsetMs` (System.StreamData 1.22.0; e.g. 06:00 Europe/Vienna =
 `21600000`), so one bucket is one gas day of 23, 24 or 25 hours. Rules to keep:
 
 - **One calendar for every path.** Bucket boundaries come from `BucketCalendar.For(rollup)` (engine `Runtime.Engine/StreamData/BucketCalendar.cs`)
   in the live orchestrator, the recompute (`RecomputeBucketEnumerator`, `CrateDbArchiveRecomputeExecutor`), the repair watermark target
-  (`RollupRepairer.WatermarkTargetAsync`), the calendar bin axis of a downsampling query (`BuildCalendarBinAxis`) and its local-day bins (`DownsamplingBinAxis`, AB#7360). **Never call the old
+  (`RollupRepairer.WatermarkTargetAsync`), the calendar bin axis of a downsampling query (`BuildCalendarBinAxis`) and its local-day bins (`DownsamplingBinAxis`). **Never call the old
   `BucketBoundary.AlignDown/NextBucketEnd/InitialWatermark(alignment, bucketSize, zone)` overloads in this repository**: they silently mean a
   midnight day and put recompute and repair buckets next to the 06:00 buckets of the live pass (a grep for them must stay empty; the
   `FixedSize` call in `DownsamplingBinQuantizer` is the one exception, a fixed grid has no calendar).
@@ -33,7 +33,7 @@ A `CalendarDay` rollup may declare `ReferenceTimeZone` and `DayStartOffsetMs` (S
   backfill by the repair's rewind, downsampling bins equal the stored `window_start`), `MongoRollupArchiveRuntimeStoreDayStartOffsetTests`,
   `RecomputeBucketEnumeratorGasDayTests`. No CHANGELOG file exists in this repo; this section is the entry.
 
-### Optimistic Recompute — Per-Window Generation Pointer (AB#4184, Phase 6)
+### Optimistic Recompute — Per-Window Generation Pointer (Phase 6)
 
 A partial-range rollup recompute must swap the recomputed windows **atomically** even though CrateDB
 has no multi-statement transaction. The mechanism is a per-window `generation` pointer:
@@ -66,7 +66,7 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   swept), after the sweep (the dependents recompute right after this rollup), after the
   contained-pointer delete. Search reads see the last refresh, not the last write; do not remove one
   of these as "redundant".
-- **Row bound (AB#6283)** — the copy (1), the sweep (4), the leftover guard (0) and the reclaim pass
+- **Row bound** — the copy (1), the sweep (4), the leftover guard (0) and the reclaim pass
   each run as **one statement per time slice** of the range, and every slice is **counted before it
   is executed** (`ExportSlicePlanner`, the planner of the archive export: propose, count, accept or
   narrow). No statement touches more than twice `StreamData:Recompute:SliceTargetRows` rows,
@@ -87,7 +87,7 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   the retry would adopt the first attempt's values and keep rows for entities it no longer produces
   (pinned by `RollupRecomputeRowBoundTests.LeftoverRowsAtTheNextGeneration_AreNotAdopted`). Hence
   step (0), restricted to the range and scope of the call.
-- **Committed stays committed (AB#6283)** — once the flip and its refresh have succeeded,
+- **Committed stays committed** — once the flip and its refresh have succeeded,
   `ExecuteAsync` reports the range as done. A failure in the sweep, the contained-pointer delete or
   the staging cleanup is logged as a warning (rollup, range, scope, generation, step) and **not
   thrown**, unless the caller's token is cancelled (then the orchestrator records an interruption and
@@ -124,7 +124,7 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   pass per job). The public executor constructor, used outside the factory, has a state of its own.
   `RollupSourceBucketAggregator`'s own pointer-table memo is still per instance: the forward path
   issues `CREATE TABLE IF NOT EXISTS …__genmap` once per tick and rollup source.
-- **Statement budget (AB#6283)** — `CrateStatementClass { Interactive, Maintenance }`. Every
+- **Statement budget** — `CrateStatementClass { Interactive, Maintenance }`. Every
   statement of the executor and of `RollupSourceBucketAggregator` (so the forward aggregation too)
   is sent as `Maintenance` with the caller's token: `IStreamDataDatabaseClient.ExecuteNonQueryAsync /
   RefreshArchiveTableAsync / GetCountAsync(…, CrateStatementClass, CancellationToken)` and
@@ -196,12 +196,12 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   the upgrade self-heal above (dropped + recreated); `LoadGenerationRangesAsync` also tolerates a
   missing genmap table on the read side. Per-rtId scoped recompute is supported: the executor restricts
   aggregation, pointer entry (`rtid_scope` = the entity's rtId) and sweep to that entity, and since
-  AB#5189 the drain merges and runs obligations per scope. A `rewindRollupWatermark` through a
+  a later change the drain merges and runs obligations per scope. A `rewindRollupWatermark` through a
   recomputed range (`ClearRecomputeGenerationsAsync`) keeps the part of a straddling pointer before
   the boundary as an entry of its own (`BuildTruncateStraddlingPointers`) — those rows are not
   rewound, stay on their generation, and would be invisible to every reader without a pointer.
 
-### Open-Bucket Refresh + Recompute Cap (AB#4306)
+### Open-Bucket Refresh + Recompute Cap
 
 The forward `RollupOrchestrator` optionally re-aggregates the **current open (in-progress) bucket**
 on every tick at `generation 0`, without advancing the watermark, so a coarse partial period (*this
@@ -216,9 +216,9 @@ So `RecomputeArchiveInternalAsync` **caps `to` at `BucketBoundary.AlignDown(now,
 the bucket containing `now`), leaving only closed buckets in range; an all-open range becomes a
 `Completed` no-op. This keeps the open bucket on the always-fresh generation-0 lane. In a cascade the
 open bucket of each level is refreshed cheaply from the level below, so the current period stays live
-all the way up (see also the voest cascade Design Decision in the `voest-app` repository).
+all the way up (see also the cascade Design Decision in the customer app repository).
 
-### Recompute-Work Purge + Fail-Fast on Non-Activated Rollups (AB#4300)
+### Recompute-Work Purge + Fail-Fast on Non-Activated Rollups
 
 The periodic drain (`RecomputeOrchestrator.TickAsync`) skips any rollup that is not `Activated`, so
 queued work on a non-activated rollup would otherwise sit at `Pending` forever. Two guards, both
@@ -233,10 +233,10 @@ reachable from `TenantContext` DI:
   the lifecycle service (both optional ctor params, so the backward-compatible construction still
   works). Prevents a delete+re-import that reuses the same rtId from inheriting stale ranges/jobs.
 
-### Bounded Retro Reach — Automatic-Recompute Cap (AB#4196)
+### Bounded Retro Reach — Automatic-Recompute Cap
 
 Automatic recompute is driven by `RetroactiveWriteDetector.TryBuildDirtyWindow`, called from every
-`CrateDbStreamDataRepository` insert path. AB#4196 adds a cap on how far *before* the consumed
+`CrateDbStreamDataRepository` insert path. A separate guard adds a cap on how far *before* the consumed
 watermark a single very-late write may drag that automatic recompute — otherwise one stray old
 timestamp schedules a recompute of years of history.
 
@@ -255,7 +255,7 @@ timestamp schedules a recompute of years of history.
   `null` cap — manual/chained recompute stays unbounded, matching `recomputeArchive` /
   `rewindRollupWatermark`.
 
-### Late Deliveries Refresh Only Their Series, In Place (AB#9016)
+### Late Deliveries Refresh Only Their Series, In Place
 
 `DetectAndRecordRetroactiveWriteAsync` records the distinct rtIds of the late, in-reach automated rows on the dirty window
 (`RetroactiveWriteDetector.TryBuildDirtyWindow(..., maxScopedRtIds, ...)`). Above `StreamData:Recompute:MaxScopedRtIds` it
@@ -269,10 +269,10 @@ to keep:
   `GenerationFilterSql.RenderActiveGeneration` over the pointer entries with scope `''` or one of the series. The reader
   predicate is built from the same function, so the two cannot drift.
 - **No generation, no pointer, no sweep.** Do not add a flip or a generation sweep to this path: avoiding them is the
-  point (the cleanup DELETEs dominated CrateDB cost on prod-2).
+  point (the cleanup DELETEs dominated CrateDB cost in production).
 - **Refresh marker.** The marker is `BuildReadRefreshMarker`, the `rtchangeddatetime` of the oldest staged row. Rows the
   upsert wrote are at least as new; untouched rows are older.
-- **Write check.** A short slice is written once more and then fails (AB#8680). The check counts only freshly written
+- **Write check.** A short slice is written once more and then fails. The check counts only freshly written
   rows (`BuildCountRefreshedInScope`).
 - **Vanished buckets.** After the upsert, the rows of the series at the active generation in the range that are older
   than the marker (all of them when nothing was staged) are removed (`BuildStaleInScope`, count first, DELETE only when
@@ -285,24 +285,24 @@ to keep:
 - Tests: `LateDeliveryScopeTests` (unit), `StreamDataLateDelivery/ScopedRefreshEquivalenceTests` (real CrateDB). Concept:
   `octo-construction-kit-engine/docs/concept-rollup-recompute.md` §4a.
 
-### Manual Writes Reach the Rollups (AB#7594)
+### Manual Writes Reach the Rollups
 
 `DetectAndRecordRetroactiveWriteAsync` splits a batch by origin. Automated rows keep the single, reach-capped
 dirty window above. Manual rows go through `RetroactiveWriteDetector.BuildManualDirtyWindows`: **no reach cap**
 (a person corrected a known window; a rollup must not keep the replaced value) and **one window per cluster** of
 corrected windows (`ManualClusterGap` = 1 day), source `RecomputeChangeSource.Manual`, so two corrections months
 apart recompute two small ranges instead of everything in between. The recompute itself is the existing
-bounded, generation-flipped path (AB#5483, AB#6283); a replaced value is recomputed away, never added twice.
+bounded, generation-flipped path; a replaced value is recomputed away, never added twice.
 Tests: `RetroactiveWriteDetectorTests` (unit), `RollupManualWriteTests` (asset-repo integration, real CrateDB).
 
-### Dirty-Window End Survives the Store (AB#8621)
+### Dirty-Window End Survives the Store
 
 A dirty window is a MongoDB record (`CkArchiveDirtyWindow`), and a BSON date holds milliseconds. The detector used to
 end a window at `latest + 1 tick`; the store cut that back to `latest`, and for a timestamp on a bucket boundary (every
 hourly value is stamped on the hour) the planner's half-open alignment (`RecomputePlanner.AlignRangeToBuckets`) ended
 the recompute range at `latest`, so the bucket that holds the latest value of a late delivery was never recomputed.
 Only a later delivery that overlapped it repaired it, so the last bucket before a pause in the source stayed missing
-for good (voestalpine, test-2 13.10. 03:00Z and staging-1 30.10. 04:00Z, hourly rollup `6a4268000000000000000001`).
+for good (a customer installation, a test environment 13.10. 03:00Z and a staging environment 30.10. 04:00Z, hourly rollup `6a4268000000000000000001`).
 Both detector paths (`TryBuildDirtyWindow`, `BuildManualDirtyWindows`) now end the window at
 `RetroactiveWriteDetector.ExclusiveEndAfter(latest)`: `latest` cut to `StoredWindowResolution` (1 ms) plus 1 ms. The
 value is on the stored grid (the round trip leaves it unchanged) and never reaches into the next bucket. The forward

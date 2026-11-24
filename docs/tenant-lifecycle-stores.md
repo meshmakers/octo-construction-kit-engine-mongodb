@@ -3,10 +3,10 @@ description: Tenant database prefix, lifecycle notifications, lifecycle and retr
 applies_to: src/Runtime.Contracts.MongoDb/TenantLifecycle/**, src/Runtime.Engine.MongoDb/Repositories/TenantLifecycle/**
 ---
 
-### Tenant-Database Prefix — per-instance names on a shared MongoDB (AB#8797 / Epic AB#4944)
+### Tenant-Database Prefix — per-instance names on a shared MongoDB
 
 Two instances on one MongoDB server (different `SystemDatabaseName`) used to collide on equal tenant ids: the
-namespace gate refuses a database name that exists anywhere on the server (AB#4762), and clients name the
+namespace gate refuses a database name that exists anywhere on the server, and clients name the
 database after the tenant id by convention. `OctoSystemConfiguration.TenantDatabasePrefix` (section `System`,
 env `OCTO_SYSTEM__TENANTDATABASEPREFIX`, **default empty**) gives each instance its own name space, the MongoDB
 counterpart of `StreamData:SchemaInstancePrefix` (CrateDB). It is its own setting on purpose: an instance may
@@ -21,11 +21,11 @@ tenants' CrateDB schemas would move (see the Stream Data section).
 | Default name of a new tenant = `<prefix><tenantId>`, normalized; without a prefix the tenant id (unchanged convention) | `TenantDatabaseNames.DeriveDefault` (public, for the hosts: asset repository REST create without `databaseName`) |
 | Create and attach with a name that does not start with the prefix → the uniform `Database name '<x>' is not available.` (409); the prefix goes to the log only | `EnsureDatabaseNameCarriesTenantDatabasePrefix`, one call in the namespace gate after the reserved-name checks |
 | Tenants registered before the prefix keep their names: resolving never looks at the prefix; `ClearChildTenantAsync` re-creates under the old name inside `TenantDatabasePrefixExemption.Begin(name)` (an `AsyncLocal` scope for exactly that name and call) | `TenantDatabasePrefixExemption` |
-| The AB#4762 existence check is unchanged: a prefixed name that exists on the server is still refused | namespace gate |
+| The existence check is unchanged: a prefixed name that exists on the server is still refused | namespace gate |
 
 Restore (`TenantBackupService.RestoreTenantAsync`) attaches after `mongorestore`, so the attach's refusal would
 come after the data is written. `CheckTenantDatabasePrefixAsync` therefore runs right after the cross-instance
-ownership guard (AB#8672), before any drop or write: a target name without the prefix is refused with a descriptive
+ownership guard, before any drop or write: a target name without the prefix is refused with a descriptive
 `CommandResult.Failure`, unless it is the current database of the same tenant id (a restore over a tenant from
 before the prefix), which the restore then attaches inside the exemption scope. The scope is opened by the caller,
 not inside the async helper: an `AsyncLocal` set in an awaited method does not flow back. Without a prefix nothing
@@ -39,7 +39,7 @@ instances on one server, `TwoInstanceCollection`: different prefixes create the 
 without prefixes the second is refused) and `StreamData.UnitTests/TenantDatabaseNamesTests` (naming, validation,
 exemption scope).
 
-### Tenant-created notification after the commit (AB#9177)
+### Tenant-created notification after the commit
 
 Every service sets a tenant up when it receives `PosCreateTenant` (`PosCreatePosUpdateTenantConsumer`, octo-common-services)
 and must find the tenant registered. `CreateChildTenantAsync` and `AttachChildTenantAsync` write the registry rows in the
@@ -117,7 +117,7 @@ Rules:
   `IRepositoryOpsService` throws in mongodump / mongorestore), a scope of another session does not hold back a detach. A clear in a
   transaction publishes delete, create, update (`TenantCreatedNotificationOrderTests`).
 
-### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
+### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state
 
 `TenantLifecycleStore` (`Repositories/TenantLifecycle/`, non-CK collection `tenant_lifecycle` in the
 SYSTEM database) is written from two directions at once: `SetupTenantAsync` calls
@@ -136,7 +136,7 @@ branches, decided on the state that is already stored:
 | `Creating` | Re-opens the phase (`SetupStarted`, `LastError` cleared) but **leaves `AttemptCount`, `LeaseOwner`, `LeaseUntil` untouched** — that bookkeeping belongs to whoever is currently driving the tenant. |
 | missing / `Deleting` / `Failed` | New creation cycle: attempt budget, lease and last error are reset; `CreatedUtc` is preserved via `$ifNull`. |
 
-Why it matters (AB#4690): the old read-modify-write cleared `LeaseOwner`/`LeaseUntil` on every setup
+Why it matters: the old read-modify-write cleared `LeaseOwner`/`LeaseUntil` on every setup
 run and could revert a concurrent claim's `AttemptCount` increment (lost update). A tenant stuck in
 `Creating` therefore stayed at `AttemptCount = 0` with no lease forever — it never exhausted the retry
 budget, never reached `Failed`, and never recorded a diagnosable `LastError`, which made the reconciler
@@ -147,7 +147,7 @@ The pipeline addresses fields by their **stored element name** (the typed builde
 pins them against the class map — a property rename or a change to the camelCase convention would
 otherwise make the update write to fields nobody reads, silently and without error.
 
-### Repository-Client Cache Invalidation on Tenant Delete (AB#4690)
+### Repository-Client Cache Invalidation on Tenant Delete
 
 `UserRepositoryAccess` / `AdminRepositoryAccess` cache one `MongoRepositoryClient` — and therefore one
 `MongoClient` with its own connection pool — **per database name**, for the lifetime of the process.
@@ -157,7 +157,7 @@ connection already open in those pools, and **the driver never re-authenticates 
 connection**: each one keeps failing with error 13 (`"... requires authentication"`) even after the
 tenant is re-created and the user exists again. Connections are only retired when the server or the pool
 happens to close them, so a re-created tenant could be unusable for hours — this is the root cause of
-AB#4690, where a delete + recreate under the same database name left Identity unable to read the new
+an incident where a delete + recreate under the same database name left Identity unable to read the new
 tenant database, so its `SetupTenantAsync` aborted and the tenant ended up with no roles.
 
 Both accessors therefore expose `Invalidate(databaseName)`, which **evicts** the cached client so the
@@ -165,14 +165,14 @@ next resolve builds a fresh, freshly-authenticated one. Reached through
 `ISystemContext.InvalidateTenantRepositoryClientsAsync(tenantId, databaseName?)`, which resolves
 the database name from the tenant record when it is not supplied.
 
-**Eviction only — never dispose.** The first AB#4690 iteration disposed the evicted client
+**Eviction only — never dispose.** The first iteration disposed the evicted client
 (`Dispose` → `Cluster.Dispose`). That was a regression: handed-out clients are captured by live
 `TenantContext` / `MongoDbRepositoryDataSource` instances beyond the cache, and disposing tears the
 cluster down underneath them — every in-flight operation then fails with
 `ObjectDisposedException('CoreServerSessionPool')`. Observable as: a sequential CK batch import
 (LibraryStatus **FixAll**) whose per-import `PosUpdateTenant` event disposed the tenant's client
 between two batch steps, so each FixAll run imported exactly one model and then failed at the next
-`AcquireModelImportLockAsync` (staging-1 meshtest, test-2 tenant-setup storms, 2026-08-05). The evicted
+`AcquireModelImportLockAsync` (tenant-setup storms on shared test installations, 2026-08-05). The evicted
 client is collected once its holders let go; its stale connections are closed by server/pool idle
 handling.
 
@@ -183,7 +183,7 @@ Called from two places:
 | `TenantContext.DropTenantDatabaseAsync` (engine, explicit database name) | The process performing the drop, independent of any event delivery. |
 | `PreUpdatePreDeleteTenantConsumer` on `PreDeleteTenant` + `PosCreatePosUpdateTenantConsumer` on `PosCreateTenant` (`octo-common-services`) | Every other service: pre-delete while the tenant record still exists so the name resolves; post-create closes the window where a resolve between the pre-delete event and the physical drop re-populated the cache. NOT called on `PosUpdateTenant` — that event fires on every CK model import and eviction there would churn a fresh client per import for no benefit (an update drops no database user). |
 
-### Tenant Setup Retry Store — durable per-service retry (AB#4690)
+### Tenant Setup Retry Store — durable per-service retry
 
 `TenantSetupRetryStore` (`Repositories/TenantLifecycle/`, non-CK collection `tenant_setup_retry` in the
 SYSTEM database) holds one document per **(service, tenant)** whose default-configuration setup threw.
@@ -211,7 +211,7 @@ recreate under the same name (Mongo `errorCode 13`) therefore stayed half-provis
 restarted; for Identity, which owns the roles/groups seed, that meant no administrator could be
 provisioned for that tenant at all.
 
-### CK Method Handler Snapshot Store (AB#5671, F3.2)
+### CK Method Handler Snapshot Store (F3.2)
 
 `CkMethodHandlerSnapshotStore` (`Repositories/Methods/`, port `ICkMethodHandlerSnapshotStore` in
 `Runtime.Contracts.MongoDb/Methods`, non-CK collection `ck_method_handler_snapshot` in the SYSTEM database) persists the
@@ -226,12 +226,12 @@ call without waiting for the next heartbeat round. One document per (`methodKey`
   passed and `withdrawn` is `false`. `retainUntilUtc` has a MongoDB TTL index (`expireAfterSeconds: 0`), so stale rows leave
   by themselves.
 - `LoadAsync` is a read (never materializes the system database). `UpsertAsync` returns `false` and writes nothing while the
-  system tenant does not exist (AB#4854) and only replaces a row with a strictly newer `lastSeenUtc` (replicas share the
+  system tenant does not exist and only replaces a row with a strictly newer `lastSeenUtc` (replicas share the
   collection; the duplicate-key outcome of the unique index is the "keep the newer row" case and is ignored).
 - Registered by `AddMongoDbRuntimeRepository` (`RuntimeEngineBuilderExtensions`); a host that does not resolve the
   port keeps the registry in memory only.
 
-### Infrastructure-Only Shell of the System Database (AB#4854)
+### Infrastructure-Only Shell of the System Database
 
 The engine's own plumbing writes non-CK bookkeeping into the SYSTEM database — `tenant_lifecycle`,
 `tenant_setup_retry`, `display_rule_sweep`, `ck_method_handler_snapshot`, `SysLock` (registry: `InfrastructureCollections`). On a
@@ -247,7 +247,7 @@ Rules that keep this closed:
   `IsDatabaseMaterializedOnlyByInfrastructureAsync`. `IsSystemTenantExistingAsync` reports a shell
   as not existing (checked BEFORE the CK-model read, which would otherwise fail with an
   authentication error on the missing datasource user); `ISystemContext.IsSystemDatabaseBootstrappableAsync`
-  answers absent-or-shell; the system bootstrap's refusal guard (AB#4762) exempts shells.
+  answers absent-or-shell; the system bootstrap's refusal guard exempts shells.
 - **The seed-decision guard lives in `UpdateSystemCkModelAsync`, not in callers.** Seeding the model
   (as admin) into a shell would make the shell look like a real system database and skip the
   bootstrap — the only creator of the datasource user — forever. The check sits immediately before
@@ -255,7 +255,7 @@ Rules that keep this closed:
   check-then-act window; `EnsureSystemCkModelAsync` deliberately has no guard of its own.
 - **The bootstrap rollback drops only what it created from nothing.** `CreateSystemTenantAsync`
   gates `CleanupFailedTenantCreationAsync(dropDatabaseAndUser: ...)` on
-  `databaseCreated && !databaseExisted` (mirrors `CreateChildTenantAsync`, AB#4762): a failed
+  `databaseCreated && !databaseExisted` (mirrors `CreateChildTenantAsync`): a failed
   attempt that started over a pre-existing shell keeps the shell (it holds other services' durable
   bookkeeping — setup-retry queue, lifecycle records, locks), and a racing replica whose create
   throws inside the try can never drop the winner's database.
@@ -267,7 +267,7 @@ Rules that keep this closed:
 Pinned by `SystemTenantVirginBootstrapTests` (isolated `VirginSystemFixture` container).
 
 
-## Re-ensuring a tenant's MongoDB user (AB#8177)
+## Re-ensuring a tenant's MongoDB user
 
 The tenant database user (`OctoSystemConfiguration.DatabaseUser`, e.g. `octo-system-ds-user-<db>`) is created only by
 `CreateTenantInternalAsync` and the attach path. If it disappears later (restored or re-created MongoDB, manual

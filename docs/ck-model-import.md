@@ -28,7 +28,7 @@ This works for **any** CK model, not just the System model.
 
 **Embedded migrations:** CK models can carry migration scripts inline via `CkCompiledModelRoot.Migrations`. These are surfaced to `CompiledModelCkMigrationContentProvider` during import, eliminating the need for NuGet package dependencies on source CK models.
 
-**Migration origin includes `ResolveFailed` models (AB#6720):** `GetSchemaVersionsDirectAsync` lists the `Available` **and** the
+**Migration origin includes `ResolveFailed` models:** `GetSchemaVersionsDirectAsync` lists the `Available` **and** the
 `ResolveFailed` stored models, and `MigrationOriginVersions.Select` picks per model name the version the data is at
 (Available wins over ResolveFailed, then the highest version; `Importing` is never an origin). A model goes `ResolveFailed`
 when another service replaces a dependency it pins exactly (the 3.x `System.Communication` pinning `System.Bot-[3.4.0]` after
@@ -48,7 +48,7 @@ ResolveFailed models are untouched and heal through the existing re-validation. 
 | `MongoTenantBlueprintHistory` | MongoDB-based blueprint history storage |
 
 
-### Hidden Backstop and v1 / Rollback Compatibility (CK v2 F1.3-S4, AB#5917)
+### Hidden Backstop and v1 / Rollback Compatibility (CK v2 F1.3-S4)
 
 - **Hidden is never indexed (review N6).** Unlike Secret, a Hidden attribute is stored in plain text and has no
   runtime backstop, so a unique index would reveal values through duplicate-key errors and a text index through
@@ -66,7 +66,7 @@ ResolveFailed models are untouched and heal through the existing re-validation. 
 - **The backstop does not rely on the engine graph's text-index merge.** Index maintenance merges the text indexes of
   all types of a collection itself (`AnalyseIndex`, from the stored `CkType` documents); `CkTypeGraph.MergeTextIndexes`
   in the engine (which, on main, never merges a derived text index into a root that has its own) is not involved. Since
-  AB#7125 the read-back DTOs (and so the runtime graph) do carry the type indexes.
+  the read-back DTOs (and so the runtime graph) do carry the type indexes.
 - **Archives never capture Hidden (review G3 E-M2, engine `ArchiveHiddenColumnGuard`).** `TenantContext` passes the CK
   cache into `ArchiveLifecycleService` (activation refuses such columns) and, after every CK model import (explicit,
   embedded, System restore of a child or the system tenant, and a re-validation that recovered models), calls
@@ -76,7 +76,7 @@ ResolveFailed models are untouched and heal through the existing re-validation. 
   column builder (`ArchivePathTypeResolver`) refuses a Hidden column and a whole-record column whose record contains a
   Hidden sub-attribute, and `BuildRecordObject` leaves Hidden sub-attributes out like Secret ones (defence in depth).
   Pinned by `ArchiveHiddenAccessTests` (mutation-checked).
-- **N2/N3 closed (AB#6247, F4.3 AB#5697, Epic AB#5584; `octo-construction-kit-engine/docs/archive-hidden-columns.md`):**
+- **N2/N3 closed (`octo-construction-kit-engine/docs/archive-hidden-columns.md`):**
   - **N2 — every service's import reaches the archives.** `RevalidateArchiveAccessAsync` is public
     (`ITenantContext.RevalidateArchiveAccessAsync`, default implementation does nothing). It still needs the archive
     lifecycle service, so in identity, comm-controller and platform-services it returns at once; the stream-data services
@@ -134,7 +134,7 @@ ResolveFailed models are untouched and heal through the existing re-validation. 
    `RoundTrip/CkMetaModelRoundTripTests` (JSON view, document shapes) — they fail until steps 1–4 are done. Extend the kitchen sink
    (C# and YAML) so the new field is actually set, and add a BSON legacy assertion.
 
-### Attribute Ownership Round-Trip (AB#5187)
+### Attribute Ownership Round-Trip
 
 `ownership` (`AttributeOwnershipDto`: `SeedOwned | TenantOwned | RuntimeState | Secret`) replaces
 the `isRuntimeState` boolean, which conflated "preserve on Upsert" with "exclude from `ExportRt`".
@@ -151,11 +151,11 @@ It exists at TWO levels and both must survive the Mongo round-trip described abo
    only that element silently loses its override.
 
 Both members are mapped `SetIgnoreIfDefault(true)` in `MongoRepositoryClient.RegisterClassMaps`, so
-an undeclared ownership stays absent from the document — the exact shape a pre-AB#5187 engine
+an undeclared ownership stays absent from the document — the exact shape an engine without ownership markers
 wrote. **Legacy documents:** absent → `Ownership == null` → `AttributeOwnership.Resolve(null,
 isRuntimeState)` maps the persisted boolean (`true` → `RuntimeState`, `false` → `SeedOwned`), so
 behaviour is unchanged and a flagged attribute never degrades to "seed wins" (which would let a
-re-apply overwrite credentials). Same operational caveat as AB#4589: a tenant keeps its
+re-apply overwrite credentials). Same operational caveat as for the runtime-state flag: a tenant keeps its
 ownership-less docs until the model is **re-imported**, and a re-import needs a version bump
 because `ImportCkModelAsync` short-circuits on an already-installed version.
 
@@ -164,7 +164,7 @@ three assignment sites, using `Test/OwnershipEntity`, `Test/OwnershipOverrideEnt
 `Test/OwnershipRecord` and the `Test/OwnershipLink` role) and `CkAttributeOwnershipLegacyDocumentTests`
 (BSON level, no DB: verbatim round-trip plus a document with the `ownership` element stripped).
 
-### Extensible Enum Preservation on Import (WI #3324)
+### Extensible Enum Preservation on Import
 
 `DatabaseCkModelRepository.PreserveExtensibleEnumValues` runs inside `ExecuteImport`
 **before** `DeletePreviousVersion` so custom enum extensions (`CkEnumValue.IsExtension == true`)
@@ -183,7 +183,7 @@ survive a model upgrade:
 `TenantDatabaseSourceIdentifier` carries the `TenantId` (nullable; `null` = system tenant) so
 the audit trail can route notifications to the correct tenant.
 
-### Embedded CK Model Import Guard (CK v2 F1.0-S1, AB#5900)
+### Embedded CK Model Import Guard (CK v2 F1.0-S1)
 
 A CK model import deletes every `CkModel` row of the same **name** before it inserts
 (`InsertModelWithImportingState`), so an exact-id existence check cannot see a newer installed version. Before
@@ -201,12 +201,12 @@ of every **embedded/startup** import. It looks the model up by name (`FindInstal
 | newer, same major | **skip** | INFO `downgrade prevented` | `reason=newer_installed` |
 | higher major | **skip** | WARN `this service is too old for the tenant` | `reason=newer_major_installed` |
 
-Used by `UpdateSystemCkModelAsync` (tenant resolve/create; the AB#4854 infrastructure-shell guard keeps its
+Used by `UpdateSystemCkModelAsync` (tenant resolve/create; the infrastructure-shell guard keeps its
 position after it), `ImportCkModelAsync(CkModelId, OperationResult)` (every service's tenant setup, blueprint
 dependencies via `MongoRuntimeRepositoryProvider`) and, through it, `ImportEmbeddedCkModelWithDowngradeGuardAsync`
 (System.StreamData descriptor, service-managed models — the guard that used to live only there). A skip sends
 **no** pre/post tenant-update notification, runs no migration and leaves the CK cache alone - unless the loaded cache
-lacks the installed `Available` version (AB#8667, next bullet but one).
+lacks the installed `Available` version (next bullet but one).
 
 - **The decision is repeated under the model import lock** (G-H1). The early decision only saves the lock wait:
   while a caller waits, another service may install this or a newer version (parallel stack start, rolling update,
@@ -215,7 +215,7 @@ lacks the installed `Available` version (AB#8667, next bullet but one).
   `ExecuteImport` then decides by name under the lock and reports a skip in `TenantDatabaseSourceIdentifier.ImportOutcome`
   (`SkippedUnderLock`, `InstalledModelId`). The caller sends the Post that pairs its Pre and runs no migration.
   Explicit imports keep the exact-id re-check.
-- **A skip drops a cache that lacks the installed version** (AB#8667, `TenantContext.UnloadCkCacheIfItLacks`). At service
+- **A skip drops a cache that lacks the installed version** (`TenantContext.UnloadCkCacheIfItLacks`). At service
   start a service often loads the tenant's CK cache before another service's import of the same model, and that
   service's `PosUpdateTenant` is published before this process listens to the bus, so nothing unloaded the cache: it,
   and the asset repository's GraphQL schema built from it, missed the new types (archive types after a System.StreamData
@@ -242,7 +242,7 @@ lacks the installed `Available` version (AB#8667, next bullet but one).
   comm-controller `TenantInitializationExtensions`, asset-repo `ModelsController` dependency status.
 
 - **Explicit imports may downgrade** (platform-owner decision Q5): `ImportCkModelAsync(CkCompiledModelRoot)`
-  (CLI/API `ImportCk`, bot import command) is not guarded itself; since AB#6966 the *API endpoint* judges the file with
+  (CLI/API `ImportCk`, bot import command) is not guarded itself; since that change the *API endpoint* judges the file with
   `EvaluateExplicitCkImportAsync` (tenant upgrade guard, below) before it queues the job and refuses a breaking one unless forced.
   A downgrade that passes may happen, logged WARN `Explicit downgrade of CK model ... from X
   to Y` and counted in `octo.ck.explicit_import.downgraded` (tag `model`). An explicit downgrade of a model that
@@ -267,7 +267,7 @@ lacks the installed `Available` version (AB#8667, next bullet but one).
 - Counters live in `CkModelImportDiagnostics` on the meter `Meshmakers.Octo.MongoDb` (no tenant tag; the tenant
   is in the log line).
 
-### Re-validation of ResolveFailed Models after Every Import (CK v2 F1.0-S2, AB#5901)
+### Re-validation of ResolveFailed Models after Every Import (CK v2 F1.0-S2)
 
 `DatabaseCkModelRepository.ValidateDependencies` (end of `ExecuteImport`, inside the `sessionComplete`
 transaction) soft-resolves **`Available` and `ResolveFailed`** models; `Importing` is never touched. Before F1.0 it
@@ -305,7 +305,7 @@ Basic.Accounting stayed `ResolveFailed` after System went back to the version it
 - Also fixed on the way: an operator-precedence slip in `MongoDbRepositoryDataSource` (`a && b ? c : d`) that dropped
   the id filter of the base-type prefetch and loaded every `Available` type of the tenant.
 
-- **SemVer resolution matrix (AB#4468).** The same table as the engine's catalog and repository resolvers
+- **SemVer resolution matrix.** The same table as the engine's catalog and repository resolvers
   (`octo-construction-kit-engine/docs/ck-semver-rules.md`, "Dependency resolution by SemVer"): a range-retaining dependent of
   `System-[2.5,3.0)` (floor 2.5.0) stays `Available` on 2.5.0 and on a higher minor/patch (2.6.1), is `ResolveFailed`
   on a version below the floor (2.4.9) and on a higher major (3.0.0), and the reason names the range and the installed
@@ -315,7 +315,7 @@ Basic.Accounting stayed `ResolveFailed` after System went back to the version it
   MongoDB: an import against an unsatisfiable range throws, nothing is installed, and the message names the range and
   the installed version). `DatabaseCkModelRepository` implements the engine's optional `IRepositoryVersionLister`
   (`ListVersionsAsync`: the versions `IsExistingAsync(range)` considers, ascending) so that the engine's
-  `RepositoryDependencyResolver` can name them in the rejection. Since AB#7381 the repository also implements
+  `RepositoryDependencyResolver` can name them in the rejection. Since that change the repository also implements
   `IRepositoryInstalledVersionLister` (`ListInstalledVersionsAsync`: every held version of the name with its state, `Importing` included), and the
   rejection reads `X-[2.5,3.0): the tenant has no Available version of X (installed: 2.5.0 ResolveFailed)` instead of a catalog wording.
 
@@ -328,7 +328,7 @@ recovery incl. "still failed" on an unrelated import) and `CkModelImportGuardDec
 propagation). The concurrent-import test rarely hits the lock path by itself; the deterministic under-lock test is
 the one that fails without the G-H1 fix.
 
-### Blueprint CK dependency ranges against the installed version (AB#6672)
+### Blueprint CK dependency ranges against the installed version
 
 `BlueprintServiceIntegrationTests`-style coverage for `ckModelDependencies` ranges lives in
 `BlueprintCkDependencyRangeIntegrationTests` (collection `BlueprintServiceCollection`, blueprint `TestCkRangeBp` 1.0.0 / 2.0.0):
@@ -340,7 +340,7 @@ check itself lives in the engine (`BlueprintService.AddOutOfRangeInstalledCkMode
 `docs/blueprints.md`); `MongoRuntimeRepositoryProvider.EnsureCkModelInstalledAsync` is unchanged (it still keeps a
 satisfying-or-newer installed model by name and installs the floor otherwise).
 
-### ResolveFailed reason (AB#6674)
+### ResolveFailed reason
 
 `CkModel.ResolveFailedReason` (BSON `resolveFailedReason`, nullable string, `SetIgnoreIfNull`) holds the plain-text reason a
 model is `ResolveFailed`: written together with the state by `ValidateDependencies` (post-import re-validation,
@@ -356,7 +356,7 @@ without the field load as "no reason". Pinned by `CkRangeRetentionImportTests.Re
 (real MongoDB: failed -> reason persisted and read back through the tenant repository after the CK cache was dropped ->
 dependency restored -> reason gone). The public surface (LibraryStatus, GraphQL `CkModel`, CLI) lives in asset-repo / octo-cli.
 
-### Service-Managed CK Model Auto-import (AB#4294)
+### Service-Managed CK Model Auto-import
 
 `TenantContext.EnsureServiceManagedCkModelsImportedAsync` runs on every tenant-resolve
 (`TryGetChildTenantContextAsync`) and imports each host-registered
@@ -366,7 +366,7 @@ guard (`_serviceManagedCkModelsAttempted`, keyed `{TenantId}:{modelName}`) makes
 at most once per (tenant, model) — it breaks the `ImportCkModelAsync → RetryPendingMigrations →
 tenant-resolve → here` recursion. `_streamDataAutoImportAttempted` is the StreamData analogue.
 
-**Guard invalidation on tenant delete/update (AB#4294 fix).** Because the guard is per-process
+**Guard invalidation on tenant delete/update (fix).** Because the guard is per-process
 and keyed only by tenant, a **delete+recreate of a tenant within one process lifetime** (e.g.
 `om_initialize_tenant` re-provisioning) would hit the still-armed guard and skip the auto-import,
 leaving the fresh tenant without its service-managed model. `ISystemContext.InvalidateTenantResolveImportGuards(tenantId)`
@@ -375,7 +375,7 @@ clears both guards for a tenant; the Pre-delete / Pre-update tenant lifecycle co
 unload, so the next resolve re-imports. Regression test:
 `ServiceManagedCkModelDescriptorTests.InvalidateTenantResolveImportGuards_ReenablesImportAfterTenantRecreate`.
 
-**Blueprint floor → descriptor version redirect (AB#4294 fix).** The cockpit blueprints declare
+**Blueprint floor → descriptor version redirect (fix).** The cockpit blueprints declare
 `ckModelDependencies: System.UI-[2.2.0,3.0)` as a *pure satisfiability floor* — the actual install
 target is the descriptor's embedded version, NOT the floor's lower bound. But `BlueprintService`
 still passes the range's `MinVersion` (2.2.0) to `EnsureCkModelInstalledAsync` when the dependency

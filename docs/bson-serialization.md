@@ -5,7 +5,7 @@ applies_to: src/Runtime.Engine.MongoDb/Serialization/**
 
 ## BSON Serialization Conventions
 
-### TimeSpan Attributes — Canonical Int64 Ticks (AB#4259)
+### TimeSpan Attributes — Canonical Int64 Ticks
 
 `TimeSpan` attribute values are stored as BSON **Int64 ticks**. The dedicated
 `TimeSpanSerializer` (`Serialization/`) writes `value.Ticks` and reads Int64/Int32/Double

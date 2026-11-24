@@ -3,7 +3,7 @@ description: "StreamData queries and export: paged order, time filters, integral
 applies_to: src/Runtime.Engine.CrateDb/QueryBuilder/**, src/Runtime.Engine.CrateDb/Copy/**, src/Runtime.Engine.MongoDb/StreamData/**
 ---
 
-### Paged Queries Have a Total Order (AB#9110)
+### Paged Queries Have a Total Order
 
 Every stream-data query whose result is paged has a total, deterministic row order. CrateDB returns the rows of a
 sharded table in any order per call, so LIMIT/OFFSET (or a caller slicing a re-executed result) without a total order
@@ -25,7 +25,7 @@ Tests: `CrateQueryBuilderTests` (`EnsureDeterministicOrder_*`), `TimeWeightedQue
 `StreamDataPaging/StreamDataPagingIntegrationTests` (real CrateDB). The single-node test container returns the shards in a
 stable order, so it cannot show the duplicates of a multi-node cluster; the tests pin the order itself.
 
-### Query Time Filter — One-sided Ranges (AB#4617)
+### Query Time Filter — One-sided Ranges
 
 `StreamDataQueryOptionsBase.From` / `.To` are independently optional. The three read paths
 (`ExecuteQueryAsync`, `ExecuteAggregationQueryAsync`, `ExecuteGroupedAggregationQueryAsync`) pass
@@ -41,7 +41,7 @@ whatever is set to `CrateQueryBuilder.WithTimeFilter(DateTime?, DateTime?)`, and
 
 `CrateQueryBuilder.HasTimeFilter` (`From is not null || To is not null`) is the single condition
 driving the `WHERE` emission and the inter-condition `AND` wiring (ckType, IN-lists, field filters,
-generation predicate) — never a `{ From: not null, To: not null }` pattern. Before AB#4617 both
+generation predicate) — never a `{ From: not null, To: not null }` pattern. Before that change both
 boundaries were required at every level, and a one-sided range was dropped **silently**: a
 persisted SD-query or a `GetQueryById@1` pipeline node configured with only a start returned the
 entire archive. `CompileCountQuery` shares `AppendWhereClause`, so `TotalCount` is scoped
@@ -51,9 +51,9 @@ identically to the page.
 `ExecuteDownsamplingQueryAsync`, so `AppendDownsamplingSourceFilters` never sees a one-sided range)
 and `TimeWeightedAverage` / `StateDuration` / `Integral` over a raw archive (the LOCF carry-in is defined
 relative to the window — explicit guard that throws the contracts `StreamDataException` with the archive id,
-a structured 400 / coded GraphQL error since AB#7918; it used to be the uncoded connection-level exception).
+a structured 400 / coded GraphQL error since that change; it used to be the uncoded connection-level exception).
 
-### Integral over raw archives (AB#7918)
+### Integral over raw archives
 
 `AggregationFunction.Integral` is the third LOCF column kind of `TimeWeightedQuerySqlBuilder` (`IntegralColumn`, next to
 `TwaColumn` / `StateColumn`): `SUM(CASE WHEN v IS NOT NULL THEN v * dt_ms END) / 3600000.0`, alias `{column}_integral`, value
@@ -65,9 +65,9 @@ field filter (it selects the LOCF event set and would carry the last positive va
 column. Semantics: `octo-construction-kit-engine/docs/concept-time-weighted-aggregation.md` §6.5. Tests: `TimeWeightedQuerySqlBuilderTests`,
 `CrateDbStreamDataIntegralRoutingTests` (unit), `StreamDataIntegral/StreamDataIntegralIntegrationTests` (real CrateDB: cadence,
 on-change rows, gap, carry, empty, NULL, several rtIds, grouped, missing window, and the 1 % meter check from recorded grid rows
-in `testData/integral/grid-5s-meter-check-*.csv`: the AB#7692 window and a fresh window bounded by two register reads).
+in `testData/integral/grid-5s-meter-check-*.csv`: the window and a fresh window bounded by two register reads).
 
-### Integral over rollups (AB#7920)
+### Integral over rollups
 
 A rollup with a `TimeWeightedAvg` aggregation on the column answers `Integral` from its stored integral: `SUM("{base}_integral") /
 3600000.0` (value·ms → value × hours), alias `{path}_integral`, in aggregation, grouped and downsampling queries; a cascade reads the
@@ -80,7 +80,7 @@ rule (overlap, whole buckets): only bucket-aligned windows equal the raw Integra
 (real CrateDB: 5-minute TWA rollup and an hourly SUM-chained rollup over it, aligned, rtId scope, grouped, downsampling per hour,
 unaligned window, empty window, AVG-only column, the recorded meter rows). Semantics: `octo-construction-kit-engine/docs/concept-time-weighted-aggregation.md` §6.5.
 
-### Several StateDuration columns on one attribute (AB#8168, AB#8169)
+### Several StateDuration columns on one attribute
 
 The output key of an aggregation column is `{column}_{functionSuffix}` and a wire contract (Refinery Studio `aggregationFunctionSuffix`,
 MeshBoard widgets, persisted queries). `StreamDataAggregationOutputNaming` owns the rule, for the engine row keys and the GraphQL wire mapping alike:
@@ -95,12 +95,12 @@ MeshBoard widgets, persisted queries). `StreamDataAggregationOutputNaming` owns 
   need distinct `targetColumnName`s on the rollup, or they share one physical column.
 - `ValidateDistinct` refuses columns that would share an output key (same attribute and function twice, states that reduce to one qualifier) with a
   readable `StreamDataException`; the aggregation, grouped and downsampling entry points call it before any SQL.
-- AB#8169 rejections, all readable `StreamDataException`s via `InvalidLocfQuery`: TimeWeightedAverage / StateDuration in downsampling over a raw or
+- Rejections, all readable `StreamDataException`s via `InvalidLocfQuery`: TimeWeightedAverage / StateDuration in downsampling over a raw or
   time-range archive (`RejectLocfDownsamplingWithoutRollup`), StateDuration over a time-range archive (`RejectStateDurationOnTimeRangeArchive`).
 
 Tests: `StreamDataStateDurationAliasTests`.
 
-### Downsampling Query — Single Grouped Scan, Bin Axis Built Caller-Side (AB#4713)
+### Downsampling Query — Single Grouped Scan, Bin Axis Built Caller-Side
 
 `CrateQueryCompiler.CompileDownsamplingQuery` emits **one grouped aggregation over the filtered
 source rows — no join at all**:
@@ -147,59 +147,58 @@ Semantics preserved:
 - **§7 fully-contained predicate (windowed archives):** bins on `window_start`; the lower half
   (`window_start >= bin start`) is implied by `DATE_BIN` keying on `window_start`, so only
   `window_end <= DATE_BIN(...) + interval` is emitted. Straddling windows are still dropped.
-- **Per-series group columns (AB#4233):** grouped and ordered in SQL; the caller's gap-fill emits
+- **Per-series group columns:** grouped and ordered in SQL; the caller's gap-fill emits
   a single null row per empty bin, as the old LEFT JOIN did.
-- **Bin geometry — declared grain for rollups, distinct-bin clamp otherwise (AB#4246 / AB#4714 /
-  AB#4817):** §7 keys the bin on `window_start` and drops any window whose `window_end` overruns
+- **Bin geometry — declared grain for rollups, distinct-bin clamp otherwise:** §7 keys the bin on `window_start` and drops any window whose `window_end` overruns
   the bin, so for windowed archives the bin width must be an *integer multiple of the grain*.
   **Rollup archives** get that by construction:
   `DownsamplingBinQuantizer.QuantizeToGrain(requestedLimit, range, snapshot.Period)` derives
   `merge = round((range/limit)/grain)`, `interval = merge × grain`,
   `effectiveLimit = ceil(range/interval)` and passes the interval *explicitly* into
   `WithDownsampling(limit, from, to, intervalSeconds)` — no probe, no data dependence. The former
-  AB#4714 route (probe `COUNT(DISTINCT window_start)` → `Quantize` → re-derive the width as
-  `round(range/effectiveLimit)`) is wrong in two ways (AB#4817): the count is of windows *with
+  route (probe `COUNT(DISTINCT window_start)` → `Quantize` → re-derive the width as
+  `round(range/effectiveLimit)`) is wrong in two ways: the count is of windows *with
   data*, so a single empty grain slot (event-driven series) makes the re-derived width drift off
   the grain (288 five-minute slots with 3 empty → 303 s bins → all but ~5 buckets read null,
-  observed on prod-1 as "sensor data stopped hours ago"); and even a complete count only yields a
+  observed in production as "sensor data stopped hours ago"); and even a complete count only yields a
   grain multiple when the merge divides it evenly (720 windows at merge 7 → 103 bins → 25 165 s
-  ≠ 7 h). **Raw archives** keep the probe + clamp-down (AB#4246: a request finer than the data
+  ≠ 7 h). **Raw archives** keep the probe + clamp-down (a request finer than the data
   only yields sparse bins). **Time-range archives** with a declared `Period` take the grain route too
-  (AB#7659): the probe-derived width drifted with every data gap (one year of 15-minute windows, `limit` 365: 367 buckets of
-  85,929 s instead of 365 of 86,400 s); a request finer than the window length is clamped to one window (AB#4246 protection).
+: the probe-derived width drifted with every data gap (one year of 15-minute windows, `limit` 365: 367 buckets of
+  85,929 s instead of 365 of 86,400 s); a request finer than the window length is clamped to one window.
   A `Period` is only a window length (windows may sit at any phase, e.g. 00:05–00:20), so the time-range origin does not
   snap to the grain like a rollup's: one probe over the same source filters (`CompileWindowPhaseProbeQuery`:
   `MIN`/`MAX` of `window_start` in epoch ms modulo the `Period`) finds the phase of the stored windows. When all windows
-  in range share one phase, `From` is snapped down to the last instant `≡ window_start (mod Period)` (AB#8962). No
+  in range share one phase, `From` is snapped down to the last instant `≡ window_start (mod Period)`. No
   window in range, series at different phases (no single origin keeps them all) or a failing probe keep `From`. **The probe
-  is bounded and remembered (AB#8992):** it runs once outside the resilience pipeline (`QueryRowsOnceAsync`, no retry),
+  is bounded and remembered:** it runs once outside the resilience pipeline (`QueryRowsOnceAsync`, no retry),
   the query waits for it at most `StreamData:DownsamplingPhaseProbeTimeout` (5 s), and a single phase is remembered per
   table, window length and filter set (`WindowPhaseCache` in `RecomputeProcessState`,
   `StreamData:DownsamplingPhaseProbeCacheDuration`, 5 min, 0 = off; single flight per key, a probe the query stopped
   waiting for runs on for at most 30 s and fills the cache; a query of another range takes only a single phase from it and checks it like a remembered one;
   forgotten on table drop/activation and on an in-process write (ingest or import) of another phase, also while a probe
   runs; at one window per bin an empty result evicts the phase and re-probes once). Never put the probe back
-  under `GetDataAsync`: ten parallel chart queries with retried probes exhausted sbeg's pool of 32. Before AB#8962 the raw
+  under `GetDataAsync`: ten parallel chart queries with retried probes exhausted the pool of 32 of a large tenant. Before that change the raw
   `From` was the origin: a relative "last 2 days" request (From 18:37:42) put every bin edge inside a stored 15-minute
   window and the §7 predicate dropped all of them (FH lab: 0/192 bins with a value, resolution-aware charts empty until
   the resolver switched to a rollup).
   Only a time-range archive without a `Period` still uses the probe route.
   The grain route snaps the origin itself (rollups on the grain, time-range archives in their window phase); callers
-  need not pre-align `From` — the line-chart widget no longer does (AB#5157 review). The probe route (raw archives,
+  need not pre-align `From` — the line-chart widget no longer does. The probe route (raw archives,
   time-range archives without a `Period`) still bins from `From`.
   `DownsamplingBinQuantizer` is a pure, unit-tested helper (`DownsamplingBinQuantizerTests`).
-- **Generation filter (AB#4184):** `AppendDownsamplingSourceFilters` also emits the
+- **Generation filter:** `AppendDownsamplingSourceFilters` also emits the
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
   it entirely, so a read during a recompute double-counted the swapped windows.
 
-### Downsampling into local-day bins (AB#7360)
+### Downsampling into local-day bins
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#7360: downsampling queries take
-`TimeZone`, `BinOrigin` and `BinInterval` (engine `StreamDataDownsamplingQueryOptions`, AB#7360 part 1) and return one bin
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** Downsampling queries take
+`TimeZone`, `BinOrigin` and `BinInterval` (engine `StreamDataDownsamplingQueryOptions`) and return one bin
 per local day (23 / 24 / 25 h across DST changes) from raw, time-range and rollup archives. **Behaviour change for every
 downsampling query: a COUNT column of an empty bin reads `0` instead of `null`** (a count over nothing is 0; Studio charts
 of COUNT series show 0 instead of a gap). Other aggregations of an empty bin stay `null`. Without the three options the
-compiled SQL is unchanged (`DownsamplingSqlSnapshotTests`, recorded on main 6966ce9, after AB#7659).
+compiled SQL is unchanged (`DownsamplingSqlSnapshotTests`, recorded on main 6966ce9, after).
 
 Rules to keep:
 
@@ -210,7 +209,7 @@ Rules to keep:
   outside `[00:00, 24:00)` or not a whole minute, interval not whole days, more than `MaxBins` = 10,000 bins, no From/To)
   throw the engine's `DownsamplingBinOptionsInvalidException` (a contracts `StreamDataException`, structured 400) before
   any SQL.
-- **`Limit` does not decide the bin count** for local-day bins and is not required (decision on AB#7360, 2026-11-03);
+- **`Limit` does not decide the bin count** for local-day bins and is not required;
   From and To stay required. Without the options From, To and Limit are required as before.
 - **Every bin is a whole local day** (review of PR #226, decided by Odin 2026-11-04). The source range is the axis,
   `[binStarts[0], end of the last bin)`, not the requested From/To: a `From` inside a day gives a first bin that counts
@@ -220,7 +219,7 @@ Rules to keep:
 - **SQL bin key = one `DATE_BIN` per run of equal-width bins** (`LocalDayBinRuns`, `CrateQueryBuilder.WithDownsamplingByLocalDays`,
   `CrateQueryCompiler.LocalDayBinExpression`): `CASE WHEN t < run1End THEN DATE_BIN(w1, t, run1Start) … ELSE DATE_BIN(wN, t, runNStart) END`;
   a single run (UTC, no DST change in range) is a plain `DATE_BIN`. A year in Vienna has five runs. Still one grouped scan,
-  O(source rows), no `generate_series` join (AB#4713); the keys equal the C# axis to the instant. Raw rows key on
+  O(source rows), no `generate_series` join; the keys equal the C# axis to the instant. Raw rows key on
   `timestamp` and get `AND timestamp < <end of last bin>` (the raw filter's inclusive `<= To` would otherwise put the
   first instant of the next day on no bin); windowed rows key on `window_start` and keep the §7 containment against the
   bin end of their run.
@@ -253,7 +252,7 @@ Rules to keep:
   time-range archive with windows at half past refused under 06:00 gas days and answered under 06:30 days. Performance (`Category=Performance`, not in the CI): one year of hourly data for
   50 series (438,000 rows), gas days per rtId: median 237 ms (6.4.6) / 260 ms (5.10.10) on a local Testcontainer, budget 1 s.
 
-### Native Copy, Sweep Grace Period, Rollup Validate/Repair, Restore Reconcile Marker (AB#5967)
+### Native Copy, Sweep Grace Period, Rollup Validate/Repair, Restore Reconcile Marker
 
 The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, `octo-construction-kit-engine/docs/concept-rollup-recompute.md`
 ("Sweep grace period"); this is what to keep in mind when touching the code.
@@ -263,7 +262,7 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   map is the last slice of a plan: a dump copies it first and the data after it, a load the data first and the map last. The
   repeat rule is `RollupArchiveDumper` (read map, copy, read map; repeat up to `MaxMapAttempts`, then
   `GenerationMapKeptMoving`). The plan in a dump result carries the rows the copy *reported*, not the counted rows.
-- **Slice retry and disk headroom (AB#7274)**: `CopySliceFromAsync` loads a slice up to 3 times; only a transient failure
+- **Slice retry and disk headroom**: `CopySliceFromAsync` loads a slice up to 3 times; only a transient failure
   (`CopyFailureClassifier`: circuit breaker, rejected execution, node/shard not available, statement timeout, a `RETURN SUMMARY` that is short with
   `error_count = 0`, rejected rows that all carry such a text) is repeated, after 30 s and 60 s, with `overwrite_duplicates = true` and half the
   `bulk_size` (5000, 2500) of the attempt before; after a repeat the slice's range is counted and must equal the manifest. Policy constants
@@ -272,13 +271,13 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   `IStreamDataRepositoryFactory.CheckStagingDiskHeadroomAsync`, for the whole backup before the MongoDB restore. Details: `docs/streamdata-archive-concept.md` §18a.
 - **Sweep grace period** (`StreamData:Recompute:SweepGracePeriod`, default 2 h, 0 = at once): a recompute no longer sweeps
   or removes contained pointer entries at the flip; it writes a row into `archive_<rtId>__sweep`
-  (`PendingSweepSqlBuilder`, every column explicit - AB#6647) and `SweepDueAsync` executes the due ones (at the start of a
+  (`PendingSweepSqlBuilder`, every column explicit) and `SweepDueAsync` executes the due ones (at the start of a
   recompute of that rollup and from the host's recompute tick via `SweepSupersededGenerationsAsync`). The sweep deletes rows
   strictly *below* the entry's generation and drops the record of an entry that was replaced. The once-per-process reclaim
   pass skips entries with a record. A repository/executor built without options keeps the immediate sweep.
-- **NotChecked (AB#6968)**: a rollup the validator cannot look at gets `RollupConsistencyEntry.NotChecked` (`NoLiveTable`,
+- **NotChecked**: a rollup the validator cannot look at gets `RollupConsistencyEntry.NotChecked` (`NoLiveTable`,
   `NeverActivated`, `SourceMissing`, `Disabled` + reason, `IsBlocking`) and is not ok unless it is `NeverActivated` or `Disabled` (status
-  Disabled, no table - AB#7274: legacy rollups disabled in the source kept the marker of every restore; informational: a rollup without
+  Disabled, no table: legacy rollups disabled in the source kept the marker of every restore; informational: a rollup without
   data cannot be inconsistent, and blocking would stop the whole tenant's rollups for good; a failed restore load keeps the marker through
   the job's `ArchiveFailed` entry); `RollupConsistencyReport.IsOk` is false
   while any entry blocks, the repair skips a rollup without a table, and the marker is not cleared (`RollupRepairer`: also not after a repair of some rollups unless the
@@ -290,7 +289,7 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   row = not pending): the hosted services skip a marked tenant (`RestoreReconcileGate`), `AggregateBucketAsync` and the
   executor refuse with `RestoreReconcilePendingException`, the sweep returns 0; only the repair runs and clears it.
 
-### mongorestore Batch Size (AB#6981)
+### mongorestore Batch Size
 
 `MongoToolArguments.BuildMongoRestoreArguments` always passes `--batchSize`: `MongoRestoreOptions.BatchSize` when set, else
 `OctoSystemConfiguration.MongoRestoreBatchSize` (default **100**, valid 1..1000, env `OCTO_System__MongoRestoreBatchSize`; an

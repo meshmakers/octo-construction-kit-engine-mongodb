@@ -21,9 +21,9 @@ Meter name: **`Meshmakers.Octo.MongoDb`** (registered in
 |------------|------|------|---------|
 | `octo.mongodb.command.duration` | Histogram (ms) | `command_name`, `database`, `status` | Latency distribution per command per tenant DB |
 | `octo.mongodb.command.errors` | Counter | `command_name`, `database`, `error_code` | Failure counts, tagged with the Mongo error code (e.g. `112` for WriteConflict) |
-| `octo.ck.embedded_import.skipped` (Prometheus `octo_ck_embedded_import_skipped_total`) | Counter | `model`, `reason` | Embedded CK model import skipped, tenant has a newer version (AB#5900, see *Embedded CK Model Import Guard*); counted once per process per (tenant, embedded, installed) |
-| `octo.ck.explicit_import.downgraded` (Prometheus `octo_ck_explicit_import_downgraded_total`) | Counter | `model` | Explicit `ImportCk` replaced a newer installed version (AB#5900) |
-| `octo.ck.model.revalidated` (Prometheus `octo_ck_model_revalidated_total`) | Counter | `result` (`recovered` / `still_failed`) | Post-import re-validation of `ResolveFailed` models (AB#5901) |
+| `octo.ck.embedded_import.skipped` (Prometheus `octo_ck_embedded_import_skipped_total`) | Counter | `model`, `reason` | Embedded CK model import skipped, tenant has a newer version (see *Embedded CK Model Import Guard*); counted once per process per (tenant, embedded, installed) |
+| `octo.ck.explicit_import.downgraded` (Prometheus `octo_ck_explicit_import_downgraded_total`) | Counter | `model` | Explicit `ImportCk` replaced a newer installed version |
+| `octo.ck.model.revalidated` (Prometheus `octo_ck_model_revalidated_total`) | Counter | `result` (`recovered` / `still_failed`) | Post-import re-validation of `ResolveFailed` models |
 
 The three `octo.ck.*` counters use curly-brace annotation units (`{import}`, `{model}`), which the Prometheus exporter
 does not append to the series name. A plain unit such as `count` would add a `_count` suffix
@@ -48,7 +48,7 @@ without dumping the full pipeline.
 
 Env-var override example: `OCTO_System__SlowQueryThresholdMs=50`.
 
-### Credential redaction in every rendered command (AB#5533, AB#8009)
+### Credential redaction in every rendered command
 
 Every place that turns a command into text goes through ONE step, `MongoCommandSecretRedactor.ToRedactedJson`: the
 driver-level Debug command log of `MongoRepositoryClient` (`MongoCommandObservability.RenderCommandForLog`), the slow-query
@@ -69,10 +69,10 @@ Sensitive attributes (`MongoCommandSensitiveAttributeNames`):
   protected payload, hashed reference id), `ticket` and `sessionKey` (server-side session: data-protected ticket, cookie key),
   `data` and `grantKey` (persisted grant: serialized grant, hashed handle). They apply everywhere, also in hosts without a CK
   cache and for tenants whose cache is not loaded. `data`, `payload` and `ticket` are generic: a same-named attribute of any
-  model is masked too (accepted, AB#8009).
+  model is masked too (accepted).
 - **From the CK cache of the tenant** (`CollectFromCkCache`): the cache is keyed by tenant id and looked up with the
   command's database name, so this applies to tenants whose **database name equals the tenant id** (the platform default,
-  the same rule the diagnostics endpoint filters by; decided for AB#8009). Other databases get the known names and the names
+  the same rule the diagnostics endpoint filters by; decided for this rule). Other databases get the known names and the names
   already found. Type and record attributes with
   `access: Hidden`, a `securitySensitive` definition or value type `Secret`; on types also effective ownership `Secret`
   (record members with ownership `Secret`, e.g. `UserToken.Value`, are covered by their owning attribute and their name is too
@@ -89,7 +89,7 @@ rendering it unredacted; truncation happens after redaction. A new place that re
 `ToRedactedJson` / `TruncateBson` with `GetFor(database)`. Not covered: the exception text of `MongoDB command failed`
 (server error message; Hidden attributes are never indexed, so no duplicate-key text can carry one) and attributes of
 association roles (Hidden is not allowed there). Tests: `MongoCommandSensitiveAttributeRedactionTests`,
-`MongoCommandSensitiveAttributeNamesTests`, the AB#8009 cases in `MongoCommandObservabilityTests` (a User insert and a client
+`MongoCommandSensitiveAttributeNamesTests`, the cases in `MongoCommandObservabilityTests` (a User insert and a client
 secret write leave no dummy value in the Debug rendering, the WARN line and the buffer) and
 `RoundTrip/MongoCommandRedactionCkCacheTests` (names from the kitchen sink's cache rebuilt from MongoDB).
 
@@ -110,7 +110,7 @@ matching success/failed events for every started event, so growth is bounded by 
 When the lookup misses (started event lost), the listener falls back to `database="unknown"`
 rather than throwing.
 
-**Raw-BSON retention (AB#4368, refined by AB#4374).** `CommandStartedEvent.Command` is only
+**Raw-BSON retention (refined by a later fix).** `CommandStartedEvent.Command` is only
 valid while the started-event handlers run: for bulk-write commands (insert/update/delete with
 OP_MSG payload-type-1 sections) it is a `RawBsonDocument` — or contains
 `RawBsonDocument`/`RawBsonArray` slices — over the connection's send buffer, which the driver
@@ -120,7 +120,7 @@ command before it enters the `_pending` map: raw arrays under the **bulk payload
 (no megabyte bodies retained or fingerprinted, fingerprint stable across batch sizes); every
 other raw array — above all an aggregate's `pipeline` — is materialized element-wise into an
 independently-owned `BsonArray`, and small raw sub-documents (lsid, writeConcern) are
-deep-cloned. AB#4374 background: the original AB#4368 fix elided *every* raw array, so a raw
+deep-cloned. Background: the original fix elided *every* raw array, so a raw
 `aggregate` command lost its pipeline and the explain probe sent
 `{explain: {..., pipeline: "<7 raw documents elided>"}}` — server error 14 (`'pipeline' option
 must be specified as an array`), a WARN+ERROR pair per cooldown window, and a shape-blind
@@ -128,7 +128,7 @@ fingerprint. `DispatchExplain` additionally guards via `ContainsElidedPlaceholde
 still carrying a placeholder (raw bulk update/delete) is stamped `Unsupported` in the explain
 cache instead of round-tripping a guaranteed failure. Defense in depth: `TruncateBson`,
 `SlowQueryFingerprinter.Fingerprint`, and the explain-dispatch `DeepClone` all catch
-`ObjectDisposedException` and degrade gracefully — before AB#4368, identity-services startup
+`ObjectDisposedException` and degrade gracefully — before the raw-array fix, identity-services startup
 (bulk seeding, everything above the slow threshold) flooded the log with ERROR entries and lost
 exactly those entries from the slow-query buffer.
 
@@ -138,7 +138,7 @@ Driver command events fire on the driver's own thread pool. Every callback in
 `MongoCommandObservability` is wrapped in try/catch and the inner `SafeLogError` swallows
 any logger throws — a broken sink must never poison the driver's event pipeline.
 
-### Per-Request Accumulator (AB#4210)
+### Per-Request Accumulator
 
 In addition to the always-on metrics and slow-log paths, an HTTP middleware or GraphQL
 listener can open a **request scope** that aggregates the cost of every Mongo command issued
@@ -159,7 +159,7 @@ using var _ = MongoRequestScope.Begin(out var stats);
   events fire on its own thread pool, but `ExecutionContext` propagation through Task
   continuations preserves the AsyncLocal value — verified by `AsyncLocalDriverFlowSpike`.
 - Out-of-scope work (background jobs, Mesh-Adapter pipelines) sees `null` and the listener
-  silently no-ops — only metrics and slow-log fire there, identical to pre-AB#4210 behaviour.
+  silently no-ops — only metrics and slow-log fire there, identical to the behaviour before the per-request surface.
 - Heartbeat commands are still filtered before reaching the accumulator, matching the listener's
   ignored-commands set.
 
@@ -169,7 +169,7 @@ In OctoMesh today the scope is opened automatically by `MongoCommandSurfaceMiddl
 `X-Octo-MongoDb-Duration-Ms` / `X-Octo-MongoDb-Command-Count`; GraphQL responses get
 `extensions.mongoDb = { totalMs, commandCount, slowestMs, slowestCommand }`.
 
-### Slow-Query Buffer (AB#4212)
+### Slow-Query Buffer
 
 In addition to metrics, slow-log, and the per-request scope, `MongoCommandObservability`
 also captures every slow command (above `SlowQueryThresholdMs`) into a process-wide
@@ -177,7 +177,7 @@ also captures every slow command (above `SlowQueryThresholdMs`) into a process-w
 without scraping logs:
 
 - `SlowQueryEntry` POCO — Timestamp, CommandName, Target, Database, DurationMs, RequestId,
-  CommandBsonPreview (redacted before it is stored, AB#8009), Success, ErrorCode
+  CommandBsonPreview (redacted before it is stored), Success, ErrorCode
 - `SlowQueriesBuffer` public class — thread-safe FIFO ring backed by `ConcurrentQueue<T>`;
   default capacity 1000 (~3 MB resident at ~3 KB per entry), configurable via
   `OctoSystemConfiguration.SlowQueryBufferSize` (0 disables)
@@ -194,7 +194,7 @@ which exposes `GET /{tenantId}/v1/Diagnostics/slow-mongo-queries` and filters en
 `Database == tenantId` so each tenant only sees its own queries. The Refinery Studio
 **Diagnostics → Slow Queries** page renders the result.
 
-### Async Explain Capture (AB#4216)
+### Async Explain Capture
 
 For every slow query that lands in the buffer with a fingerprint, `MongoCommandObservability`
 asynchronously schedules `db.runCommand({explain: {<original command>}, verbosity: "queryPlanner"})`
@@ -229,13 +229,13 @@ the result in `{explain: <clone>, verbosity: "queryPlanner"}`, runs against
 `ErrorMessage = "timeout"`. All exceptions are caught and logged via the same `SafeLogError`
 path the rest of the listener uses — a broken sink must never poison the driver pipeline.
 
-**Wire envelope must be stripped before wrapping (AB#4958).** `CommandStartedEvent.Command` is
+**Wire envelope must be stripped before wrapping.** `CommandStartedEvent.Command` is
 the command *as it goes over the wire*, so it carries `$db`, `$readPreference`, `$clusterTime`,
 `lsid`, … `RunCommandAsync` attaches `$db` itself, so wrapping the capture as-is made the server
 reject **every** dispatch with `BSON field 'aggregate.$db' is a duplicate field` — the probe
-never produced a plan from AB#4216 (2026-06-22) until this fix, which also means no COLLSCAN
-detection and no index suggestions (AB#4220 / AB#4222) for any shape. It only became visible
-after AB#4374 stopped the earlier error-14 failure on the elided pipeline array; before that the
+never produced a plan from its introduction (2026-06-22) until this fix, which also means no COLLSCAN
+detection and no index suggestions for any shape. It only became visible
+after the raw-array fix stopped the earlier error-14 failure on the elided pipeline array; before that the
 dispatch died one step sooner. `StripWireEnvelope` removes **every `$`-prefixed top-level field**
 (prefix-based on purpose — the driver may attach further ones in a future version) plus the
 session/transaction and concern fields in `WireEnvelopeFields`; the query itself (filter, sort,
@@ -243,8 +243,7 @@ pipeline, hint, collation) is untouched, or the explained plan would not be the 
 measured. The strip happens on the explain clone only — the buffer preview and the fingerprint
 are computed from `ctx.Command` and are meant to show the command as it actually went over the
 wire. `Explain_DispatchedCommand_CarriesNoWireEnvelope` pins the shape of the **dispatched**
-document, which no test covered before: that gap is why two consecutive defects (AB#4374,
-AB#4958) shipped unnoticed in the same three lines.
+document, which no test covered before: that gap is why two consecutive defects shipped unnoticed in the same three lines.
 
 **Configuration (`OctoSystemConfiguration`):**
 
@@ -267,7 +266,7 @@ docs are explicit. We include them in `IsExplainable` because they're frequently
 slowest commands and the plan reveals whether the operation was anchored by an index.
 `executionStats` verbosity (which *would* execute writes) is deliberately out of scope.
 
-### Unused-Index Analysis via $indexStats (AB#4224 / Stage 3)
+### Unused-Index Analysis via $indexStats (Stage 3)
 
 Closes the Performance Advisor's add-and-remove loop: Stage 2C/2D ADD indexes when a slow
 query needs them; Stage 3 IDENTIFIES indexes that aren't earning their keep so they can be
@@ -304,7 +303,7 @@ passed for the signal to be meaningful.
 - Sharded-cluster aggregation (OctoMesh tenants are replica sets)
 - `$collStats` size analysis (separate concern)
 
-### CK-YAML Index Suggestions for COLLSCAN (AB#4222 / Stage 2D)
+### CK-YAML Index Suggestions for COLLSCAN (Stage 2D)
 
 For every Stage 2C suggestion that targets a known CK type, the suggester additionally
 emits a **CK-YAML snippet** the operator can paste into the CK type's source YAML under
@@ -315,7 +314,7 @@ machinery, so the index survives re-imports and cross-tenant migration.
 | Component | Purpose |
 |---|---|
 | `MongoDbAttributePathResolver.TryReverseToCkPath` | Inverse of `ResolveToMongoDbFieldPath`. Strips `attributes.` prefix and `.value` suffix, walks even-indexed camelCase segments and odd-indexed `attributes` separators back into PascalCase CK attribute names. Returns null when the path isn't a CK attribute (e.g. `ckTypeId.fullName`, `_id`) or fails to resolve in the provider. |
-| `CkYamlIndexSnippetWriter.Write` | Hand-formatted YAML matching the shape used by real CK types — `indexes: - indexType: Ascending - fields: - attributePaths: [...]`. Leading comment carries the audit trail (AB#4222 + CK type full name). |
+| `CkYamlIndexSnippetWriter.Write` | Hand-formatted YAML matching the shape used by real CK types — `indexes: - indexType: Ascending - fields: - attributePaths: [...]`. Leading comment carries the audit trail (CK type full name). |
 
 **Suggester wiring.** `SlowQueryIndexSuggester.TrySuggest` now accepts an optional
 `(tenantId, ICkCacheService)` pair. When both supplied AND the filter carries a top-level
@@ -344,7 +343,7 @@ in-flight explain.
 - Auto-apply the snippet to a CK source file. Operator pastes manually so they can review
   placement.
 
-### MongoDB Index Suggestions for COLLSCAN (AB#4220)
+### MongoDB Index Suggestions for COLLSCAN
 
 When `SlowQueryExplain.HasCollScan` flips, `SlowQueryIndexSuggester.TrySuggest` analyses
 the original BSON command and emits a ready-to-run mongosh `createIndex(...)` command.
@@ -390,7 +389,7 @@ a Notes caveat that a different index type is required.
 - Index-name length cap at 127 bytes (Mongo's hard limit) with SHA-256 short-hash suffix
   for truncated names so similar shapes don't collide.
 
-### Pipeline Fingerprinting (AB#4213)
+### Pipeline Fingerprinting
 
 `SlowQueryFingerprinter.Fingerprint(BsonDocument)` produces a stable 16-char hex hash of
 a command's structural shape — semantically-identical queries that differ only in literal
@@ -414,11 +413,11 @@ of structurally-identical slow queries).
 
 ### Roadmap
 
-- Stage 1: **AB#4206** (merged) — slow-log + OTel histograms
-- Per-request surface: **AB#4210** (merged) — GraphQL extension + REST headers
-- Studio surface: **AB#4212** (merged) — ring buffer + Diagnostics page
-- Stage 2A: **AB#4213** (merged) — pipeline fingerprinting + grouped view
-- Stage 2B: **AB#4216** (merged) — async `explain()` capture + COLLSCAN detection
-- Stage 2C: **AB#4220** (merged) — MongoDB index suggestions for COLLSCAN
-- Stage 2D: **AB#4222** (merged) — CK-attribute reverse mapping + CK-YAML emission
-- Stage 3: **AB#4224** — `$indexStats` unused-index analysis (this section)
+- Stage 1: slow-log + OTel histograms
+- Per-request surface: GraphQL extension + REST headers
+- Studio surface: ring buffer + Diagnostics page
+- Stage 2A: pipeline fingerprinting + grouped view
+- Stage 2B: async `explain()` capture + COLLSCAN detection
+- Stage 2C: MongoDB index suggestions for COLLSCAN
+- Stage 2D: CK-attribute reverse mapping + CK-YAML emission
+- Stage 3: `$indexStats` unused-index analysis (this section)
