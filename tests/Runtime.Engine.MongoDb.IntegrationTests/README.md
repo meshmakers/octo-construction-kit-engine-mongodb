@@ -4,7 +4,7 @@ Integration tests of the MongoDB runtime engine against a Testcontainers MongoDB
 tests, a Testcontainers CrateDB). Layout, parallelism rules and the CI time budget: `docs/test-configuration.md`, section
 *Test layout, parallelism rules and the CI time budget*.
 
-## Container resources and parallelism (AB#9250)
+## Container resources and parallelism
 
 Every Testcontainer of the suite has a memory **and** a CPU limit, and xUnit runs at most 8 collections at once, so a
 full run takes a bounded share of the machine and stays predictable next to other work (other agent lanes, Docker
@@ -94,9 +94,9 @@ suite in about 6 minutes.
    `ADiscardedConnection_FreesItsPoolSlot` is the exception: it has no warm-up, because it uses a data source of its own
    with one connection and breaks that connection on purpose, so both of its connects (the first and the replacement)
    must each succeed within 3 s. A failed warm-up names the container
-   and the slow connection setup. The cause is tracked in AB#9320.
+   and the slow connection setup. The cause is still open.
 
-## Container memory caps (AB#8511)
+## Container memory caps
 
 Every Testcontainer of this suite has a fixed memory footprint (`Fixtures/TestContainerLimits.cs`):
 
@@ -114,7 +114,7 @@ finding. `TestContainerLimitsTests` asks the running mongod for its cache size a
 The mongod memory is mostly not data: every fixture keeps its databases in the shared server, so a full run opens
 130,000-140,000 WiredTiger data handles (one per collection and index, up to ~1,300 connections). Each open handle costs
 memory outside the cache and pins pages in the cache: about 2 GB of cache is in use although the suite's data is small.
-Two consequences (AB#8511, reopened 2026-11-16):
+Two consequences (reopened 2026-11-16):
 
 - **Cache 3 GB, not 1 GB.** With 1 GB the cache was full during the startup burst, when the parallel fixtures import
   their CK models and create their system tenants, and WiredTiger rolled transactions back under cache pressure
@@ -134,15 +134,15 @@ Locally the Docker VM must hold the mongod peak, the CrateDB containers (up to 3
 14 GiB Docker Desktop VM with two kind clusters running, the run without the idle-handle closing swapped and failed
 with `MongoConnectionException` after two-minute stalls.
 
-## Performance budget tests (`Category=Performance`, AB#8004)
+## Performance budget tests (`Category=Performance`)
 
 Tests that assert a **wall-clock budget** (a p95 / median / elapsed ceiling that a slower machine can miss without any
 code change) carry the xUnit trait `[Trait("Category", "Performance")]`. Today these are two classes:
 
 | Test | Budget | Decision |
 |---|---|---|
-| `InterfaceQuery/GetRtEntitiesByInterfacePerformanceTests` (`IndexedSort_FirstPage_StaysWithinTheDecidedBudget`) | indexed first page over 30 collections p95 <= 100 ms; one collection median <= 1.25x the type query (+5 ms timer slack) | AB#6930 |
-| `StreamDataDownsampling/DownsamplingManyIdsPerformanceTests` (`SevenDaysOverManyIds_StaysWithinFiveSecondsPerCall`) | downsampling of a time-range archive (3500 entities x 8 days of 15-minute windows, CrateDB testcontainer) over 400 ids and 7 days: every call < 5 s (limit 800 and 200, cold and warm, and 10 parallel calls of 350 ids), every bin complete. Seed ~2-4 min; `OCTO_TEST_DOWNSAMPLING_ENTITIES` raises the entity count (at least 3500, smaller values are refused) | AB#8993 |
+| `InterfaceQuery/GetRtEntitiesByInterfacePerformanceTests` (`IndexedSort_FirstPage_StaysWithinTheDecidedBudget`) | indexed first page over 30 collections p95 <= 100 ms; one collection median <= 1.25x the type query (+5 ms timer slack) | decided budget |
+| `StreamDataDownsampling/DownsamplingManyIdsPerformanceTests` (`SevenDaysOverManyIds_StaysWithinFiveSecondsPerCall`) | downsampling of a time-range archive (3500 entities x 8 days of 15-minute windows, CrateDB testcontainer) over 400 ids and 7 days: every call < 5 s (limit 800 and 200, cold and warm, and 10 parallel calls of 350 ids), every bin complete. Seed ~2-4 min; `OCTO_TEST_DOWNSAMPLING_ENTITIES` raises the entity count (at least 3500, smaller values are refused) | decided budget |
 
 ### Why they are not in the PR / main CI
 
@@ -170,8 +170,8 @@ category runs in its own pipeline, nightly and on demand. A breach is a signal, 
   part of the release train or the Orchestrator CI. Keep it that way.
 
 Triage a red nightly run: was the agent busy (train, many builds at the same time)? Re-run it once by hand on a quiet agent.
-Red again on a quiet agent = a real regression of the query path, a Bug for the Core team. The budget constants are part of the
-AB#6930 decision; do not raise them to make a run green.
+Red again on a quiet agent = a real regression of the query path, a Bug for the Core team. The budget constants are decided values;
+do not raise them to make a run green.
 
 ### Run them locally
 
@@ -194,7 +194,7 @@ dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmake
 
 Numbers measured on a developer machine: `docs/interface-query.md`.
 
-## Stress tests (`Category=Stress`, AB#8679 / AB#8680)
+## Stress tests (`Category=Stress`)
 
 Tests that put a component under real load for minutes carry `[Trait("Category", "Stress")]`. Today that is the
 `StreamDataWriteLoss` memory-pressure pair with its own CrateDB (512 MB heap, query breaker set per test,
@@ -202,8 +202,8 @@ Tests that put a component under real load for minutes carry `[Trait("Category",
 
 | Test | Proves | Fast coverage in the CI |
 |---|---|---|
-| `ArchiveWriteUnderMemoryPressureIntegrationTests` | guarded and unguarded archive writes store what they report or throw `StreamDataWriteIncompleteException` (AB#8679) | `MissingRowRetryTests`, `ConflictOutcomeTests` (unit), `StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests` (a `CHECK` constraint makes CrateDB drop rows without an error, < 1 s) |
-| `RollupUnderMemoryPressureIntegrationTests` | forward aggregation and recompute write every row or fail loudly; a failed recompute keeps the previous generation (AB#8680) | `RollupSourceGenerationReadTests`, `CrateDbArchiveRecomputeExecutorTests` (unit), `StreamDataWriteLoss/RollupShortfallIntegrationTests` (a wrapped client deletes rows after the statement, < 1 s each) |
+| `ArchiveWriteUnderMemoryPressureIntegrationTests` | guarded and unguarded archive writes store what they report or throw `StreamDataWriteIncompleteException` | `MissingRowRetryTests`, `ConflictOutcomeTests` (unit), `StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests` (a `CHECK` constraint makes CrateDB drop rows without an error, < 1 s) |
+| `RollupUnderMemoryPressureIntegrationTests` | forward aggregation and recompute write every row or fail loudly; a failed recompute keeps the previous generation | `RollupSourceGenerationReadTests`, `CrateDbArchiveRecomputeExecutorTests` (unit), `StreamDataWriteLoss/RollupShortfallIntegrationTests` (a wrapped client deletes rows after the statement, < 1 s each) |
 
 Decision (Reimar, 2026-11-09): stress tests do not belong in the integration suite. They took a local full run from about
 13 to more than 22 minutes. The CI Test step (`azure-pipelines.yml`) runs with `--filter "Category!=Performance&Category!=Stress"`;

@@ -1,6 +1,6 @@
 ---
 description: "Runtime write behaviour: GridFS reads, write-concern failures, transactions, re-import, RecordArray update, rtVersion, time limits"
-applies_to: src/Runtime.Engine.MongoDb/Repositories/**, src/Runtime.Contracts.MongoDb/Repositories/**
+applies_to: src/Runtime.Engine.MongoDb/Repositories/**, src/Runtime.Contracts.MongoDb/Repositories/**, src/Runtime.Engine.MongoDb/RuntimeQueries/**
 ---
 
 ## GridFS read preference and read-your-writes
@@ -200,10 +200,7 @@ records are resolved by the engine like any installed model) pins it against Mon
 repository, a caller `ImportAsCallerAsync` upsert (YAML) omits the `MethodOnly` member, and the document read back keeps it - single
 record (position), record array (record key, reordered, a new element keeps nothing), a member that exists only on a record derived
 from the declared one; a keyless record array (also of a derived record) with a stored value is refused with message 141 and the
-stored document is unchanged. Two limits of the import path the test works around, both outside the scope of that test:
+stored document is unchanged. One limit of the import path the test works around, outside the scope of that test:
 
 - the YAML reader of `ImportRt` (`RtRecordConverter`) reads only scalar member values inside a record, so nested records cannot be
   written by a YAML file (covered by the engine unit tests);
-- the JSON path writes its bulks from an `async void` event handler (`BulkDeserialized += async ...` in `ImportFileAsync`):
-  `ImportAsync` / `ImportAsCallerAsync` return and commit before the entities are written, and an exception of the write (141
-  included) is lost. Measured here: the entity is not there right after the call, it is there 3 s later.

@@ -38,13 +38,13 @@ Where to start reading, not a full list; every class sits in a folder of the rou
 | `src/Runtime.Engine.MongoDb/Blueprints/**`, `tests/Runtime.Engine.MongoDb.IntegrationTests/Blueprint*.cs` | `docs/blueprints.md` |
 | `src/Runtime.Engine.MongoDb/Serialization/**` | `docs/bson-serialization.md` |
 | `src/Runtime.Engine.MongoDb/Repositories/Entities/**`, `src/Runtime.Contracts.MongoDb/Repositories/Entities/**` | `docs/ck-meta-model-persistence.md` |
-| `src/Runtime.Engine.MongoDb/Services/**`, `src/Runtime.Engine.MongoDb/CkCache/**`, `src/Runtime.Engine.MongoDb/Blueprints/**`, `src/Runtime.Engine.MongoDb/Fixups/**` | `docs/ck-model-import.md` |
-| `tests/Runtime.Engine.MongoDb.IntegrationTests/InterfaceQuery/**` | `docs/interface-query.md` |
+| `src/Runtime.Engine.MongoDb/Services/**`, `src/Runtime.Engine.MongoDb/CkCache/**`, `src/Runtime.Engine.MongoDb/Blueprints/**`, `src/Runtime.Engine.MongoDb/Fixups/**`, `src/Runtime.Engine.MongoDb/EmbeddedCkModelImportGuard.cs` | `docs/ck-model-import.md` |
+| `tests/Runtime.Engine.MongoDb.IntegrationTests/InterfaceQuery/**`, `src/Runtime.Engine.MongoDb/Repositories/Query/RtInterfaceQueryExecutor.cs` | `docs/interface-query.md` |
 | `src/Runtime.Engine.MongoDb/Repositories/MongoDb/MongoLinkedBinaryDataSource*.cs` | `docs/linked-binaries-after-commit.md` |
 | `src/Runtime.Engine.MongoDb/Configuration/**`, `src/Runtime.Engine.MongoDb/Repositories/MongoDb/**` | `docs/observability-command-profiling.md` |
 | `src/Runtime.Engine.MongoDb/Repositories/Query/**`, `src/Runtime.Engine.MongoDb/RuntimeQueries/**` | `docs/permissions-and-interface-query.md` |
-| `src/Runtime.Engine.MongoDb/RuntimeQueries/**`, `src/Runtime.Engine.MongoDb/Repositories/Query/**` | `docs/runtime-query-paging.md` |
-| `src/Runtime.Engine.MongoDb/Repositories/**`, `src/Runtime.Contracts.MongoDb/Repositories/**` | `docs/runtime-write-semantics.md` |
+| `src/Runtime.Engine.MongoDb/RuntimeQueries/**`, `src/Runtime.Engine.MongoDb/Repositories/Query/**`, `src/Runtime.Engine.MongoDb/Repositories/MongoDb/SortIndexHint.cs`, `src/Runtime.Engine.MongoDb/Repositories/MongoDb/PagingTiebreakGate.cs` | `docs/runtime-query-paging.md` |
+| `src/Runtime.Engine.MongoDb/Repositories/**`, `src/Runtime.Contracts.MongoDb/Repositories/**`, `src/Runtime.Engine.MongoDb/RuntimeQueries/**` | `docs/runtime-write-semantics.md` |
 | `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**` | `docs/streamdata-archive-schema-and-activation.md` |
 | `src/Runtime.Engine.CrateDb/QueryBuilder/**`, `src/Runtime.Engine.CrateDb/Copy/**`, `src/Runtime.Engine.MongoDb/StreamData/**` | `docs/streamdata-queries-and-export.md` |
 | `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**` | `docs/streamdata-rollup-source-generation-read.md` |

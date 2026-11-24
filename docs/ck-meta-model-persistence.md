@@ -275,7 +275,7 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   fails when the new field has no diff, no probe or no classifier rule.
 
 **No Mongo migration in Phase 1 (plan §4).** No System/System.* model gains a persisted field (all stay `ckLanguage`
-1, range retention is off by default), so Phase 1 needs no System version bump, no re-import and no data migration.
+1, range retention was off by default in Phase 1; it is now the compiler default, see *Contract for classic models* above), so Phase 1 needed no System version bump, no re-import and no data migration.
 Every new member is nullable and absent from v1 documents; the new collections (`CkInterface`,
 `CkTypeInterfaceImplementation`) are created empty by `UpdateCollectionsAsync` on the next import of any model, and only
 a v2 import writes rows into them. A v2 import makes the tenant unsafe for
@@ -338,7 +338,7 @@ the catalog side.
   from Mongo) and `CkMetaModelLegacyDocumentTests` (`MethodResultSensitive_*`, `MethodResultDocument_WrittenBefore*`) cover it.
   A service whose persistence predates the marker would drop it on import, so a model with a sensitive result is only
   imported by a service whose engine knows the key: the model's raised `minEngineVersion` makes an older engine refuse it
-  (message 126) instead of storing the model without the marker.
+  (message 126; the check is skipped when `CkEngineVersion.Current` is null, see *Import guard* above) instead of storing the model without the marker.
 **Phase 3 addition (touch-point row 10 of `execution.mode`):**
 - `mode` (`CkMethodExecutionDto.Mode`, `'sync'` | `'async'`) is persisted inside the embedded `CkMethodDto.Execution` (class
   map `CkMethodExecutionDto` in `MongoRepositoryClient.RegisterCkMethodClassMaps`, `SetIgnoreIfNull`). An undeclared mode is

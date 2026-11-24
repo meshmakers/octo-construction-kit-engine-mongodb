@@ -43,8 +43,8 @@ protocol only and does not read them.
 
 ### The integration suite is silent for most of its run — that is not a hang
 
-At the default `dotnet test` console verbosity **a passing test prints nothing**: only `[FAIL]` and
-`[SKIP]` lines reach the log. This suite reports its last failing test very early — the stream-data
+At the default `dotnet test` console verbosity **a passing test prints nothing**: of the test results
+only `[FAIL]` and `[SKIP]` lines reach the log (plus the `octo-progress` diagnostic lines described below). This suite reports its last failing test very early — the stream-data
 collections abort on their first assertion and are done inside the first two minutes — and then keeps
 working for the rest of its wall clock, so the log falls silent for the remainder. Measured on the
 `ae3336e` commit, all six runs, same shape:
@@ -82,9 +82,10 @@ Two consequences worth keeping:
 `Console.WriteLine` from a fixture does **not** work for this: it is captured as test output and only
 ever reaches the .trx, which is why "Using shared Testcontainer MongoDB at ..." was never visible in a
 CI log. Every fixture reports `initialising` / `ready in Xs`, and `RunHeartbeatFixture` (an assembly
-fixture) adds a line every 30 s, so the log can no longer go quiet for longer than that — a heartbeat
-that keeps ticking means "working", one that stops means "hung", and the last `octo-progress` line says
-where. The diagnostic sink hangs off the `AsyncLocal` test context, so the heartbeat thread would see
+fixture) adds a line every 30 s, so the log can no longer go quiet for longer than that. The heartbeat runs on its own
+timer loop, independent of test execution: a ticking heartbeat shows only that the test host process is alive, and a hung
+test does not stop it. A heartbeat that stops means the process is gone or blocked; to find where a run stalled, read the
+last `octo-progress` line and the test times in the .trx. The diagnostic sink hangs off the `AsyncLocal` test context, so the heartbeat thread would see
 only xUnit's idle context: `RunProgress.CaptureDiagnosticSink()` captures it once from the assembly
 fixture.
 

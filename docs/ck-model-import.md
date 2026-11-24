@@ -1,6 +1,6 @@
 ---
 description: "CK model import: migration on import, hidden backstop, import guard, ResolveFailed handling, blueprint ranges, auto-import"
-applies_to: src/Runtime.Engine.MongoDb/Services/**, src/Runtime.Engine.MongoDb/CkCache/**, src/Runtime.Engine.MongoDb/Blueprints/**, src/Runtime.Engine.MongoDb/Fixups/**
+applies_to: src/Runtime.Engine.MongoDb/Services/**, src/Runtime.Engine.MongoDb/CkCache/**, src/Runtime.Engine.MongoDb/Blueprints/**, src/Runtime.Engine.MongoDb/Fixups/**, src/Runtime.Engine.MongoDb/EmbeddedCkModelImportGuard.cs
 ---
 
 ## CK Model Migration Support
@@ -65,8 +65,8 @@ ResolveFailed models are untouched and heal through the existing re-validation. 
   (review E-L7).
 - **The backstop does not rely on the engine graph's text-index merge.** Index maintenance merges the text indexes of
   all types of a collection itself (`AnalyseIndex`, from the stored `CkType` documents); `CkTypeGraph.MergeTextIndexes`
-  in the engine (which, on main, never merges a derived text index into a root that has its own) is not involved. Since
-  the read-back DTOs (and so the runtime graph) do carry the type indexes.
+  in the engine (which, on main, never merges a derived text index into a root that has its own) is not involved. The
+  read-back DTOs (and so the runtime graph) do carry the type indexes.
 - **Archives never capture Hidden (review G3 E-M2, engine `ArchiveHiddenColumnGuard`).** `TenantContext` passes the CK
   cache into `ArchiveLifecycleService` (activation refuses such columns) and, after every CK model import (explicit,
   embedded, System restore of a child or the system tenant, and a re-validation that recovered models), calls
@@ -117,7 +117,7 @@ ResolveFailed models are untouched and heal through the existing re-validation. 
   index-state timestamps removed). The diff is empty: a tenant that only saw v1 imports through the Phase 1 engine can
   go back to the main engine. Regenerate the golden only when the System or Test model itself changes.
 - A **v2 import** makes the tenant unsafe for pre-Phase-1 services (they ignore `access`, Hidden would be exposed) —
-  see *No Mongo migration in Phase 1* above.
+  see `docs/ck-meta-model-persistence.md`, *No Mongo migration in Phase 1*.
 
 ### New meta-model field checklist (do this for EVERY new CK DTO property)
 
@@ -128,7 +128,7 @@ ResolveFailed models are untouched and heal through the existing re-validation. 
    `UpdateModelAsync` for model-level fields); keep the `*MongoDataSourceMapper.ApplyUpdate` in sync.
 4. Read-back: `TryLookupCkModelAsync` — at EVERY site that builds the DTO (assignments: records, types,
    association roles).
-5. A new collection additionally needs the plumbing list above (data source property, create list,
+5. A new collection additionally needs the plumbing list in `docs/ck-meta-model-persistence.md` (data source property, create list,
    `TransientCkModel`, bulk import, model state, `DeletePreviousVersion`, read-back query).
 6. Run the hard gate `RoundTrip/CkMetaModelReflectionGateTests` (reflection over every compiled model) and
    `RoundTrip/CkMetaModelRoundTripTests` (JSON view, document shapes) — they fail until steps 1–4 are done. Extend the kitchen sink
@@ -138,7 +138,7 @@ ResolveFailed models are untouched and heal through the existing re-validation. 
 
 `ownership` (`AttributeOwnershipDto`: `SeedOwned | TenantOwned | RuntimeState | Secret`) replaces
 the `isRuntimeState` boolean, which conflated "preserve on Upsert" with "exclude from `ExportRt`".
-It exists at TWO levels and both must survive the Mongo round-trip described above:
+It exists at TWO levels and both must survive the Mongo round-trip described in `docs/ck-meta-model-persistence.md`:
 
 1. **Definition** — `CkAttributeDto.Ownership` (nullable). Persisted on
    `Repositories/Entities/CkAttribute.cs` next to the boolean; `ProcessCkAttributes` writes BOTH

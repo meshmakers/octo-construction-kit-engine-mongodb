@@ -382,9 +382,8 @@ a Notes caveat that a different index type is required.
   is a no-op anyway.
 - Auto-execute button — footgun across N tenants. Manual copy-paste is the right ergonomic
   for production data.
-- CK-attribute reverse mapping (Stage 2D). Today the suggestion targets the raw MongoDB
-  field path (`attributes.name.value`); the future CK-YAML emission will write
-  `Indexed: true` on the CK attribute so the index survives model re-imports.
+- Writing the suggestion back as a CK attribute flag. CK-YAML snippets under `indexes:` are emitted (see *CK-YAML
+  Index Suggestions for COLLSCAN (Stage 2D)*); an `Indexed: true` attribute flag does not exist.
 - Per-branch indexes for `$or`. One compound covering the union with a Notes caveat.
 - Index-name length cap at 127 bytes (Mongo's hard limit) with SHA-256 short-hash suffix
   for truncated names so similar shapes don't collide.

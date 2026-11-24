@@ -34,7 +34,7 @@ is durably gone before the drop and no resolve can resurrect the DB. `DropChildT
 a single-call convenience (`DeleteChildTenantMetadataAsync` + `DropTenantDatabaseAsync`, record-delete
 now ordered before the drop) for callers with no concurrent resolver: create-rollback
 (`CreateChildTenantAsync` blueprint path), `ClearChildTenantAsync`, `TenantBackupService` temp cleanup,
-and the integration tests. Complements the guard invalidation above (which handles the
+and the integration tests. Complements the import-guard invalidation in `docs/ck-model-import.md` (which handles the
 *same-process delete+recreate* import-guard, a different facet of the same resurrection mechanism).
 
 `DropTenantDatabaseAsync` additionally **drops the tenant's MongoDB user** and drops the database
@@ -102,7 +102,7 @@ tenant back, and that rollback used to drop whatever database the name pointed a
 Checks, in order: the configured system tenant id (reserved — the system tenant has no `RtTenant`
 self-record, so a registry lookup alone cannot cover it), the configured system database name,
 MongoDB's own `admin` / `local` / `config`, the instance's tenant-database prefix (see
-*Tenant-Database Prefix* below), the platform-wide registry by tenant id, the registry by
+`docs/tenant-lifecycle-stores.md`, *Tenant-Database Prefix*), the platform-wide registry by tenant id, the registry by
 database name, and finally physical existence — required for attach, forbidden for create.
 
 Two rules to preserve when touching it:

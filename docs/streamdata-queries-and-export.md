@@ -129,7 +129,7 @@ pre-aggregated subquery. CrateDB cannot hash-join a table function, so either wa
 nested loop whose cost grows with bins × joined-rows. The subquery variant helped only while the
 aggregated side stayed small; with per-series grouping the aggregated side is itself
 `bins × series`, making the whole thing **quadratic in the bucket count**. Measured live on a
-31-day, 31-series chart (energydemo): 50 buckets 0.5 s, 200 buckets 3.9 s, 670 buckets past the
+31-day, 31-series chart on a demo tenant: 50 buckets 0.5 s, 200 buckets 3.9 s, 670 buckets past the
 30 s `CrateResiliencePipeline` timeout — while the same range at 50 buckets scanned exactly the
 same source rows in half a second, proving the scan was never the problem. Without the join the
 query is O(source rows); the caller-side axis fill is O(bins).

@@ -13,7 +13,7 @@ counterpart of `StreamData:SchemaInstancePrefix` (CrateDB). It is its own settin
 set either one without the other. Both default to empty. An operator may configure `TenantDatabasePrefix` on an
 existing instance: its existing tenants keep their database names (see the exemption rule below). This exemption
 is MongoDB-only: `StreamData:SchemaInstancePrefix` has none, so an existing instance must never set it, or its
-tenants' CrateDB schemas would move (see the Stream Data section).
+tenants' CrateDB schemas would move (see `docs/streamdata-write-path.md`, *Schema Instance Prefix*).
 
 | Rule | Where |
 |---|---|
@@ -134,7 +134,7 @@ branches, decided on the state that is already stored:
 |---|---|
 | `Active` | Metadata refresh only (`LastTransitionUtc`, `DatabaseName`) — a healthy tenant re-running setup is never downgraded. |
 | `Creating` | Re-opens the phase (`SetupStarted`, `LastError` cleared) but **leaves `AttemptCount`, `LeaseOwner`, `LeaseUntil` untouched** — that bookkeeping belongs to whoever is currently driving the tenant. |
-| missing / `Deleting` / `Failed` | New creation cycle: attempt budget, lease and last error are reset; `CreatedUtc` is preserved via `$ifNull`. |
+| missing / `Deleting` / `Failed` | New creation cycle: attempt budget, lease and last error are reset; `CreatedUtc` is set to the current time for a missing or `Failed` record (a new minimum age) and preserved via `$ifNull` for `Deleting`. |
 
 Why it matters: the old read-modify-write cleared `LeaseOwner`/`LeaseUntil` on every setup
 run and could revert a concurrent claim's `AttemptCount` increment (lost update). A tenant stuck in
@@ -173,8 +173,8 @@ cluster down underneath them — every in-flight operation then fails with
 (LibraryStatus **FixAll**) whose per-import `PosUpdateTenant` event disposed the tenant's client
 between two batch steps, so each FixAll run imported exactly one model and then failed at the next
 `AcquireModelImportLockAsync` (tenant-setup storms on shared test installations, 2026-08-05). The evicted
-client is collected once its holders let go; its stale connections are closed by server/pool idle
-handling.
+client stays tracked by `RepositoryClientCache` and is disposed at shutdown (`docs/tenant-registry-and-clients.md`);
+its stale connections are closed by server/pool idle handling.
 
 Called from two places:
 

@@ -1,6 +1,6 @@
 ---
 description: "Runtime query paging: deep sorted pages and the page order of runtime queries"
-applies_to: src/Runtime.Engine.MongoDb/RuntimeQueries/**, src/Runtime.Engine.MongoDb/Repositories/Query/**
+applies_to: src/Runtime.Engine.MongoDb/RuntimeQueries/**, src/Runtime.Engine.MongoDb/Repositories/Query/**, src/Runtime.Engine.MongoDb/Repositories/MongoDb/SortIndexHint.cs, src/Runtime.Engine.MongoDb/Repositories/MongoDb/PagingTiebreakGate.cs
 ---
 
 ## Deep sorted pages: the index hint

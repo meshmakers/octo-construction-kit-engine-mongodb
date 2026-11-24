@@ -1,6 +1,6 @@
 ---
 description: "Interface query GetRtEntitiesByInterfaceAsync: global order across all implementers of a CK interface"
-applies_to: tests/Runtime.Engine.MongoDb.IntegrationTests/InterfaceQuery/**
+applies_to: tests/Runtime.Engine.MongoDb.IntegrationTests/InterfaceQuery/**, src/Runtime.Engine.MongoDb/Repositories/Query/RtInterfaceQueryExecutor.cs
 ---
 
 # Interface query: `ITenantRepository.GetRtEntitiesByInterfaceAsync`
