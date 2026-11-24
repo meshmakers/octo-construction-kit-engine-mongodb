@@ -17,8 +17,9 @@
   fixtures) does not bind that section, so there the limit is 4 and the pool the host's. Without the keys nothing changes
   but the limit of 4. A write of one statement runs as before. On a failed write no new
   statement starts, the ones in flight finish and the first failure is rethrown unchanged; the set of rows already written
-  can then differ from the sequential order, all of them are idempotent guarded upserts, and a retry of the same insert
-  converges. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
+  can then differ from the sequential order. All of them are idempotent upserts (guarded where the archive has conflict
+  precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
+  conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
 - AB#9524 Fix: the index update resolves index attribute paths against the inheritance chain of the index-defining type
   (its own attributes and those of its base types, the chain the update already loads; the type's own assignment wins

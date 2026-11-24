@@ -171,7 +171,7 @@ internal class CrateDbConnectionAccess(
         if (config.PoolingEnabled)
         {
             csb.MaxPoolSize = Math.Max(1, EffectivePoolSize(config, instance));
-            csb.MinPoolSize = Math.Max(0, config.MinPoolSize);
+            csb.MinPoolSize = Math.Min(Math.Max(0, config.MinPoolSize), csb.MaxPoolSize);
             // Prune idle connections on a tight cadence so a half-closed/broken connection is evicted
             // within ~one interval instead of being handed out and failing on next use.
             csb.ConnectionPruningInterval = (int)Math.Max(1, config.ConnectionPruningInterval.TotalSeconds);

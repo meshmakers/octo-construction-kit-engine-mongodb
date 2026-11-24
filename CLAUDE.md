@@ -1692,8 +1692,10 @@ never run the statements of a lane concurrently); the shapes (`ArchiveColumnSets
 the skipped rows are sorted by position, so they equal the sequential result; `MissingRowRetry` stays per statement. On a
 failure no lane starts another statement after the first failed one, the statements in flight finish, the first failure is
 rethrown unchanged (no `AggregateException`) and a later failure of a statement in flight is dropped without a log entry. On
-a failed write the set of rows already written can differ from the sequential order; all of them are idempotent guarded
-upserts, and a retry of the same insert converges. The client plans its lanes in `CrateDatabaseClient.PlanInsertStatements`
+a failed write the set of rows already written can differ from the sequential order. All of them are idempotent upserts
+(guarded where the archive has conflict precedence), so a retry of the same insert converges when no other write of the
+same keys comes in between; without conflict precedence the last write wins, and a retry can replace a newer value that
+another write stored meanwhile. The client plans its lanes in `CrateDatabaseClient.PlanInsertStatements`
 (limit from the configuration, key from the row).
 Tests: `InsertStatementLanesTests` (unit, fake statement executor: limit reached and never exceeded, no key in two statements,
 order per key, failure contract; `PlanInsertStatements` uses the configured limit and keeps a key in one lane),
