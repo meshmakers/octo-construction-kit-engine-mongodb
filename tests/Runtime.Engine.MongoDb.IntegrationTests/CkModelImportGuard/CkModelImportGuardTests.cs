@@ -59,7 +59,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
         {
             using var counters = new CkCounterRecorder();
             var newer = Bump(EmbeddedSystem, minor: 1);
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem, newer));
             Assert.Equal(newer.FullName, await InstalledAsync(tenantId, "System"));
 
             var (pre, pos) = (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates);
@@ -80,7 +80,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
         {
             using var counters = new CkCounterRecorder();
             var nextMajor = new CkModelId("System", new CkVersion(EmbeddedSystem.Version.Major + 1, 0, 0));
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, nextMajor));
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem, nextMajor));
 
             var pos = fixture.Notifications.PosUpdates;
             await ResolveAsync(tenantId);
@@ -95,13 +95,13 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
-    ///     Explicit import of an OLDER System is allowed (decision Q5) with a WARN and a counter. It does not stick
-    ///     in a process whose embedded System is newer: the next tenant resolve — at the latest, the migration step
-    ///     of the explicit import itself resolves the tenant — finds "installed older than embedded" and upgrades it
-    ///     back. That is the guard's upgrade rule, not a downgrade.
+    ///     AB#9325 (replaces the explicit System downgrade of decision Q5): a caller import of an OLDER System is
+    ///     refused before anything is written - no WARN "Explicit downgrade", no downgrade counter, the installed
+    ///     System stays. An older System that a service installs (the embedded path) is still upgraded back by the
+    ///     next tenant resolve: the guard's upgrade rule.
     /// </summary>
     [Fact]
-    public async Task ExplicitSystemDowngrade_IsAllowedWithWarning_AndTheEmbeddedSystemUpgradesItBack()
+    public async Task CallerSystemDowngrade_IsRefused_AndAnOlderSystemInstalledByAServiceIsUpgradedBack()
     {
         await WithTenantAsync("guardolder", async (tenant, tenantId) =>
         {
@@ -109,12 +109,17 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             Assert.True(EmbeddedSystem.Version.Minor > 0, "test needs a System version below the embedded one");
             var older = new CkModelId("System",
                 new CkVersion(EmbeddedSystem.Version.Major, EmbeddedSystem.Version.Minor - 1, 0));
+            var olderModel = await RenameAsync(EmbeddedSystem, older);
 
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, older));
-            Assert.NotEmpty(fixture.Logs.Find(LogLevel.Warning, "Explicit downgrade", "'System'", tenantId,
-                EmbeddedSystem.FullName, older.FullName));
-            Assert.True(counters.Sum(CkModelImportDiagnostics.ExplicitDowngradeCounterName, ("model", "System")) >= 1);
+            var refusal = await Assert.ThrowsAsync<ServiceManagedCkModelImportRefusedException>(() =>
+                tenant.ImportCkModelAsync(olderModel));
+            Assert.Equal(ServiceManagedCkModels.RefusalCode, refusal.Code);
+            Assert.Equal(EmbeddedSystem.FullName, await InstalledAsync(tenantId, "System"));
+            Assert.Empty(fixture.Logs.Find(LogLevel.Warning, "Explicit downgrade", "'System'", tenantId));
+            Assert.Equal(0, counters.Sum(CkModelImportDiagnostics.ExplicitDowngradeCounterName, ("model", "System")));
+            Assert.True(counters.Sum(CkModelImportDiagnostics.ServiceManagedImportRefusedCounterName) >= 1);
 
+            await InstallAsServiceAsync(tenant, olderModel);
             await ResolveAsync(tenantId);
             Assert.Equal(EmbeddedSystem.FullName, await InstalledAsync(tenantId, "System"));
             Assert.NotEmpty(fixture.Logs.Find(LogLevel.Information, "Restoring system CK Model", tenantId));
@@ -200,7 +205,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
 
             // Additive System bump: Test-1.0.0 pins the embedded System exactly → ResolveFailed.
             var newer = Bump(EmbeddedSystem, minor: 1);
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem, newer));
             Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId)); // ResolveFailed
 
             // The embedded System no longer reverts the bump, so the model stays ResolveFailed ...
@@ -217,7 +222,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
                 ("result", CkModelImportDiagnostics.ResultStillFailed)) > stillFailedBefore);
 
             // The import that satisfies the pin again heals it — no manual action.
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, EmbeddedSystem));
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem, EmbeddedSystem));
             Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId));
             Assert.True(counters.Sum(CkModelImportDiagnostics.ModelRevalidatedCounterName,
                 ("result", CkModelImportDiagnostics.ResultRecovered)) >= 1);
@@ -251,12 +256,12 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId)); // Available
 
             // Additive System bump: the range [2.5,3.0) still holds, the model stays Available.
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, Bump(EmbeddedSystem, minor: 1)));
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem, Bump(EmbeddedSystem, minor: 1)));
             Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId));
 
             // System of the next major: the range is unsatisfied → ResolveFailed.
             var newer = new CkModelId("System", new CkVersion(EmbeddedSystem.Version.Major + 1, 0, 0));
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem, newer));
             Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId)); // ResolveFailed
 
             // The embedded System no longer reverts the bump, so the model stays ResolveFailed ...
@@ -273,7 +278,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
                 ("result", CkModelImportDiagnostics.ResultStillFailed)) > stillFailedBefore);
 
             // The import that satisfies the pin again heals it — no manual action.
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, EmbeddedSystem));
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem, EmbeddedSystem));
             Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId));
             Assert.True(counters.Sum(CkModelImportDiagnostics.ModelRevalidatedCounterName,
                 ("result", CkModelImportDiagnostics.ResultRecovered)) >= 1);
@@ -461,7 +466,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
         var newer = Bump(EmbeddedSystem, minor: 1);
         try
         {
-            await systemContext.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            await InstallAsServiceAsync(systemContext, await RenameAsync(EmbeddedSystem, newer));
             Assert.False(await systemContext.IsCkModelExistingAsync(EmbeddedSystem));
             Assert.True(await systemContext.IsCkModelSatisfiedAsync(EmbeddedSystem));
 
@@ -474,7 +479,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
         finally
         {
             // Restore the shared system tenant to the embedded System (explicit import may downgrade).
-            await systemContext.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, EmbeddedSystem));
+            await InstallAsServiceAsync(systemContext, await RenameAsync(EmbeddedSystem, EmbeddedSystem));
         }
 
         Assert.True(await systemContext.IsCkModelExistingAsync(EmbeddedSystem));
@@ -563,7 +568,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             await tenant.ImportCkModelAsync(await ClassicTestV1Async());
             // Additive System bump: the exact pin of Test-1.0.0 is unmet, so it is really ResolveFailed.
             var newer = Bump(EmbeddedSystem, minor: 1);
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem, newer));
             Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId));
             var runsBefore = TestMigrationRuns();
 
@@ -593,7 +598,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     {
         await WithTenantAsync("guarddeps", async (tenant, tenantId) =>
         {
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem,
+            await InstallAsServiceAsync(tenant, await RenameAsync(EmbeddedSystem,
                 new CkModelId("System", new CkVersion(EmbeddedSystem.Version.Major + 1, 0, 0))));
 
             var (pre, pos) = (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates);
@@ -625,7 +630,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
         await WithTenantAsync("guardwrite", async (tenant, tenantId) =>
         {
             var newer = Bump(EmbeddedSystem, minor: 1);
-            await tenant.ImportCkModelAsync(WithAutoIncrementPrefix(await RenameAsync(EmbeddedSystem, newer)));
+            await InstallAsServiceAsync(tenant, WithAutoIncrementPrefix(await RenameAsync(EmbeddedSystem, newer)));
             await tenant.ImportCkModelAsync(TicketModel(newer));
             Assert.Equal(newer.FullName, await InstalledAsync(tenantId, "System"));
 
@@ -812,6 +817,13 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             databaseName, tenantId);
         return new TenantDatabaseSourceIdentifier(null, dataSource, tenantId);
     }
+
+    /// <summary>
+    ///     Installs a compiled service-managed model the way a service's embedded import does. Since AB#9325 the caller
+    ///     overload <c>ImportCkModelAsync(CkCompiledModelRoot)</c> refuses System models; tests use the internal seam.
+    /// </summary>
+    internal static Task InstallAsServiceAsync(ITenantContext tenant, CkCompiledModelRoot model) =>
+        ((TenantContext)tenant).ImportServiceManagedCompiledCkModelForTestsAsync(model);
 
     private static CkModelId Bump(CkModelId id, int minor) =>
         new(id.Name, new CkVersion(id.Version.Major, id.Version.Minor + minor, 0));

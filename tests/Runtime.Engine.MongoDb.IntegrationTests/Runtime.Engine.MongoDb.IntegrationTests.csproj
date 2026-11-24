@@ -43,6 +43,10 @@
         <None Update="testData\ckv2-golden-main-v1-ck-documents.txt">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
+        <!-- AB#9325: the published System.Identity 3.8.0 (with writeAccess channels) for the caller-import refusal tests. -->
+        <None Update="testData\ck-system.identity-3.8.0.json">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
         <None Update="testData\sampleRtModel.yaml">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>

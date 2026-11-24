@@ -23,9 +23,10 @@ Meter name: **`Meshmakers.Octo.MongoDb`** (registered in
 | `octo.mongodb.command.errors` | Counter | `command_name`, `database`, `error_code` | Failure counts, tagged with the Mongo error code (e.g. `112` for WriteConflict) |
 | `octo.ck.embedded_import.skipped` (Prometheus `octo_ck_embedded_import_skipped_total`) | Counter | `model`, `reason` | Embedded CK model import skipped, tenant has a newer version (see *Embedded CK Model Import Guard*); counted once per process per (tenant, embedded, installed) |
 | `octo.ck.explicit_import.downgraded` (Prometheus `octo_ck_explicit_import_downgraded_total`) | Counter | `model` | Explicit `ImportCk` replaced a newer installed version |
+| `octo.ck.explicit_import.refused` (Prometheus `octo_ck_explicit_import_refused_total`) | Counter | none | A caller import of a service-managed model (`System`, `System.*`) was refused with `CK_SERVICE_MANAGED_MODEL`; the model id is in the WARN line |
 | `octo.ck.model.revalidated` (Prometheus `octo_ck_model_revalidated_total`) | Counter | `result` (`recovered` / `still_failed`) | Post-import re-validation of `ResolveFailed` models |
 
-The three `octo.ck.*` counters use curly-brace annotation units (`{import}`, `{model}`), which the Prometheus exporter
+The `octo.ck.*` counters use curly-brace annotation units (`{import}`, `{model}`), which the Prometheus exporter
 does not append to the series name. A plain unit such as `count` would add a `_count` suffix
 (`octo_ck_embedded_import_skipped_count_total` — what the G1 E2E saw before D-G1-2).
 

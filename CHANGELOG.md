@@ -35,6 +35,16 @@
   logs the warning and falls back as before. Known limitation: the merged text index is defined on the collection root
   and takes fields of descendants; those still resolve against the root's chain and may fall back. Code:
   `IndexAttributePaths`. Tests: `IndexAttributePathsTests` (unit), `InheritedIndexAttributePathTests` (MongoDB).
+- AB#9325 Fix: the caller overload `ITenantContext.ImportCkModelAsync(CkCompiledModelRoot)` - behind every caller-initiated
+  CK import (bot `ImportCk` / `ImportCkBatch` jobs, whoever queued them) - refuses every service-managed model (`System`,
+  `System.*`, case-insensitive, trimmed) in every version, also when the tenant does not have it, before anything is
+  written: `ServiceManagedCkModelImportRefusedException` with code `CK_SERVICE_MANAGED_MODEL` (the asset repository's REST
+  code), WARN log, counter `octo.ck.explicit_import.refused`. Operators lose the explicit System downgrade of decision Q5;
+  the repair path is the owning service's embedded import (restart, `ClearCache`, `ReRunTenantSetup`). Non-System models
+  keep the explicit downgrade with WARN. New public predicate `ServiceManagedCkModels.IsServiceManaged` (single source;
+  the tenant upgrade guard uses it). No `ITenantContext` member changed. Tests in other repositories that installed a
+  System model through the caller overload must load it into a test catalog and import it by id (consumer PRs merge
+  first).
 - AB#9302 Fix: a CK import no longer waits for the whole tenant of a running tiebreak index upgrade: the upgrade releases
   the lock between collections and lets a waiting import take it. This reduces contention; it is no bound - the import
   keeps its 90 s wait and can still time out when one collection's builds, or several sections before it gets its turn,

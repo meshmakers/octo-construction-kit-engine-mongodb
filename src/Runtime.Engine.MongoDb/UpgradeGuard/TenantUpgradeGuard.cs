@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Engine.SemVer;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.UpgradeGuard;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -172,8 +173,7 @@ public class TenantUpgradeGuard : ITenantUpgradeGuard
     ///     embedded import and the service version decide there, not the upgrade guard.
     /// </summary>
     internal static bool IsServiceManaged(string modelName) =>
-        string.Equals(modelName, "System", StringComparison.OrdinalIgnoreCase) ||
-        modelName.StartsWith("System.", StringComparison.OrdinalIgnoreCase);
+        ServiceManagedCkModels.IsServiceManaged(modelName);
 
     private static List<(CkCompiledModelRoot Candidate, CkModel Installed)> FindReplacements(
         IReadOnlyCollection<CkCompiledModelRoot> updateSet, IReadOnlyList<CkModel> installed,
