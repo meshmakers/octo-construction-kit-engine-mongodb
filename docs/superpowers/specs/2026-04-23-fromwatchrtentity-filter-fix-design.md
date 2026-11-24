@@ -1,3 +1,8 @@
+---
+description: Design of the FromWatchRtEntity change-stream filter fix (historical)
+background: true
+---
+
 # FromWatchRtEntity@1 change-stream filter fix
 
 ## Problem

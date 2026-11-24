@@ -1,3 +1,8 @@
+---
+description: StreamData archive concept and implementation plan across engine, repositories and adapters
+background: true
+---
+
 # StreamData Archive — Concept & Implementation Plan
 
 **Status:** Implemented (T1–T17 of the plan + UI/Authz/Observability follow-ups, see §20)
@@ -109,7 +114,7 @@ ckType:
 - **Failed** — activation DDL failed; retry via `activate` again.
 - **Delete** — orthogonal: drops the table and soft-archives the `CkArchive` RtEntity.
 
-What the table cannot follow is refused while Activated, see §10 (AB#7872): the target type, removing a column or changing its type, and the definition of a rollup.
+What the table cannot follow is refused while Activated, see §10: the target type, removing a column or changing its type, and the definition of a rollup.
 
 ---
 
@@ -244,9 +249,9 @@ Two constraints:
 - Every key must be one of the archive's own user columns, except the reserved key `$Origin` (see *Row origin* below). The guard reads `EXCLUDED."k"`, so a name that is not in the INSERT column list would produce SQL that fails on every single write; `BuildConflictGuard` refuses to build it and names the valid columns instead.
 - **Ingest paths only.** `ImportRowsAsync` deliberately does not apply the guard: an operator restoring a snapshot must get back what they gave, not a merge against whatever is in the table.
 
-Adopting this on an **already-activated** archive needs the declared/physical column reconciliation described under *Tenant schema lifecycle* — a new precedence key is usually a newly declared column, and until AB#5247 `CREATE TABLE IF NOT EXISTS` meant such a column never reached CrateDB, which turns the guard into SQL that fails on every write.
+Adopting this on an **already-activated** archive needs the declared/physical column reconciliation described under *Tenant schema lifecycle* — a new precedence key is usually a newly declared column, and before the reconciliation existed `CREATE TABLE IF NOT EXISTS` meant such a column never reached CrateDB, which turns the guard into SQL that fails on every write.
 
-### Row origin — manual or automated (AB#5356)
+### Row origin — manual or automated
 
 Whether a value was entered by a person or delivered by a system is a fact about the **row**, for every archive and independent of the data model. A domain quality code (the metering data quality L1–L3) then only has to say how good a value is, not where it came from — before, `Basic.Energy/DataQuality` carried `Manual` as a "quality", so a correction could not say "estimated, but entered by hand", and with quality as the first precedence key it ranked last and could not replace anything.
 
@@ -258,7 +263,7 @@ Every raw and time-range table carries the platform column `row_origin TEXT`:
 | `manual` | entered or corrected by a person |
 | `NULL` | a row written before the origin was recorded; reads as automated |
 
-A manual row also records who wrote it, when and why (AB#7593):
+A manual row also records who wrote it, when and why:
 
 | Column | Type | Set by |
 |---|---|---|
@@ -268,9 +273,9 @@ A manual row also records who wrote it, when and why (AB#7593):
 
 An automated row carries `NULL` in all three, also when the writer sent values, and a write that replaces a manual row with an automated one clears them together with the values. All four columns are guarded together, so the row always describes the write that won.
 
-The writer declares the origin (`StreamDataPoint.Origin` / `TimeRangeStreamDataPoint.Origin`, enum `ArchiveRowOrigin`). The column is nullable without a DEFAULT and always named in the INSERT (AB#6647). Rollup tables do not carry it: their rows are derived. Tables provisioned before AB#5356 get the column through `ALTER TABLE … ADD COLUMN` — at activation, and on the first write or import of each process (`RecomputeProcessState.EnsuredOriginColumns` remembers the table, so `information_schema` is read once per table and process; a concurrent add by another process is the benign "already has a column" case). Archive export reads the columns like every physical column, the import carries them back (an export taken before AB#5356 imports as automated), and the native dump/restore copies the table as it is. The stream data query API selects them by their physical names (`row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason`) on raw and time-range archives; they are not part of the default projection, so existing queries return the same columns as before. They can be filtered, grouped and sorted on like any column (AB#7616); a stored `NULL` origin reads as `automated` on every read path — projection, field filters, grouping, downsampling and time-weighted aggregation all read `row_origin` as `COALESCE("row_origin", 'automated')` (`ArchiveRowOriginColumns.ColumnRef`), because `ALTER TABLE … ADD COLUMN` does not fill existing rows, not even with a DEFAULT. A consumer counts manual and automated intervals per series in one grouped aggregation, e.g. groupBy `[rtId, DataQuality, row_origin]` with `Sum` and `Count`. Rollup archives have no origin: naming `row_origin` on a rollup is refused with the list of valid columns; a rollup reports its manual values in its own columns (below).
+The writer declares the origin (`StreamDataPoint.Origin` / `TimeRangeStreamDataPoint.Origin`, enum `ArchiveRowOrigin`). The column is nullable without a DEFAULT and always named in the INSERT. Rollup tables do not carry it: their rows are derived. Tables provisioned before the origin column existed get the column through `ALTER TABLE … ADD COLUMN` — at activation, and on the first write or import of each process (`RecomputeProcessState.EnsuredOriginColumns` remembers the table, so `information_schema` is read once per table and process; a concurrent add by another process is the benign "already has a column" case). Archive export reads the columns like every physical column, the import carries them back (an export taken before imports as automated), and the native dump/restore copies the table as it is. The stream data query API selects them by their physical names (`row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason`) on raw and time-range archives; they are not part of the default projection, so existing queries return the same columns as before. They can be filtered, grouped and sorted on like any column; a stored `NULL` origin reads as `automated` on every read path — projection, field filters, grouping, downsampling and time-weighted aggregation all read `row_origin` as `COALESCE("row_origin", 'automated')` (`ArchiveRowOriginColumns.ColumnRef`), because `ALTER TABLE … ADD COLUMN` does not fill existing rows, not even with a DEFAULT. A consumer counts manual and automated intervals per series in one grouped aggregation, e.g. groupBy `[rtId, DataQuality, row_origin]` with `Sum` and `Count`. Rollup archives have no origin: naming `row_origin` on a rollup is refused with the list of valid columns; a rollup reports its manual values in its own columns (below).
 
-**Ranking by origin — the reserved key `$Origin`.** A manual correction wins and stays protected by default (AB#7656): a raw or time-range archive whose `ConflictPrecedence` does not name `$Origin` ranks by it first — with no precedence at all the guard is `$Origin` alone, so automated writes keep last-write-wins between them. Named explicitly, `$Origin` applies at the position the author gave it (keys before it decide first) with `HigherWins` (manual ranks above automated); `Ignore` is the opt-out — the key takes no part, and an archive with no other key has no guard; `LowerWins`, `Ignore` on a column key and naming `$Origin` twice are refused at activation. The `$` cannot occur in an attribute path, so the key never collides with a user column, and it needs no declared column. Rollup archives are derived, carry no origin and use their precedence as configured. Unlike a column key it does not fall through to the next key when both writes are manual:
+**Ranking by origin — the reserved key `$Origin`.** A manual correction wins and stays protected by default: a raw or time-range archive whose `ConflictPrecedence` does not name `$Origin` ranks by it first — with no precedence at all the guard is `$Origin` alone, so automated writes keep last-write-wins between them. Named explicitly, `$Origin` applies at the position the author gave it (keys before it decide first) with `HigherWins` (manual ranks above automated); `Ignore` is the opt-out — the key takes no part, and an archive with no other key has no guard; `LowerWins`, `Ignore` on a column key and naming `$Origin` twice are refused at activation. The `$` cannot occur in an attribute path, so the key never collides with a user column, and it needs no declared column. Rollup archives are derived, carry no origin and use their precedence as configured. Unlike a column key it does not fall through to the next key when both writes are manual:
 
 | Incoming | Stored | Result |
 |---|---|---|
@@ -287,9 +292,9 @@ Rendered for keys `$Origin, k2 … kn`:
 
 The origin column itself is guarded like every value, so a losing write leaves the stored origin alone. Between automated writes an archive without configured keys still behaves as before: the last write wins, and the row carries the origin of the write that won. The replaced value is not kept; rows stay single-valued. The energy community measurements archive ranks `[$Origin, DataQuality LowerWins, SourceDocumentDate HigherWins]`.
 
-### Rollups report their manual values (AB#7727)
+### Rollups report their manual values
 
-A rollup row has no origin of its own: it is derived. Whether a value is manual still belongs to every aggregated value, so every rollup reports it as platform columns, without a change to its definition or a blueprint (this revises the statement of AB#7616 that rollups carry no origin information):
+A rollup row has no origin of its own: it is derived. Whether a value is manual still belongs to every aggregated value, so every rollup reports it as platform columns, without a change to its definition or a blueprint (this revises the statement of that rollups carry no origin information):
 
 | Column | Type | Value in a bucket |
 |---|---|---|
@@ -300,11 +305,11 @@ They are selectable by these names, also in filters and aggregations, not part o
 
 **Aggregation.** Over a raw or time-range source a bucket counts its rows with `row_origin = 'manual'` and takes the maximum of `manual_written_at`; a row written before origin tracking holds `NULL` and counts as delivered. A rollup source chains: `SUM("manual_count")` and `MAX("last_manual_at")`. A window is one row (upsert key), so a correction replaces the delivered row and counts once, also after a second correction or a protected redelivery. `SUM` and `MAX` ignore `NULL`, so a parent bucket over filled and empty source rows is right, and stays right when one source window is recomputed. A multi-source rollup reads each bucket the way its source has it.
 
-**Rollout.** The columns are nullable without a DEFAULT and always named by the statement (AB#6647). `ArchivePlatformColumnGuard` adds them with `ALTER TABLE … ADD COLUMN`, once per table and process, from the orchestrator tick (so a rollup with no due bucket offers them too), at activation and before an aggregation, recompute or import names them; a source table that lacks the origin columns gets those in the same step. Several replicas may race: the loser's "already has a column" is benign. A statement of the previous version keeps running, it does not name the columns, and its rows read as 0. A restored tenant is skipped until it is reconciled.
+**Rollout.** The columns are nullable without a DEFAULT and always named by the statement. `ArchivePlatformColumnGuard` adds them with `ALTER TABLE … ADD COLUMN`, once per table and process, from the orchestrator tick (so a rollup with no due bucket offers them too), at activation and before an aggregation, recompute or import names them; a source table that lacks the origin columns gets those in the same step. Several replicas may race: the loser's "already has a column" is benign. A statement of the previous version keeps running, it does not name the columns, and its rows read as 0. A restored tenant is skipped until it is reconciled.
 
 **Backfill.** A tenant without manual rows needs none: empty reads as 0. A tenant with manual rows gets the values of older buckets from a normal recompute of the affected range. `scripts/rollup-manual-rows-check.sh <cratedb-http-url> <tenant-schema>` (read only) tells which case a tenant is and prints the affected tables and ranges.
 
-**After a correction.** Manual writes reach the rollups through the manual dirty windows (AB#7594), also beyond `MaxRetroactiveReachMs`: the cap applies to automatic windows only, at detection and at propagation. An automated delivery beyond the cap on an archive that opted out with `$Origin Ignore` can replace a manual row without a recompute, like any other value beyond the cap; `manual_count` then stays behind until a manual recompute. `FrozenUntil` stops the forward aggregation only: the bucket of a frozen range keeps what it has (read as 0 if it was never recomputed), but a correction in that range is recomputed like any other, the columns included.
+**After a correction.** Manual writes reach the rollups through the manual dirty windows, also beyond `MaxRetroactiveReachMs`: the cap applies to automatic windows only, at detection and at propagation. An automated delivery beyond the cap on an archive that opted out with `$Origin Ignore` can replace a manual row without a recompute, like any other value beyond the cap; `manual_count` then stays behind until a manual recompute. `FrozenUntil` stops the forward aggregation only: the bucket of a frozen range keeps what it has (read as 0 if it was never recomputed), but a correction in that range is recomputed like any other, the columns included.
 
 **Cost.** The aggregation adds one `COUNT` and one `MAX` over two more source columns. Measured with `RollupManualColumnsCostMeasurement` (`OCTO_ROLLUP_COST_DAYS=20`) on a single-node test container: 1.92 million source rows of 1000 meters, 0.1 % of them manual, 20 daily buckets: 181 ms without, 290 ms with the two expressions (median of five). That is the aggregation SELECT alone, about 57 ns per source row; the copy, the flip and the sweep of a recompute are unchanged by them apart from two more columns. On the largest local rollup (hourly over 119 million raw rows, 2026-10-30, the SELECT pair below, 168 hourly buckets with 2.27 million source rows, five alternating rounds): 5319 ms without, 5634 ms with the expressions, +5.9 %, about 139 ns per source row; the daily level over 568,338 hourly rows: 58 ms against 60 ms. A local single-node figure, on a tenant whose `row_origin` is entirely `NULL`. To measure on another rollup without writing anything, run the aggregation SELECT of a bucket with and without the two expressions against its source, alternating, and compare the medians:
 
@@ -318,7 +323,7 @@ The ladder levels above the first read `SUM`/`MAX` over two numeric columns of a
 
 Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `ArchivePlatformColumnGuardTests`, `RollupAggregationPerSourceResolutionTests`, `RollupValidatorTests`, `RecomputeOrchestratorTests`.
 
-### Write result — stored and skipped rows (AB#7598)
+### Write result — stored and skipped rows
 
 `IStreamDataRepository.InsertAsync` / `InsertTimeRangeAsync` return a `StreamDataWriteResult`: `Stored` (rows the database holds after the write: new, won, or an identical re-delivery) and `Skipped` (one `StreamDataSkippedRow` per row not stored: entity, window, declared origin, reason) plus `SkippedByReason`. Reasons:
 
@@ -326,24 +331,24 @@ Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `A
 |---|---|
 | `CkTypeMismatch` | the row's CK type is not the archive's target (was a silent drop before) |
 | `LowerPrecedence` | a column key of the conflict precedence decided: the first key, in the archive's order, in which the stored row differs from the write. Also against a stored manual row when that key comes before `$Origin`, and always when the archive ignores the origin |
-| `ManualValueProtected` | `$Origin` decided: the stored row is manual, the write automated, and no column key before `$Origin` differs (always with the default origin-first guard; with `$Origin` after a key only on a tie in it; a ranking column the write does not send keeps its stored value and ties, AB#8622). Never reported when the archive ignores the origin (AB#8637) |
+| `ManualValueProtected` | `$Origin` decided: the stored row is manual, the write automated, and no column key before `$Origin` differs (always with the default origin-first guard; with `$Origin` after a key only on a tie in it; a ranking column the write does not send keeps its stored value and ties). Never reported when the archive ignores the origin |
 
 **How the count is exact.** A guarded upsert always "updates" the conflicting row (the `CASE` keeps the stored values), so the affected-row count cannot tell a win from a loss. A guarded statement therefore ends with `RETURNING` the row key, the ranking columns and `row_origin`, and `ConflictOutcome.Decide` compares what CrateDB holds afterwards with what was sent: equal in every ranking column (and the origin) ⇔ stored. That is exact because the last key admits equality — a write equal in every key always wins — and a lost write leaves a stored row that differs in the deciding column or in the origin. Timestamps compare at millisecond precision, numbers by value, text ordinally; two rows for one key in one statement are matched one to one. It holds per multi-row statement and across the sub-batches of a large write. An archive **without** precedence sends no `RETURNING` and reports every row of its target type as stored, as before.
 
-**A missing row is a failed write, never a skip (AB#8679).** Under memory pressure CrateDB ends a shard request of a multi-row `INSERT` when its memory circuit breaker trips (server log: `[query] New used memory … would be larger than configured breaker …, breaking`) and answers the statement **without an error**: the rows of that request are neither stored nor reported, and `sys.jobs_log` shows nothing. Measured on CrateDB 6.4.6 with 8 parallel writers of 2,500 rows: up to the whole write of a writer gone. The client therefore checks every statement:
+**A missing row is a failed write, never a skip.** Under memory pressure CrateDB ends a shard request of a multi-row `INSERT` when its memory circuit breaker trips (server log: `[query] New used memory … would be larger than configured breaker …, breaking`) and answers the statement **without an error**: the rows of that request are neither stored nor reported, and `sys.jobs_log` shows nothing. Measured on CrateDB 6.4.6 with 8 parallel writers of 2,500 rows: up to the whole write of a writer gone. The client therefore checks every statement:
 
 | Statement | Sign of a dropped request |
 |---|---|
 | guarded (with `RETURNING`) | a sent row without a returned row — an upsert returns a row for every row it processed, a lost update included, so this is never a precedence decision |
 | unguarded | fewer affected rows than rows sent (an upsert counts one per row it processed, a key repeated in the statement once per row; row keys compare timestamps at millisecond precision) |
 
-The rows CrateDB missed are written once more (guarded: only those rows; unguarded: the whole statement, the count does not say which rows are missing). Both are idempotent upserts: the guard decides again on the merged row, last-write-wins writes the same values again. When rows are still missing, the write throws `StreamDataWriteIncompleteException` (archive table, rows sent, rows missing, the likely cause); the rows of earlier statements of the same call may be stored. Callers treat it as a failure: the asset repository answers 503 with the message, a pipeline node fails, the archive import job and the row restore fail. Sending the whole write again is safe. Before AB#8679 a guarded write reported the dropped rows as `LowerPrecedence` and an unguarded write reported nothing. Test: `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (CrateDB with a 512 MB heap and a tightened query breaker; red without the check).
+The rows CrateDB missed are written once more (guarded: only those rows; unguarded: the whole statement, the count does not say which rows are missing). Both are idempotent upserts: the guard decides again on the merged row, last-write-wins writes the same values again. When rows are still missing, the write throws `StreamDataWriteIncompleteException` (archive table, rows sent, rows missing, the likely cause); the rows of earlier statements of the same call may be stored. Callers treat it as a failure: the asset repository answers 503 with the message, a pipeline node fails, the archive import job and the row restore fail. Sending the whole write again is safe. Before the memory-pressure handling a guarded write reported the dropped rows as `LowerPrecedence` and an unguarded write reported nothing. Test: `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (CrateDB with a 512 MB heap and a tightened query breaker; red without the check).
 
-**The rollup statements (AB#8680).** The forward aggregation, the staging aggregation of a recompute and the staging-to-live copy are `INSERT … SELECT` statements and lose rows the same way. Each compares its affected rows with the rows it must write: an aggregation with a count of the `rtid` groups of its source rows (same predicate, same source generations, counted before the statement, and once more after a shortfall: a source row deleted meanwhile is no loss), a copy slice with the count that sizes the slice. A shortfall is written once more (the copy only its missing rows, `ON CONFLICT DO NOTHING`, then counted in the live table); still short, the run fails with `StreamDataWriteIncompleteException` (table, bucket or slice, counts). The copy fails before the generation pointer flips: readers stay on the previous, complete generation. Measured on CrateDB 6.4.6 (512 MB heap, query breaker 15 %, six recomputes of 60,000 rows in parallel): without the check a recompute committed a generation with 58,573 of 60,000 rows. The parent breaker (real heap usage above 95 % of the heap) drops rows the same way, also at the default query limit: a nearly full heap refused whole blocks of 10,000 rows, the batch size of the insert-from-select (10,000 of 20,000 rows, checked after a refresh); the check reports it. Test: `StreamDataWriteLoss/RollupUnderMemoryPressureIntegrationTests`.
+**The rollup statements.** The forward aggregation, the staging aggregation of a recompute and the staging-to-live copy are `INSERT … SELECT` statements and lose rows the same way. Each compares its affected rows with the rows it must write: an aggregation with a count of the `rtid` groups of its source rows (same predicate, same source generations, counted before the statement, and once more after a shortfall: a source row deleted meanwhile is no loss), a copy slice with the count that sizes the slice. A shortfall is written once more (the copy only its missing rows, `ON CONFLICT DO NOTHING`, then counted in the live table); still short, the run fails with `StreamDataWriteIncompleteException` (table, bucket or slice, counts). The copy fails before the generation pointer flips: readers stay on the previous, complete generation. Measured on CrateDB 6.4.6 (512 MB heap, query breaker 15 %, six recomputes of 60,000 rows in parallel): without the check a recompute committed a generation with 58,573 of 60,000 rows. The parent breaker (real heap usage above 95 % of the heap) drops rows the same way, also at the default query limit: a nearly full heap refused whole blocks of 10,000 rows, the batch size of the insert-from-select (10,000 of 20,000 rows, checked after a refresh); the check reports it. Test: `StreamDataWriteLoss/RollupUnderMemoryPressureIntegrationTests`.
 
 Skipped automated rows are a normal outcome and only reported (and not marked dirty for the rollups: they changed nothing). A **manual** row that cannot be stored — possible only when a column key ranks before `$Origin` or the archive ignores the origin — throws `ManualStreamDataNotAppliedException` after the rest of the batch was written; its `Result` says what was stored. The import path (`ImportRowsAsync`) is unguarded and ignores the result; a dropped request fails it as above.
 
-### Value check before the write (AB#7643, raw path AB#8606)
+### Value check before the write (raw path)
 
 `InsertAsync` (raw) and `InsertTimeRangeAsync` check every value against the CK type of its ingested column before anything is written (`ArchiveWriteValueValidator.Normalize`, one overload per point type). A value that does not fit refuses the **whole batch** with an `ArgumentException` (the asset repository answers 400) that names each point, the column and the expected type, at most ten mismatches listed, the rest counted:
 
@@ -353,7 +358,7 @@ Archive '<rtId>': 1 value(s) do not fit their column, nothing was written: point
 
 A raw point is named by its index in the caller's order, its rtId and its timestamp; a time-range point by its index. Enum columns take the key or the member name (case-insensitive) and store the key. Points of another CK type and keys that are no ingested column are not checked (the write skips them anyway). Both paths check the keys after the record expansion (see *Record values* below), i.e. exactly as they write them. The check applies to manual and automated points alike.
 
-### Partial delivery — absent keeps, null clears (AB#8622)
+### Partial delivery — absent keeps, null clears
 
 `InsertAsync` (raw) and `InsertTimeRangeAsync` update **only the columns a point names**. "Named" means the point's
 attribute dictionary has the key, whatever its value:
@@ -366,7 +371,7 @@ attribute dictionary has the key, whatever its value:
 
 Before, every ingested column of the archive was bound and an unnamed one went in as NULL, so
 `ON CONFLICT … DO UPDATE SET "col" = EXCLUDED."col"` cleared every column a partial re-delivery did not send (silent
-data loss when several sources fill different columns of one archive, AB#5157, or a pipeline delivers part of the
+data loss when several sources fill different columns of one archive, or a pipeline delivers part of the
 columns).
 
 - **How.** `ArchiveColumnSets.Group` splits a batch by the set of named columns; each group is one statement shape
@@ -395,7 +400,7 @@ columns).
   origin, is reported stored and the row keeps D. An automated point with a better quality and no document date wins
   and the row keeps D. An automated point without a quality is ranked by the document date (the quality counts as the
   stored one and stays). The origin columns are platform columns and always written.
-- **Constant DEFAULTs (AB#6647).** User columns are nullable without a DEFAULT, so leaving one out of the `INSERT` list
+- **Constant DEFAULTs.** User columns are nullable without a DEFAULT, so leaving one out of the `INSERT` list
   stores NULL, never a default. `was_updated` is still named with the literal `FALSE` in every row of every statement.
 - **Computed columns are evaluated on the merged row** (decided by Reimar 2026-11-09). Nobody sends a computed column;
   its value follows from the inputs its formula reads (ingested columns and other computed columns):
@@ -405,7 +410,7 @@ columns).
   | names none of the formula's inputs | left out of the row: the stored value stays (a new row: NULL) |
   | names all inputs | evaluated from the point, as before |
   | names some inputs | evaluated on the **merged row**: an input the point does not name is the **stored** value of the row; on a new row it is NULL |
-  | names an input with `null` | the formula sees null (NaN, AB#8060), never the stored value |
+  | names an input with `null` | the formula sees null (NaN), never the stored value |
 
   Example: stored Consumption 10, Production 4, Net = Consumption − Production = 6; a delivery of Consumption 12 stores
   Net 8. A formula without column references is always evaluated. A computed input the point leaves out (none of its
@@ -424,12 +429,12 @@ columns).
 - **Unchanged:** manual protection (`ManualValueProtected`), the write result (`StreamDataWriteResult`), the rollup
   dirty windows, and the import path (`ImportRowsAsync` names every column of every row).
 
-Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`, the AB#8622 cases of `CrateDbStreamDataComputedColumnIngestTests`
+Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`, the cases of `CrateDbStreamDataComputedColumnIngestTests`
 (unit), `StreamDataOrigin/PartialDeliveryIntegrationTests` and `StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests`
 (real CrateDB, raw and time-range: merged row, no refresh in between, explicit null, no input, new row, mixed batch, manual
 protection, manual partial correction, a rollup summing the computed column).
 
-### Record values — written as their member columns (AB#8666)
+### Record values — written as their member columns
 
 A column on a record sub-path (`NamePlate.SerialNumber`, stored as `nameplateserialnumber`) is filled from the record
 member. A pipeline sends the record as one attribute (`NamePlate` → record with `SerialNumber`), the asset repository's
@@ -444,7 +449,7 @@ and the write, and then apply the partial-delivery rule above per member:
 | does not contain | not named: the stored value stays (NULL on a new row) |
 
 Nested records expand recursively. A whole record sent as `null` names no member column, so the members keep their
-values. Points without a record value are passed on unchanged (the REST shape is not expanded twice). Until AB#8666 the
+values. Points without a record value are passed on unchanged (the REST shape is not expanded twice). Before the raw path expanded records the
 raw path skipped this expansion: a pipeline write dropped every record member, values and nulls alike, and the stored
 value stayed.
 
@@ -453,29 +458,29 @@ time-range; computed column over a member, ranking column on a member, manual pr
 `RawArchiveRecordMemberPipelineIntegrationTests` (`CreateUpdateInfo@1` → `SaveStreamDataInArchive@1` against the real
 repository).
 
-### Archive data export and import of computed columns (AB#8737)
+### Archive data export and import of computed columns
 
 A computed column has no `Path`: it is named by `Name` and derived by its `Formula`. The archive data export
 (`ExportRowsAsync`) reads every physical column, so an exported row carries the computed value as well (under its active
 physical name, and under an orphaned `{name}__v{N}` column after a formula change). The import (`ImportRowsAsync`)
 reads only the stored columns of the target archive from a row and **evaluates the computed columns again** with the
 target archive's formulas, on the whole imported row (during a formula change the pending column too), as a backfill
-does. Decision (AB#8737): a value a row carries for a computed column is **ignored**, not refused: the value is
+does. Decision: a value a row carries for a computed column is **ignored**, not refused: the value is
 derived data, the formula of the target archive decides, and an export of the same archive imports without changes.
-A formula that cannot be evaluated fails the import like an ingest. Before AB#8737 the import mapped every column by
+A formula that cannot be evaluated fails the import like an ingest. Before computed columns were ignored on import, the import mapped every column by
 its `Path` and failed on the first computed column with "Path must not be empty". The export metadata of the bot service
 (`metadata.archive.columns`) lists only the stored columns; the schema match ignores computed columns.
 
 Tests: `StreamDataExportImport/ComputedColumnExportImportIntegrationTests` (real CrateDB, raw and time-range: round trip,
 a forged computed value in a row), `CrateDbStreamDataExportImportTests` (unit).
 
-### Archive storage stats — record count (AB#8735)
+### Archive storage stats — record count
 
 `GetArchiveStatsAsync` (GraphQL `streamData.archivesStorageStats`, the Studio archive list) reads the record count
 (`num_docs`), size and health from `sys.shards` / `sys.health`. `num_docs` only counts the rows of the last refresh, and
 CrateDB skips the periodic refresh of a shard nobody searched for 30 s ("search idle"): an archive imported into while
 Disabled, or written to while nobody read it, showed 0 (or an old count) until a query touched it — and even a query only
-wakes the shard, the rows appear at its next periodic refresh. Since AB#8735 the stats call refreshes the listed tables
+wakes the shard, the rows appear at its next periodic refresh. The stats call therefore refreshes the listed tables
 that exist (one `REFRESH TABLE a, b, …`) and reads `sys.shards` again, so the count includes every row written before the
 list was loaded. A refresh of a shard without unrefreshed writes changes nothing. When CrateDB refuses the refresh (a table dropped
 between the reads, a missing privilege, a timeout) the call reports the counts of the last refresh and logs a warning;
@@ -578,7 +583,7 @@ Task DeleteArchiveAsync(CkArchive archive);
 
 The repository resolves `archiveRtId` → `CkArchive` entity → table; verifies `Status == Activated`; otherwise throws `ArchiveNotActivatedException`.
 
-#### Column-name validation (AB#4765)
+#### Column-name validation
 
 Every one of the four query methods validates its column names against the archive's
 `StreamDataFieldResolver` **before any SQL is built**, and rejects the query naming each offending
@@ -611,7 +616,7 @@ dangerous.
 Names are matched case-insensitively but **not** separator-insensitively, so the standard columns
 must be written in their physical spelling: `window_start`, not `WindowStart`. Computed columns are
 addressed by their logical `Name` — their physical column is versioned after a formula change and is
-registered on the resolver rather than derived (AB#4764).
+registered on the resolver rather than derived.
 
 ### Bulk insert semantics
 
@@ -626,7 +631,7 @@ Rationale:
 - Matches D7 (required violations are exceptions, not silent skips).
 - Pipeline callers see batch success or full failure — no silent partial commits.
 - CrateDB's multi-row insert is not transactionally atomic; pre-validation guarantees no partial commit can come from validation problems. A DB-level failure after pre-validation (e.g. transient connection error) is surfaced as exception; partial server-state is theoretically possible but is treated as an operational issue (see §11 reconciliation, T13 resilience).
-- The statements of one write run up to `StreamData:MaxConcurrentInsertStatements` (default 4, bound with the instance settings of the `StreamData` section; environment variable `OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS` in the services, `StreamData__MaxConcurrentInsertStatements` in a host without the `OCTO_` prefix) at a time, split by row key (AB#8875): on a failed write the set of rows already written can differ from the sequential order. All of them are idempotent upserts (guarded where the archive has conflict precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile.
+- The statements of one write run up to `StreamData:MaxConcurrentInsertStatements` (default 4, bound with the instance settings of the `StreamData` section; environment variable `OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS` in the services, `StreamData__MaxConcurrentInsertStatements` in a host without the `OCTO_` prefix) at a time, split by row key: on a failed write the set of rows already written can differ from the sequential order. All of them are idempotent upserts (guarded where the archive has conflict precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile.
 
 Future extension (not in this iteration): `BulkInsertOptions { ContinueOnError: bool }` to opt into best-effort mode that returns `{ successCount, errors[] }` instead of throwing.
 
@@ -869,7 +874,7 @@ The legacy class `SdEntity` is renamed to `StreamDataEntity` to align with the `
 
 ## 10. Validation Hooks (CkArchive immutability)
 
-A definition change the table cannot follow is refused before it reaches storage (AB#7872): the definition of an archive is a plain entity, and without this a rollup stops with only a log line telling.
+A definition change the table cannot follow is refused before it reaches storage: the definition of an archive is a plain entity, and without this a rollup stops with only a log line telling.
 
 - **Where**: `ArchiveDefinitionGuard` (engine). Two ways in are checked: the public `ApplyChanges` of the repository (GraphQL, pipelines) and the Upsert import (`ImportRt`, blueprint apply and update; a blueprint update then fails, also with `ContinueOnError`). The stream data stores (computed column lifecycle, watermark, status, run failures) write through `UpdateOneRtEntityById` and do not pass here, CK model migrations neither.
 - **What is refused** while `status = Activated`:
@@ -884,17 +889,17 @@ A definition change the table cannot follow is refused before it reaches storage
 
 Both exceptions name the archive and the field and say that the change needs a new archive; GraphQL answers `STREAMDATA_SCHEMA_IMMUTABLE`.
 
-### Adding a column to an active archive (AB#7997)
+### Adding a column to an active archive
 
 A column is added to an `Activated` raw or time-range archive without recreating it, and the definition never names a column its table lacks:
 
 - **Directly**: `IArchiveLifecycleService.AddArchiveColumnAsync(archive, path, indexed)` (REST `POST streamdata/archives/{rtId}/columns`, GraphQL `addArchiveColumn`, octo-cli `AddArchiveColumn`, MCP `add_archive_column`). Storage first: `IStreamDataRepository.AddIngestedColumnStorageAsync` resolves the one path against the CK model (unknown or Hidden = `ArchivePathInvalidException`, no DDL) and runs `ALTER TABLE … ADD COLUMN`, always nullable; "already exists" counts as done. Only then the column is appended to `Columns`. Existing rows keep their data and read NULL, the next ingested rows fill it, and a computed column may reference it. Idempotent (a path the archive captures is a no-op); refused on a rollup, on a non-activated archive and for a name a computed column already uses.
-- **Through a seed** (`ImportRt`, blueprint install, `--force` re-apply and update): `ArchiveDefinitionGuard.TakeColumnAdditions` takes the columns the seed adds to a guarded archive out of the import, so the import writes the definition without them; after the commit `ImportRtModelCommand` adds them through the tenant's lifecycle (`IArchiveLifecycleServiceProvider`, registered by `AddMongoDbRuntimeRepository`): ingested columns first through the direct path above, then computed columns through `EnqueueAddComputedColumnAsync` (Pending, storage, background backfill job of AB#8002, Active). The additions and their outcome are in `IImportRtModelCommand.ArchiveColumnAdditions` and `BlueprintUpdateResult.ArchiveColumnsAdded` (REST/GraphQL `archiveColumnsAdded`); an install lists them as info messages. A failed addition throws `ArchiveColumnAdditionFailedException` after all were tried; the entities stay committed, the definition does not name the failed column, and running the import again retries it.
-- **Not added**: a column added to a `Disabled` archive that was activated before is refused ("enable it first"); without a lifecycle (stream data off) the import is refused before anything is written. Removing or retyping a column stays refused as above. A changed formula of an existing computed column is handled below (AB#8255). A seed of an archive that was never activated keeps writing its columns with the definition, as before.
+- **Through a seed** (`ImportRt`, blueprint install, `--force` re-apply and update): `ArchiveDefinitionGuard.TakeColumnAdditions` takes the columns the seed adds to a guarded archive out of the import, so the import writes the definition without them; after the commit `ImportRtModelCommand` adds them through the tenant's lifecycle (`IArchiveLifecycleServiceProvider`, registered by `AddMongoDbRuntimeRepository`): ingested columns first through the direct path above, then computed columns through `EnqueueAddComputedColumnAsync` (Pending, storage, background backfill job of, Active). The additions and their outcome are in `IImportRtModelCommand.ArchiveColumnAdditions` and `BlueprintUpdateResult.ArchiveColumnsAdded` (REST/GraphQL `archiveColumnsAdded`); an install lists them as info messages. A failed addition throws `ArchiveColumnAdditionFailedException` after all were tried; the entities stay committed, the definition does not name the failed column, and running the import again retries it.
+- **Not added**: a column added to a `Disabled` archive that was activated before is refused ("enable it first"); without a lifecycle (stream data off) the import is refused before anything is written. Removing or retyping a column stays refused as above. A changed formula of an existing computed column is handled below. A seed of an archive that was never activated keeps writing its columns with the definition, as before.
 
 Tests: `ArchiveLifecycleServiceAddColumnTests` (engine), `ComputedColumns/ArchiveAddColumnIntegrationTests` (real CrateDB: history kept, NULL for existing rows, new row filled, computed column over it, unknown path, idempotent), `ArchiveDefinitionGuardIntegrationTests` (seed adds an ingested and a computed column, failed storage and rerun, disabled archive, blueprint update result).
 
-### Runtime state and formula changes of existing columns on re-import (AB#8255)
+### Runtime state and formula changes of existing columns on re-import
 
 The Upsert import replaces the whole `Columns` list, and a seed carries none of the engine-managed members of a column
 (`ComputedVersion`, `ComputedState`, `PendingFormula`). `ArchiveDefinitionGuard.KeepColumnRuntimeState` (after
@@ -915,7 +920,7 @@ before a formula change is refused ("enable it first"); a seed that drops the fo
 Tests: `ArchiveDefinitionGuardIntegrationTests` (`ImportRt_AnUnchangedFormula_*`, `ImportRt_ARuntimeMemberInTheSeed_*`,
 `ImportRt_AChangedFormula_*`, `ABlueprintUpdate_KeepsTheVersionOfAComputedColumn_*`), `BlueprintEntityComparerTests` (engine).
 
-### Column order on re-import (AB#8332)
+### Column order on re-import
 
 Columns are identified by key, never by position. The lifecycle appends a column a seed adds (`TakeColumnAdditions`), so after an install
 the stored order can differ from the seed. `ArchiveDefinitionGuard.KeepColumnOrder` writes the columns the archive already has in the
@@ -994,7 +999,7 @@ All in `Runtime.Contracts/StreamData/`. Common base: `StreamDataException` (exte
 | `ArchiveColumnTypeUnsupportedException` | An attribute type cannot be mapped to a CrateDB column type. |
 | `RequiredAttributeMissingException` | Insert lacks a value for a `required: true` scalar path. |
 | `ArchiveActivationFailedException` | DDL execution failed during `Created → Activated` (transient or schema error). Wraps the underlying SQL error. |
-| `StreamDataException` (base, from `StreamDataQueryColumnValidator`) | A query names a column the archive's field resolver cannot resolve — in projection, aggregation, group-by, sort or filter (AB#4765). Thrown before any SQL runs. Deliberately the **contracts** base type rather than the connection-level `StreamDataException` local to `Runtime.Engine.CrateDb`, so one `catch` covers it together with `ArchiveNotFoundException` / `ArchiveNotActivatedException`, which the same query methods throw. No consumer distinguishes the two types today, so this is about catchability, not the response code. Note the remaining inconsistency: the `InvalidQueryParameters` guards in the same methods (missing `From`/`To`/`Limit`, `StateDuration` without a comparison value) still throw the **local** type, so "invalid query input" cannot be caught uniformly. |
+| `StreamDataException` (base, from `StreamDataQueryColumnValidator`) | A query names a column the archive's field resolver cannot resolve — in projection, aggregation, group-by, sort or filter. Thrown before any SQL runs. Deliberately the **contracts** base type rather than the connection-level `StreamDataException` local to `Runtime.Engine.CrateDb`, so one `catch` covers it together with `ArchiveNotFoundException` / `ArchiveNotActivatedException`, which the same query methods throw. No consumer distinguishes the two types today, so this is about catchability, not the response code. Note the remaining inconsistency: the `InvalidQueryParameters` guards in the same methods (missing `From`/`To`/`Limit`, `StateDuration` without a comparison value) still throw the **local** type, so "invalid query input" cannot be caught uniformly. |
 
 Each exception carries the offending `archiveRtId` (where applicable) and a stable error code string for client-side handling.
 
@@ -1207,14 +1212,14 @@ Until implemented, breakage manifests as runtime exceptions on the data plane.
 
 ---
 
-## 18a. Native copy to and from a staging location (AB#5967)
+## 18a. Native copy to and from a staging location
 
 `IStreamDataRepository.PlanArchiveCopyAsync`, `CopyToStagingAsync`, `CopyFromStagingAsync`, `DescribeArchiveTableAsync`
 and `GetStorageVersionAsync` (engine contract, `Runtime.Contracts/StreamData`) are implemented by `Copy/StagingCopyRunner`
 with CrateDB's own `COPY TO DIRECTORY` / `COPY FROM`. The concept is
 `octo-construction-kit-engine/docs/concept-tenant-backup-native-archive-dump.md`. `SupportsStagingCopy` is true when the
 database client can run a statement once under a timeout of its own (`ICrateCopyClient`, implemented by `CrateDatabaseClient`).
-`DumpArchiveToStagingAsync` and `LoadArchiveFromStagingAsync` (slice 2, AB#6968) wrap plan, copy and load of one archive and
+`DumpArchiveToStagingAsync` and `LoadArchiveFromStagingAsync` (slice 2) wrap plan, copy and load of one archive and
 add the generation map of a rollup, the repeat rule and the row-count verification (below).
 
 **Rollups: the generation map and the repeat rule.** A rollup is two tables, `archive_<rtId>` and `archive_<rtId>__genmap`, and a
@@ -1236,7 +1241,7 @@ validator finds them after the restore as orphans and the repair removes them.
 counted rows and, for a rollup, the map holds the counted pointer entries; false when a slice failed, the counts differ or the
 load stopped early. The restore job treats an unverified archive as failed.
 
-**Slice retry (AB#7274).** `StagingCopyRunner.CopySliceFromAsync` loads a slice up to `MaxLoadAttempts` (3) times. The first attempt sends the
+**Slice retry.** `StagingCopyRunner.CopySliceFromAsync` loads a slice up to `MaxLoadAttempts` (3) times. The first attempt sends the
 statement as before; a repeat follows a *transient* failure only (`CopyFailureClassifier`: a failing statement whose text names the memory
 circuit breaker, a rejected execution or a node or shard that is not available, a `StreamDataStatementTimeoutException`, a `RETURN SUMMARY`
 with `error_count = 0` and fewer rows than the manifest - CrateDB does not count a shard request the breaker refused on another node as an
@@ -1250,9 +1255,9 @@ Not repeated: any other statement error, rejected rows with a non-transient text
 ends the archive as before; the message then ends with "(after n attempts)". Tests: `StagingCopyRunnerRetryTests`,
 `CopyFailureClassifierTests` (unit, simulated CrateDB) and `SliceRepeatIntegrationTests` (real CrateDB: the statement ran and the error is reported
 afterwards, or part of the slice was in the table before; raw slice, rollup slice and generation map). Heap: a restore of the 150 million
-row sbeg tenant on one node with a 1 GiB heap is the reference run of the change (see the operator page, "Disk and heap headroom").
+row customer-sized tenant on one node with a 1 GiB heap is the reference run of the change (see the operator page, "Disk and heap headroom").
 
-**Disk headroom (AB#7274).** `StagingDiskHeadroomCheck` compares the expected size with the room each node has **below the high disk
+**Disk headroom.** `StagingDiskHeadroomCheck` compares the expected size with the room each node has **below the high disk
 watermark** (`cluster.routing.allocation.disk.watermark.high`, read from `sys.cluster` together with `threshold_enabled`; percentage and
 ratio = share of the disk that may be used, absolute value = free space that must remain), not with `fs['total']['available']`: CrateDB
 stops allocating shards to a node above the high watermark and the flood stage (95 %) makes the table read-only. Expected size per node =
@@ -1265,23 +1270,23 @@ which the restore job asks before the MongoDB phase; both go through `StagingDis
 **Sweep grace period (configuration reference).** The sweep of the generations a recompute superseded is deferred so that a dump
 which copied the map before a flip still finds the rows its copy names. Setting `StreamData:Recompute:SweepGracePeriod`
 (env `OCTO_STREAMDATA__RECOMPUTE__SWEEPGRACEPERIOD`, `CrateRecomputeOptions`): time span, default `02:00:00`, `00:00:00` sweeps at
-once (the behaviour before AB#6968), a negative value fails the start (`ValidateOnStart`, message names the key). The pending
+once (the behaviour before), a negative value fails the start (`ValidateOnStart`, message names the key). The pending
 sweeps are rows in `archive_<rtId>__sweep` next to the generation map, dropped with the archive. Cost of the delay: the superseded
 rows occupy the table until the sweep, and reads scan a larger table (measured on a 28.8 million row rollup, see the measurements
-in the AB#6968 hand-over). An executor or repository built without options (outside the host's DI) keeps the immediate sweep.
+in the hand-over). An executor or repository built without options (outside the host's DI) keeps the immediate sweep.
 Rule of the concept: `octo-construction-kit-engine/docs/concept-rollup-recompute.md`, "Sweep grace period".
 
 **Where a recompute can hit a dump.** The measured placement matrix (flip between map copy and data copy, with and without sweep, after the
 data, after the dump; grace period and repeat rule on or off) is in the engine concept `concept-tenant-backup-native-archive-dump.md`,
 section "Placement matrix"; with grace period and repeat rule on every placement restores without defects.
 
-**Rollup consistency validator and the restore reconcile marker (AB#6968).** `ValidateRollupsAsync` (`RollupConsistencyValidator`)
+**Rollup consistency validator and the restore reconcile marker.** `ValidateRollupsAsync` (`RollupConsistencyValidator`)
 checks every rollup of the tenant, or the requested ones, with counts and MIN/MAX statements only (plus the small pointer table); no row is
 read and nothing is changed. A rollup the validator cannot look at is **never reported as consistent**: its entry carries
 `NotChecked` (`RollupNotChecked`: `Cause` and an English `Reason`) and `IsOk` is false for the entry and for the report, so "nothing found"
 never means "not looked at" (a restore of five rollups whose load failed had been reported as "7 rollups consistent"). Causes:
 `NoLiveTable` (no table, status Activated or Failed), `Disabled` (status Disabled, no table: a disabled rollup is neither aggregated nor
-read; informational like `NeverActivated`, AB#7274 - a restore whose load of the rollup failed keeps the marker through its own
+read; informational like `NeverActivated`; a restore whose load of the rollup failed keeps the marker through its own
 `ArchiveFailed` entry), `NeverActivated` (status Created, no table; listed
 for information only - `RollupNotChecked.IsBlocking` is false, the entry and the report stay ok and the marker is not kept, because a
 rollup without data cannot be inconsistent and blocking the tenant's rollups for it would stop aggregation, recompute and reclaim for
@@ -1392,7 +1397,7 @@ column that has a DEFAULT is not preserved: the default applies.
   `JobLogNotFiltered`) unless the filter excludes `COPY` (`stmt NOT ILIKE 'copy %'`), because CrateDB records the full text of a
   finished statement in `sys.jobs_log`. Setting it belongs to the infrastructure (`SET GLOBAL PERSISTENT`).
 
-**Readiness preflight, two doors (AB#6969).** `StagingCopyReadinessProbe` (`Copy/`) is the one implementation of "can the storage
+**Readiness preflight, two doors.** `StagingCopyReadinessProbe` (`Copy/`) is the one implementation of "can the storage
 run the native copy": it reads `stats.jobs_log_filter` (`JobLogFilterGuard`) and the node versions and returns a
 `StagingCopyReadiness`. It only reads, never throws for a missing prerequisite (the answer says so, with the statement to run, and no
 credential), and its failure to ask is an answer too (`Supported`, not ready, the scrubbed reason). Two members delegate to it:

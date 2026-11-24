@@ -150,7 +150,7 @@
   drop of an existing tenant publish it themselves after their commit; a failed publish keeps them successful and adds
   the warning ("... run ClearCache for the tenant") to `CommandResult.Output`. A clear in a transaction now publishes
   delete, create, update after the commit. The internal `TenantCreatedNotificationScope` is now `TenantNotificationScope`
-  and collects both notifications. Details: `CLAUDE.md`, "Tenant-deleted notification after the commit".
+  and collects both notifications. Details: `docs/tenant-lifecycle-stores.md`, "Tenant-deleted notification after the commit".
 - AB#9177 Fix: the tenant-created notification (`PosCreateTenant`) of a child-tenant create or attach is published only
   after the registration is committed. `CreateChildTenantAsync` and `AttachChildTenantAsync` published it inside the
   caller's transaction, so every service set the tenant up before it was registered (a restore logged "Setup tenant
@@ -163,7 +163,7 @@
   is reported on the result: new `CommandResult.TenantCreatedNotificationFailed`, the warning ("... run ClearCache") in
   `Output`, a WARN log; `CloneTenantToTempAsync` passes the flag on. Every publish attempt after a commit, the restore's
   included, is bounded to 5 s. A tenant the same transaction detached or dropped again gets no tenant-created
-  notification (recorded per session, no registry read needed). Details: `CLAUDE.md`, "Tenant-created notification after the commit".
+  notification (recorded per session, no registry read needed). Details: `docs/tenant-lifecycle-stores.md`, "Tenant-created notification after the commit".
 - AB#9127 Fix: a tenant dump (`TenantBackupService.BackupTenantAsync`, used by the bot's dump job, the pre-sweep dump and
   the clone to a temp tenant) leaves out platform-only collections, today `RtEntity_SystemCommunicationSecretDefault`
   (`MongoDumpOptions.PlatformOnlyTenantCollections`, `ForTenantArchive`, one `--excludeCollection` each). The secret
@@ -182,7 +182,7 @@
   unsorted pages, for pipelines with stages around the match (`$geoNear`, association filters) and when no index
   provides the sort. The indexes come from `CollectionIndexCache` (one `listIndexes` per collection and process every 5
   minutes, invalidated by this process's index updates); a hint naming a dropped index is retried once without it. New
-  `IMongoDbDataSourceCollection.Aggregate` overload with `AggregateOptions`. Measurements: `CLAUDE.md`, "Deep sorted
+  `IMongoDbDataSourceCollection.Aggregate` overload with `AggregateOptions`. Measurements: `docs/runtime-query-paging.md`, "Deep sorted
   pages: the index hint".
 - AB#9110 Fix: paged stream-data queries return every row exactly once, also without a sort order. The simple query
   (`ExecuteQueryAsync`, transient and persistent `rows`) ran LIMIT/OFFSET without ORDER BY when no sort order was given
@@ -222,7 +222,7 @@
   sorted page with the tiebreak is hinted only to an index that provides `_id` after the sort keys. Unsorted pages and pages sorted by other attributes
   get the tiebreak right after the deploy, also on existing tenants. Unpaged queries, the association navigations and
   the cached navigation path are unchanged; interface queries already broke ties by rtId (AB#7019). Rules and
-  measurements: `CLAUDE.md`, "Page order of runtime queries".
+  measurements: `docs/runtime-query-paging.md`, "Page order of runtime queries".
   **Index updates without a gap (AC 8, AC 13):** an index whose definition changed is no longer dropped before the new
   one is built. When a CK update gives an index slot other keys, its expected name is still held by the old index
   (MongoDB can neither rename an index nor build one with other keys under a taken name); the new index is built under
