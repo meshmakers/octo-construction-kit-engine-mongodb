@@ -1597,7 +1597,10 @@ CrateDB drop rows of a multi-row INSERT without an error, the same signature), a
 test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never trips; ~15 s; red without the check).
 **The sub-batches of one write run four at a time (AB#8875).** `InsertGroupedAsync` hands the rows of each statement shape to
 `InsertStatementLanes`: `Plan` splits them into lanes by a stable hash of the row key (at most
-`StreamData:MaxConcurrentInsertStatements`, default 4, clamped to 1..`MaxPoolSize`; a write of one statement keeps one lane and
+`StreamData:MaxConcurrentInsertStatements`, default 4, clamped to 1..`MaxPoolSize`; environment variable
+`OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS` in the `OCTO_`-prefixed services, `StreamData__MaxConcurrentInsertStatements`
+without a prefix; both registration extensions bind only this key, as a `PostConfigure` after the host's own
+`IConfigureNamedOptions<StreamDataConfiguration>`, never the whole class; a write of one statement keeps one lane and
 the old split), `RunAsync` runs the lanes at the same time and the statements of a lane one after another. Rules: two
 statements in flight never carry the same key and the rows of one key keep their order (never split a key across lanes,
 never run the statements of a lane concurrently); the shapes (`ArchiveColumnSets` segments) still run one after another;

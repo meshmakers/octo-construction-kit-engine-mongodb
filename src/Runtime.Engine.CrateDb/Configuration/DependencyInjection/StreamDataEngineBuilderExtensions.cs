@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration.DependencyInjection;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Extensions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -31,6 +32,7 @@ public static class StreamDataEngineBuilderExtensions
         where TConfigureOptions : class, IConfigureNamedOptions<StreamDataConfiguration>
     {
         builder.Services.ConfigureOptions(typeof(TConfigureOptions));
+        builder.Services.AddMaxConcurrentInsertStatementsBinding();
 
         // Bind the instance-level kill switch (concept §5). Default value
         // (StreamDataInstanceConfiguration.Enabled = false) keeps the feature opt-in: tenants

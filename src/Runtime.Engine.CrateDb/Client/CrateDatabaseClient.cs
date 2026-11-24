@@ -387,6 +387,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     internal static int EffectiveMaxConcurrentInsertStatements(StreamDataConfiguration configuration)
         => Math.Clamp(configuration.MaxConcurrentInsertStatements, 1, Math.Max(1, configuration.MaxPoolSize));
 
+    internal int MaxConcurrentInsertStatements => EffectiveMaxConcurrentInsertStatements(_configuration);
+
     /// <inheritdoc />
     public async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(
         string tenantId, string qualifiedTable, bool windowed, IReadOnlyList<StoredRowKey> keys,

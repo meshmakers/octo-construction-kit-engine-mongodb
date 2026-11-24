@@ -7,10 +7,14 @@
   the same time (`InsertStatementLanes`), so two statements in flight never carry the same key and the rows of one key are
   written in the order they were sent; the conflict guard, the skipped rows (same order) and `MissingRowRetry` per
   statement are unchanged. **New setting** `StreamData:MaxConcurrentInsertStatements` (`StreamDataConfiguration`,
-  default 4, not positive = 1, at most `MaxPoolSize`). A write of one statement runs as before. On a failed write no new
+  default 4, not positive = 1, at most `MaxPoolSize`; environment variable `OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS`
+  in the services, which read `OCTO_`-prefixed variables, or `StreamData__MaxConcurrentInsertStatements` in a host without
+  a prefix). Both registration extensions (`AddCrateDbStreamDataRepository`, `AddStreamDataDatabase`) bind this one key
+  after the host's own `StreamDataConfiguration` setup; no other property of the class is bound from configuration, so
+  pool size, timeouts and the connection string stay as the host sets them. Without the key the limit is 4. A write of one statement runs as before. On a failed write no new
   statement starts, the ones in flight finish and the first failure is rethrown unchanged; the set of rows already written
   can then differ from the sequential order, all of them are idempotent guarded upserts, and a retry of the same insert
-  converges. Tests: `InsertStatementLanesTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
+  converges. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
 - AB#7212 Test: `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
   (owned-only for every action, Write and Delete for all with Read owned-only, or Write and Delete without Read), a
