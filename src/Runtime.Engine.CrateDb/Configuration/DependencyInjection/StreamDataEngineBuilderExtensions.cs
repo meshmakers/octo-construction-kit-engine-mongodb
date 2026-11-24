@@ -32,7 +32,6 @@ public static class StreamDataEngineBuilderExtensions
         where TConfigureOptions : class, IConfigureNamedOptions<StreamDataConfiguration>
     {
         builder.Services.ConfigureOptions(typeof(TConfigureOptions));
-        builder.Services.AddMaxConcurrentInsertStatementsBinding();
 
         // Bind the instance-level kill switch (concept §5). Default value
         // (StreamDataInstanceConfiguration.Enabled = false) keeps the feature opt-in: tenants

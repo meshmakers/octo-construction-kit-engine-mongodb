@@ -33,4 +33,21 @@ public class StreamDataInstanceConfiguration
     /// (<c>TenantSchema.SetInstancePrefix</c>).
     /// </summary>
     public string? SchemaInstancePrefix { get; set; }
+
+    /// <summary>
+    /// Most sub-batch statements (1,000 rows each) one archive insert runs at the same time (AB#8875). The rows are split
+    /// into lanes by row key, so two statements in flight never carry the same key; each statement leases its own
+    /// connection, so this is the share of the tenant's pool one large write may hold. Default 4. Key
+    /// <c>StreamData:MaxConcurrentInsertStatements</c> (environment variable
+    /// <c>OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS</c>). Not positive = 1 (one statement after another); above the
+    /// pool size of the stream data client = that pool size.
+    /// </summary>
+    public int MaxConcurrentInsertStatements { get; set; } = 4;
+
+    /// <summary>
+    /// Connections per tenant in the CrateDB pool of the stream data client (AB#8875). Key <c>StreamData:MaxPoolSize</c>
+    /// (environment variable <c>OCTO_STREAMDATA__MAXPOOLSIZE</c>). A positive value overrides the pool size the host
+    /// sets on its stream data configuration; unset, zero or negative keeps the host's value (default 32).
+    /// </summary>
+    public int? MaxPoolSize { get; set; }
 }

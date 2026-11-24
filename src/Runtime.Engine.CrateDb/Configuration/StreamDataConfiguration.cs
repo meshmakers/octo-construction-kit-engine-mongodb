@@ -27,25 +27,10 @@ public class StreamDataConfiguration
     /// <summary>
     /// Maximum number of physical connections per tenant data source. CrateDB clusters typically
     /// tolerate hundreds of pooled connections; the default is conservative — tune upward when
-    /// stream data writes become a bottleneck.
+    /// stream data writes become a bottleneck. A positive <c>StreamData:MaxPoolSize</c>
+    /// (<c>StreamDataInstanceConfiguration.MaxPoolSize</c>) overrides this value (AB#8875).
     /// </summary>
     public int MaxPoolSize { get; set; } = 32;
-
-    /// <summary>
-    /// Most sub-batch statements (1,000 rows each) one archive insert runs at the same time (AB#8875). The rows are split
-    /// into lanes by row key, so two statements in flight never carry the same key; each statement leases its own
-    /// connection, so this is the share of the tenant's pool one large write may hold. Default 4. Bound from the key
-    /// <see cref="MaxConcurrentInsertStatementsKey" /> (environment variable <c>OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS</c>)
-    /// by both registration extensions, after the host's own configuration; no other property of this class is bound
-    /// from configuration. Not positive = 1 (one statement after another); above <see cref="MaxPoolSize" /> =
-    /// <see cref="MaxPoolSize" />.
-    /// </summary>
-    public int MaxConcurrentInsertStatements { get; set; } = 4;
-
-    /// <summary>
-    /// Configuration key of <see cref="MaxConcurrentInsertStatements" />.
-    /// </summary>
-    public const string MaxConcurrentInsertStatementsKey = "StreamData:MaxConcurrentInsertStatements";
 
     /// <summary>
     /// How long an idle pooled connection may live before the pool closes it. Keep slightly below

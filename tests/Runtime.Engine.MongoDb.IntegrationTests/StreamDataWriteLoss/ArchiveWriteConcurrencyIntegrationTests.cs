@@ -216,12 +216,8 @@ public class ArchiveWriteConcurrencyIntegrationTests(CrateStagingCopyFixture fix
     private static bool SharesAStatement(string[] keys, int limit)
     {
         var rowsPerStatement = CrateDatabaseClient.RowsPerStatement(5 + ArchiveRowOriginColumns.Names.Count + UserColumns.Length);
-        var configuration = new StreamDataConfiguration
-        {
-            ConnectionString = "Host=localhost", MaxConcurrentInsertStatements = limit
-        };
         return CrateDatabaseClient.PlanInsertStatements(keys, Enumerable.Range(0, keys.Length).ToList(), k => k,
-                rowsPerStatement, configuration)
+                rowsPerStatement, limit)
             .SelectMany(lane => lane)
             .Any(statement => statement.Select(r => keys[r]).Distinct(StringComparer.Ordinal).Count() < statement.Length);
     }
@@ -272,13 +268,11 @@ public class ArchiveWriteConcurrencyIntegrationTests(CrateStagingCopyFixture fix
 
     private OwnClient CreateClient(int maxConcurrentInsertStatements)
     {
-        var configuration = Options.Create(new StreamDataConfiguration
-        {
-            ConnectionString = fixture.ConnectionString, MaxConcurrentInsertStatements = maxConcurrentInsertStatements
-        });
+        var configuration = Options.Create(new StreamDataConfiguration { ConnectionString = fixture.ConnectionString });
         var access = new CrateDbConnectionAccess(configuration, NullLogger<CrateDbConnectionAccess>.Instance);
         return new OwnClient(new CrateDatabaseClient(NullLogger<CrateDatabaseClient>.Instance, access, configuration,
-            Options.Create(new CrateResilienceOptions()), Options.Create(new StreamDataInstanceConfiguration()),
+            Options.Create(new CrateResilienceOptions()),
+            Options.Create(new StreamDataInstanceConfiguration { MaxConcurrentInsertStatements = maxConcurrentInsertStatements }),
             Options.Create(new CrateRecomputeOptions())), access);
     }
 

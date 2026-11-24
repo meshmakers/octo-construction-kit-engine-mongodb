@@ -4,10 +4,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
-using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
@@ -274,13 +274,11 @@ public class InsertStatementLanesTests
     [Fact]
     public void PlanInsertStatements_UsesTheConfiguredLimitAndKeepsEveryKeyInOneLane()
     {
-        var configuration = new StreamDataConfiguration { ConnectionString = "Host=localhost", MaxConcurrentInsertStatements = 3 };
         var keys = Enumerable.Range(0, 9_000)
             .Select(i => CrateDatabaseClient.RowKey($"meter-{i % 3_000}", "Test/Meter", Origin, Origin.AddMinutes(15)))
             .ToArray();
 
-        var lanes = CrateDatabaseClient.PlanInsertStatements(keys, Positions(keys.Length), key => key, RowsPerStatement,
-            configuration);
+        var lanes = CrateDatabaseClient.PlanInsertStatements(keys, Positions(keys.Length), key => key, RowsPerStatement, 3);
 
         Assert.Equal(3, lanes.Count);
         var laneOfKey = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -305,12 +303,13 @@ public class InsertStatementLanesTests
     [InlineData(-1, 32, 1)]
     public void EffectiveLimit_IsAtLeastOne_AndAtMostThePoolSize(int? configured, int poolSize, int expected)
     {
-        var configuration = new StreamDataConfiguration { ConnectionString = "Host=localhost", MaxPoolSize = poolSize };
+        var instance = new StreamDataInstanceConfiguration();
         if (configured is { } value)
         {
-            configuration.MaxConcurrentInsertStatements = value;
+            instance.MaxConcurrentInsertStatements = value;
         }
 
-        Assert.Equal(expected, CrateDatabaseClient.EffectiveMaxConcurrentInsertStatements(configuration));
+        Assert.Equal(expected,
+            CrateDatabaseClient.EffectiveMaxConcurrentInsertStatements(instance.MaxConcurrentInsertStatements, poolSize));
     }
 }

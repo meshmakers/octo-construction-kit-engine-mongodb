@@ -24,7 +24,6 @@ public static class ServiceCollectionExtensions
         where TConfigureOptions : class, IConfigureNamedOptions<StreamDataConfiguration>
     {
         services.ConfigureOptions(typeof(TConfigureOptions));
-        services.AddMaxConcurrentInsertStatementsBinding();
 
         // AB#6283: slice size and command timeout of the recompute / rollup aggregation statements.
         // A host composed through this method need not have an IConfiguration; bind the section
@@ -59,21 +58,6 @@ public static class ServiceCollectionExtensions
         // registered here too so both entry points wire the same coverage cache.
         services.AddArchiveCoverageCache();
 
-        return services;
-    }
-
-    internal static IServiceCollection AddMaxConcurrentInsertStatementsBinding(this IServiceCollection services)
-    {
-        services.AddOptions<StreamDataConfiguration>()
-            .PostConfigure<IServiceProvider>((options, provider) =>
-            {
-                var configured = provider.GetService<IConfiguration>()
-                    ?.GetValue<int?>(StreamDataConfiguration.MaxConcurrentInsertStatementsKey);
-                if (configured is { } value)
-                {
-                    options.MaxConcurrentInsertStatements = value;
-                }
-            });
         return services;
     }
 }
