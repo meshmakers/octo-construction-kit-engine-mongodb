@@ -1,6 +1,6 @@
 ---
 description: "StreamData write path: schema prefix, CrateDB pool, conflict precedence, row origin, write result, value checks, partial delivery"
-applies_to: src/Runtime.Engine.CrateDb/**, src/Runtime.Engine.MongoDb/StreamData/**, tests/StreamData.UnitTests/**
+applies_to: src/Runtime.Engine.CrateDb/**, src/Runtime.Engine.MongoDb/StreamData/**, tests/StreamData.UnitTests/**, src/Runtime.Contracts.MongoDb/Configuration/StreamDataInstanceConfiguration.cs, tests/Runtime.Engine.MongoDb.IntegrationTests/StreamDataWriteLoss/**
 ---
 
 ## StreamData: Archives and Rollups
@@ -36,7 +36,11 @@ services) prepends an instance prefix: `{prefix}_{tenant}`. Rules:
 ### CrateDB connection pool: failed statements give their connection back
 
 Every CrateDB access leases its connection through `CrateDatabaseClient.LeaseConnectionAsync`; the pool is per tenant
-(`StreamData:MaxPoolSize`, default 32, one `NpgsqlDataSource` per tenant in `CrateDbConnectionAccess`). Rules to keep:
+(`StreamData:MaxPoolSize`, default 32, one `NpgsqlDataSource` per tenant in `CrateDbConnectionAccess`). The key
+is bound into `StreamDataInstanceConfiguration.MaxPoolSize` (environment variable `OCTO_STREAMDATA__MAXPOOLSIZE`): a positive
+value overrides the host's `StreamDataConfiguration.MaxPoolSize`, otherwise (unset, zero or negative) the host's value
+(default 32) applies; `CrateDbConnectionAccess.EffectivePoolSize` decides it for the data source and for the clamp of
+`MaxConcurrentInsertStatements`. Rules to keep:
 
 - **A failed statement used to cost a pool slot for the life of the process.** CrateDB reports the failed-transaction
   state after every failed statement, Npgsql's reset on close then sends a `ROLLBACK`, CrateDB rejects it (5.x `XX000`,
@@ -251,6 +255,28 @@ missing rows once more (`MissingRowRetry`) (guarded: those rows, unguarded: the 
 CrateDB drop rows of a multi-row INSERT without an error, the same signature), and the stress test (`Category=Stress`, not in the CI)
 `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (own CrateDB container, 512 MB heap, query breaker set per
 test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never trips; ~15 s; red without the check).
+**The sub-batches of one write run four at a time.** `InsertGroupedAsync` hands the rows of each statement shape to
+`InsertStatementLanes`: `Plan` splits them into lanes by a stable hash of the row key (at most
+`StreamData:MaxConcurrentInsertStatements`, default 4, clamped to 1..the effective pool size (`StreamData:MaxPoolSize`,
+see the connection pool section); environment variable
+`OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS` in the `OCTO_`-prefixed services, `StreamData__MaxConcurrentInsertStatements`
+without a prefix; a property of `StreamDataInstanceConfiguration`, which `AddCrateDbStreamDataRepository` binds from the
+`StreamData` section like `Enabled` and `SchemaInstancePrefix`, and which the client reads in its constructor; a write
+of one statement keeps one lane and the old split), `RunAsync` runs the lanes at the same time and the statements of a lane one after another. Rules: two
+statements in flight never carry the same key and the rows of one key keep their order (never split a key across lanes,
+never run the statements of a lane concurrently); the shapes (`ArchiveColumnSets` segments) still run one after another;
+the skipped rows are sorted by position, so they equal the sequential result; `MissingRowRetry` stays per statement. On a
+failure no lane starts another statement after the first failed one, the statements in flight finish, the first failure is
+rethrown unchanged (no `AggregateException`) and a later failure of a statement in flight is dropped without a log entry. On
+a failed write the set of rows already written can differ from the sequential order. All of them are idempotent upserts
+(guarded where the archive has conflict precedence), so a retry of the same insert converges when no other write of the
+same keys comes in between; without conflict precedence the last write wins, and a retry can replace a newer value that
+another write stored meanwhile. The client plans its lanes in `CrateDatabaseClient.PlanInsertStatements`
+(limit from the configuration, key from the row).
+Tests: `InsertStatementLanesTests` (unit, fake statement executor: limit reached and never exceeded, no key in two statements,
+order per key, failure contract; `PlanInsertStatements` uses the configured limit and keeps a key in one lane),
+`StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests` (real CrateDB, limit 1 and 4 compared: 130,000 guarded
+time-range rows, and keys written again 1,000 to 3,000 rows later, which the lanes put into the same statement).
 **The rollup statements check their rows too.** The forward aggregation, the recompute's staging aggregation (both
 through `RollupSourceBucketAggregator`) and the staging-to-live copy are `INSERT … SELECT` statements that CrateDB answers the
 same way. Each compares its affected rows with the rows it must write: the aggregation with

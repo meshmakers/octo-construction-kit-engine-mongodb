@@ -49,7 +49,7 @@ Where to start reading, not a full list; every class sits in a folder of the rou
 | `src/Runtime.Engine.CrateDb/QueryBuilder/**`, `src/Runtime.Engine.CrateDb/Copy/**`, `src/Runtime.Engine.MongoDb/StreamData/**` | `docs/streamdata-queries-and-export.md` |
 | `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**` | `docs/streamdata-rollup-source-generation-read.md` |
 | `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**` | `docs/streamdata-rollups.md` |
-| `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**`, `tests/StreamData.UnitTests/**` | `docs/streamdata-write-path.md` |
+| `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**`, `tests/StreamData.UnitTests/**`, `src/Runtime.Contracts.MongoDb/Configuration/StreamDataInstanceConfiguration.cs`, `tests/Runtime.Engine.MongoDb.IntegrationTests/StreamDataWriteLoss/**` | `docs/streamdata-write-path.md` |
 | `src/Runtime.Engine.MongoDb/Repositories/Tenant*/**`, `src/Runtime.Contracts.MongoDb/TenantOwnership/**`, `src/**/*Context.cs`, `src/**/TenantDeletionHandle.cs` | `docs/tenant-database-safety.md` |
 | `src/Runtime.Contracts.MongoDb/TenantLifecycle/**`, `src/Runtime.Engine.MongoDb/Repositories/TenantLifecycle/**` | `docs/tenant-lifecycle-reconciler.md` |
 | `src/Runtime.Contracts.MongoDb/TenantLifecycle/**`, `src/Runtime.Engine.MongoDb/Repositories/TenantLifecycle/**` | `docs/tenant-lifecycle-stores.md` |
