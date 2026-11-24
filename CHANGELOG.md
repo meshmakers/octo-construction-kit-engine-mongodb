@@ -21,6 +21,18 @@
   precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
   conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#6209 Fix: `AutoIncrementModifier` numbers every new entity of a mixed batch. Before, the first type or entity
+  without an auto-increment attribute ended the pass (`return`), so in a batch such as `[Note, Ticket]` the Ticket got
+  no number, depending on the order. Because the pre-document modifications run on insert and on replace without
+  telling them apart, the modifier now reads the stored entities of the batch's auto-increment types by RtId (one read
+  per type, only when the batch has such a type): a stored entity (replace, bulk import of an existing entity) is never
+  renumbered and the counter does not move; when its payload has no value, the stored number is carried over. A new
+  entity is numbered only for an attribute without a value, so ImportRt/restore values are kept and do not advance the
+  counter. The stored-entity check is one helper, `StoredRtEntities.GetByRtIdAsync` (read by `_id` in the session
+  of the write), for the later number allocation stories to reuse. A batch without auto-increment types reads
+  nothing extra. Two new entities of one batch get consecutive numbers, but not necessarily in batch order (the
+  entity rule engine collects inserts unordered). The version-less AutoIncrement lookup (D-G1-1) stays. Tests:
+  `AutoIncrementModifierTests` (MongoDB).
 - AB#9524 Fix: the index update resolves index attribute paths against the inheritance chain of the index-defining type
   (its own attributes and those of its base types, the chain the update already loads; the type's own assignment wins
   over an inherited one of the same name), not only against the attributes the type assigns itself. An inherited plain

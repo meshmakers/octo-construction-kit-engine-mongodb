@@ -10,6 +10,19 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
 
+/// <summary>
+///     Numbers the auto-increment attributes (<c>autoIncrementReference</c>) of NEW entities from their
+///     <c>System/AutoIncrement</c> counter. The pre-document-modification pipeline runs on insert and on replace and
+///     does not say which (AB#6209), so the modifier tells them apart by the stored state:
+///     <list type="bullet">
+///         <item>An entity that is not stored yet gets a number only for an attribute without a value; a supplied
+///         value (ImportRt, restore, blueprint seed) is kept and does not advance the counter.</item>
+///         <item>An entity that is already stored (replace, or a bulk import of an existing entity) is never
+///         renumbered; when its payload has no value for the attribute, the stored number is carried over, so a
+///         replace never clears it either.</item>
+///     </list>
+///     Every entity of a mixed batch is handled; an entity or type without auto-increment attributes is skipped.
+/// </summary>
 public class AutoIncrementModifier(
     ICkCacheService ckCacheService)
     : IPreDocumentModification<RtEntity>
@@ -18,34 +31,42 @@ public class AutoIncrementModifier(
         IEnumerable<RtEntity> documents)
     {
         var documentList = documents.ToArray();
-        var ckTypeIds = documentList.GroupBy(d => d.GetRtCkTypeId());
+        var autoIncrementTypes = new List<AutoIncrementType>();
         HashSet<string> autoIncrementReferences = new();
-        foreach (IGrouping<RtCkId<CkTypeId>, RtEntity> ckTypeId in ckTypeIds)
+        foreach (IGrouping<RtCkId<CkTypeId>, RtEntity> ckTypeGroup in documentList.GroupBy(d => d.GetRtCkTypeId()))
         {
-            var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, ckTypeId.Key);
+            var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, ckTypeGroup.Key);
             if (ckTypeGraph == null)
             {
-                throw InvalidCkTypeIdException.RtCkTypeIdNotFound(repositoryDataSource.TenantId, ckTypeId.Key);
+                throw InvalidCkTypeIdException.RtCkTypeIdNotFound(repositoryDataSource.TenantId, ckTypeGroup.Key);
             }
 
-            var typeAttributeGraphs = ckTypeGraph.AllAttributes.Values
-                .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference))
-                .Select(x => x.AutoIncrementReference!).ToList();
-            if (!typeAttributeGraphs.Any())
+            var typeIncrements = ckTypeGraph.AllAttributes.Values
+                .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();
+            if (typeIncrements.Count == 0)
             {
-                // NOTE: `return` ends the pass for the whole batch, also for later types that do use auto-increment.
-                // Known pre-existing behaviour, deliberately unchanged here (see the mixed-batch bug report).
-                return;
+                continue;
             }
 
-            // Add unique auto increment references of typeAttributeGraphs to hashset autoIncrementReferences
-            foreach (string typeAttributeGraph in typeAttributeGraphs)
+            var attributes = new List<(CkTypeAttributeGraph Attribute, string Reference)>();
+            foreach (var typeIncrement in typeIncrements)
             {
-                autoIncrementReferences.Add(typeAttributeGraph);
+                if (!ckTypeGraph.AllAttributesByName.TryGetValue(typeIncrement.AttributeName,
+                        out CkTypeAttributeGraph? ckTypeAttributeGraph))
+                {
+                    throw InvalidAttributeException.AttributeNotFoundAtRtCkIdType(ckTypeGroup.Key,
+                        typeIncrement.AttributeName);
+                }
+
+                attributes.Add((ckTypeAttributeGraph, typeIncrement.AutoIncrementReference!));
+                autoIncrementReferences.Add(typeIncrement.AutoIncrementReference!);
             }
+
+            autoIncrementTypes.Add(new AutoIncrementType(ckTypeGroup.Key, ckTypeGraph, attributes,
+                ckTypeGroup.ToList()));
         }
 
-        if (!autoIncrementReferences.Any())
+        if (autoIncrementTypes.Count == 0)
         {
             return;
         }
@@ -62,53 +83,67 @@ public class AutoIncrementModifier(
         var autoIncrementerSet = await autoIncrementCollection.FindManyAsync(session,
             f => f.RtWellKnownName != null && autoIncrementReferences.Contains(f.RtWellKnownName));
 
-        foreach (RtEntity rtEntity in documentList.AsParallel())
+        foreach (var autoIncrementType in autoIncrementTypes)
         {
-            var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, rtEntity.GetRtCkTypeId());
-            if (ckTypeGraph == null)
+            // Only auto-increment types are read, in the session (transaction) of the write.
+            var storedEntities = await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource,
+                autoIncrementType.CkTypeGraph, autoIncrementType.Entities);
+
+            foreach (var rtEntity in autoIncrementType.Entities)
             {
-                throw InvalidCkTypeIdException.RtCkTypeIdNotFound(repositoryDataSource.TenantId, rtEntity.GetRtCkTypeId());
-            }
+                storedEntities.TryGetValue(rtEntity.RtId, out var storedEntity);
 
-            var typeIncrements = ckTypeGraph.AllAttributes.Values
-                .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();
-            if (!typeIncrements.Any())
-            {
-                // Same pre-existing `return` as above (mixed-batch bug report), deliberately unchanged.
-                return;
-            }
+                foreach (var (ckTypeAttributeGraph, reference) in autoIncrementType.Attributes)
+                {
+                    var attributeName = ckTypeAttributeGraph.AttributeName;
+                    if (HasValue(rtEntity.GetAttributeValueOrDefault(attributeName)))
+                    {
+                        // A supplied value is kept: never renumber, never advance the counter for it.
+                        continue;
+                    }
 
-            foreach (var autoIncrementReference in typeIncrements)
-            {
-                if (!ckTypeGraph.AllAttributesByName.TryGetValue(autoIncrementReference.AttributeName, out CkTypeAttributeGraph? ckTypeAttributeGraph))
-                {
-                    throw InvalidAttributeException.AttributeNotFoundAtRtCkIdType(rtEntity.GetRtCkTypeId(),
-                        autoIncrementReference.AttributeName);
-                }
+                    if (storedEntity != null)
+                    {
+                        // Already stored (replace): carry the existing number over instead of numbering again.
+                        var storedValue = storedEntity.GetAttributeValueOrDefault(attributeName);
+                        if (HasValue(storedValue))
+                        {
+                            rtEntity.SetAttributeValue(attributeName, ckTypeAttributeGraph.ValueType, storedValue);
+                        }
 
-                var autoIncrement = autoIncrementerSet.FirstOrDefault(x =>
-                    x.RtWellKnownName == autoIncrementReference.AutoIncrementReference);
-                if (autoIncrement == null)
-                {
-                    throw InvalidAttributeException.AutoIncrementReferenceNotFound(rtEntity.GetRtCkTypeId(),
-                        autoIncrementReference.AutoIncrementReference);
-                }
+                        continue;
+                    }
 
-                var value = await ExecuteAutoIncrementAsync(session, repositoryDataSource, autoIncrement);
-                if (!string.IsNullOrEmpty(autoIncrement.Format) &&
-                    ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.String)
-                {
-                    rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
-                        ckTypeAttributeGraph.ValueType, string.Format(autoIncrement.Format, value));
-                }
-                else
-                {
-                    rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
-                        ckTypeAttributeGraph.ValueType, value);
+                    var autoIncrement = autoIncrementerSet.FirstOrDefault(x => x.RtWellKnownName == reference);
+                    if (autoIncrement == null)
+                    {
+                        throw InvalidAttributeException.AutoIncrementReferenceNotFound(autoIncrementType.CkTypeId,
+                            reference);
+                    }
+
+                    var value = await ExecuteAutoIncrementAsync(session, repositoryDataSource, autoIncrement);
+                    if (!string.IsNullOrEmpty(autoIncrement.Format) &&
+                        ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.String)
+                    {
+                        rtEntity.SetAttributeValue(attributeName, ckTypeAttributeGraph.ValueType,
+                            string.Format(autoIncrement.Format, value));
+                    }
+                    else
+                    {
+                        rtEntity.SetAttributeValue(attributeName, ckTypeAttributeGraph.ValueType, value);
+                    }
                 }
             }
         }
     }
+
+    private static bool HasValue(object? value) =>
+        value switch
+        {
+            null => false,
+            string s => !string.IsNullOrWhiteSpace(s),
+            _ => true
+        };
 
     private async Task<long> ExecuteAutoIncrementAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
         RtAutoIncrement autoIncrement)
@@ -133,4 +168,10 @@ public class AutoIncrementModifier(
 
         return currentValue;
     }
+
+    private sealed record AutoIncrementType(
+        RtCkId<CkTypeId> CkTypeId,
+        CkTypeGraph CkTypeGraph,
+        IReadOnlyList<(CkTypeAttributeGraph Attribute, string Reference)> Attributes,
+        IReadOnlyList<RtEntity> Entities);
 }

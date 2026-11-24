@@ -619,8 +619,8 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     ///     D-G1-1 (G1 E2E): a service whose embedded System is OLDER than the tenant's (the state the downgrade guard
     ///     keeps) must still write entities. <c>AutoIncrementModifier</c> looked up the generated versioned
     ///     <c>System-&lt;embedded&gt;/AutoIncrement-1</c> on every insert, which is not in the cache of a tenant with a
-    ///     newer System. Single-type batches on purpose: the mixed-batch numbering is a separate, unchanged bug
-    ///     (scratchpad bug-autoincrement-mixed-batches.md). The newer System adds an AutoIncrement attribute
+    ///     newer System. Single-type batches on purpose: mixed-batch numbering is covered by
+    ///     <c>AutoIncrementModifierTests</c> (AB#6209). The newer System adds an AutoIncrement attribute
     ///     (<c>Prefix</c>) that the older typed <c>RtAutoIncrement</c> does not know; the counter document written
     ///     back through it must keep that value.
     /// </summary>
