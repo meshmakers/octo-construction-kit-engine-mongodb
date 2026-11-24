@@ -3348,7 +3348,38 @@ public class TenantContext : ITenantContext
 
     #region Construction Kits
 
-    public async Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot)
+    public Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot)
+    {
+        ArgumentNullException.ThrowIfNull(ckCompiledModelRoot);
+        ArgumentNullException.ThrowIfNull(ckCompiledModelRoot.ModelId);
+
+        // AB#9325: a caller-supplied compiled model never installs, replaces or downgrades a service-managed model
+        // (System, System.*), whatever entry point queued it (bot ImportCk/ImportCkBatch jobs, a Hangfire job enqueued
+        // before the asset repository's own refusal, any future producer of the bus commands). Refused before anything
+        // is read or written. Service-managed models come only through the CkModelId overload (embedded/startup and
+        // blueprint import, downgrade-guarded).
+        if (ServiceManagedCkModels.IsServiceManaged(ckCompiledModelRoot.ModelId.Name))
+        {
+            _logger.LogWarning(
+                "Refused caller import of service-managed CK model '{CkModelId}' into tenant '{TenantId}' ({Code}): " +
+                "service-managed models are installed only by the platform services",
+                ckCompiledModelRoot.ModelId, TenantId, ServiceManagedCkModels.RefusalCode);
+            CkModelImportDiagnostics.RecordServiceManagedImportRefused();
+            throw ServiceManagedCkModelImportRefusedException.Create(ckCompiledModelRoot.ModelId.FullName);
+        }
+
+        return ImportCompiledCkModelAsync(ckCompiledModelRoot);
+    }
+
+    /// <summary>
+    ///     Test seam only (internal, never reachable from another assembly than the engine's tests): installs a compiled
+    ///     service-managed model the way a service's embedded import would, without the AB#9325 refusal of the caller
+    ///     overload. Tests use it to put a tenant on a specific System version.
+    /// </summary>
+    internal Task ImportServiceManagedCompiledCkModelForTestsAsync(CkCompiledModelRoot ckCompiledModelRoot) =>
+        ImportCompiledCkModelAsync(ckCompiledModelRoot);
+
+    private async Task ImportCompiledCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot)
     {
         Guid correlationId = Guid.NewGuid();
 
@@ -3359,8 +3390,8 @@ public class TenantContext : ITenantContext
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
         var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId);
 
-        // CK v2 F1.0-S1 (AB#5900, decision Q5): an explicit import may downgrade — it is the operator's escape
-        // hatch — but it is never silent.
+        // CK v2 F1.0-S1 (AB#5900, decision Q5): an explicit import of a model that is not service-managed may
+        // downgrade — it is the operator's escape hatch — but it is never silent.
         var installedBefore =
             await EmbeddedCkModelImportGuard.FindInstalledAsync(repositoryDataSource, ckCompiledModelRoot.ModelId.Name);
         if (installedBefore != null && installedBefore.ModelId.Version.CompareTo(ckCompiledModelRoot.ModelId.Version) > 0)

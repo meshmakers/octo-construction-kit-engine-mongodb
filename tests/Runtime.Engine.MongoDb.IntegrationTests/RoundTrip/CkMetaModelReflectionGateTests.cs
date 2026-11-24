@@ -1,6 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
@@ -70,7 +71,17 @@ public class CkMetaModelReflectionGateTests(CkModelImportMigrationFixture fixtur
 
             var compiled = await catalogService.GetAsync(modelId, new OperationResult());
             Assert.NotNull(compiled);
-            if (model != "System")
+            if (ServiceManagedCkModels.IsServiceManaged(modelId.Name))
+            {
+                // AB#9325: service-managed models come only through the service path (catalog import by id).
+                if (model != "System")
+                {
+                    var result = new OperationResult();
+                    await tenant.ImportCkModelAsync(modelId, result);
+                    Assert.False(result.HasErrors, string.Join("; ", result.Messages));
+                }
+            }
+            else
             {
                 await tenant.ImportCkModelAsync(compiled);
             }

@@ -12,7 +12,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 ///     <para>
 ///         Units are curly-brace annotations (like <c>CrateDbDiagnostics</c>), which the Prometheus exporter does not
 ///         append to the name: the series are <c>octo_ck_embedded_import_skipped_total</c>,
-///         <c>octo_ck_explicit_import_downgraded_total</c> and <c>octo_ck_model_revalidated_total</c> (D-G1-2; with
+///         <c>octo_ck_explicit_import_downgraded_total</c>, <c>octo_ck_explicit_import_refused_total</c> (AB#9325) and
+///         <c>octo_ck_model_revalidated_total</c> (D-G1-2; with
 ///         <c>unit: "count"</c> they were exported as <c>…_count_total</c>).
 ///     </para>
 /// </summary>
@@ -23,6 +24,12 @@ public static class CkModelImportDiagnostics
 
     /// <summary>Counter: an explicit CK model import replaced a newer installed version (allowed, logged WARN).</summary>
     public const string ExplicitDowngradeCounterName = "octo.ck.explicit_import.downgraded";
+
+    /// <summary>
+    ///     Counter: a caller import of a service-managed model (System, System.*) was refused (AB#9325). No <c>model</c>
+    ///     tag: the name is caller-supplied, the model id is in the matching WARN line.
+    /// </summary>
+    public const string ServiceManagedImportRefusedCounterName = "octo.ck.explicit_import.refused";
 
     /// <summary>Counter: outcome of the re-validation of a <c>ResolveFailed</c> model after an import.</summary>
     public const string ModelRevalidatedCounterName = "octo.ck.model.revalidated";
@@ -51,6 +58,11 @@ public static class CkModelImportDiagnostics
         unit: "{import}",
         description: "Explicit CK model imports that replaced a newer installed version");
 
+    private static readonly Counter<long> ServiceManagedImportRefused = Meter.CreateCounter<long>(
+        ServiceManagedImportRefusedCounterName,
+        unit: "{import}",
+        description: "Caller imports of a service-managed CK model (System, System.*) that were refused");
+
     private static readonly Counter<long> ModelRevalidated = Meter.CreateCounter<long>(
         ModelRevalidatedCounterName,
         unit: "{model}",
@@ -63,6 +75,8 @@ public static class CkModelImportDiagnostics
 
     internal static void RecordExplicitDowngrade(string modelName) =>
         ExplicitDowngrade.Add(1, new KeyValuePair<string, object?>("model", modelName));
+
+    internal static void RecordServiceManagedImportRefused() => ServiceManagedImportRefused.Add(1);
 
     internal static void RecordRevalidation(string result) =>
         ModelRevalidated.Add(1, new KeyValuePair<string, object?>("result", result));

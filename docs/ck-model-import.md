@@ -241,13 +241,35 @@ lacks the installed `Available` version (next bullet but one).
   `DefaultConfigurationCreatorService` (System.Identity, System.Notification) and `CreateIdentityDataCommandRequestConsumer`,
   comm-controller `TenantInitializationExtensions`, asset-repo `ModelsController` dependency status.
 
-- **Explicit imports may downgrade** (platform-owner decision Q5): `ImportCkModelAsync(CkCompiledModelRoot)`
-  (CLI/API `ImportCk`, bot import command) is not guarded itself; the *API endpoint* judges the file with
+- **Caller imports never touch a service-managed model (AB#9325).** `ImportCkModelAsync(CkCompiledModelRoot)` is the
+  caller overload: the bot's `ImportCk` / `ImportCkBatch` jobs call it for every file import and catalog import, whatever
+  queued the bus command (asset repository, MCP or AI service, a Hangfire job enqueued before an update). It refuses every
+  model whose name is service-managed - `ServiceManagedCkModels.IsServiceManaged` (`Runtime.Contracts.MongoDb`): `System`
+  or `System.*`, case-insensitive, trimmed; `Customer.System` and `SystemX` are not - for every version (newer, equal,
+  older, another major), also when the tenant does not have the model, before anything is read or written (no lock, no
+  `Importing` row, no element rows, no migration, no notification, no re-validation). It throws
+  `ServiceManagedCkModelImportRefusedException` (`Code` = `CK_SERVICE_MANAGED_MODEL`, the code of the asset repository's REST
+  refusal; `ModelId`; the message names the model and the rule and carries no model content), logs one WARN `Refused caller
+  import of service-managed CK model ...` and counts `octo.ck.explicit_import.refused` (no tags: the name is
+  caller-supplied). The predicate is platform-wide on purpose: service-managed descriptors are registered per host (the bot
+  knows only System.Bot), so they cannot decide it. Service-managed models reach a tenant only through the `CkModelId`
+  overload (embedded/startup import, blueprint provider, `ClearCache` / `ReRunTenantSetup`), which is unchanged; it only
+  brings in a missing or older version (a damaged same-version or a too new System needs a manual database repair).
+  The element delete of every import selects rows by `ModelElementsPattern(name)` = `^<escaped name>-[0-9]`: an
+  unescaped name (`Sy.tem.Identity`, `.*`) of an ordinary caller model used to match and delete the element rows of
+  System models. Engine
+  tests that must put a tenant on a specific System version use the internal seam
+  `TenantContext.ImportServiceManagedCompiledCkModelForTestsAsync` (`CkModelImportGuardTests.InstallAsServiceAsync`); tests
+  in other repositories load the model into a test catalog and import it by id. Tests:
+  `CkModelImportGuard/ServiceManagedImportRefusalTests` (real System.Identity 3.8.0 snapshot in `testData/`: newer without
+  `writeAccess`, same version manipulated, downgrade and next major refused with the database unchanged, message 144 still
+  enforced afterwards; every System name and spelling; names that only contain "System"; an ordinary model that pins a
+  self-built System.Identity does not install it).
+- **Explicit imports of other models may downgrade** (platform-owner decision Q5): for a model that is not
+  service-managed the caller overload has no guard of its own; the *API endpoint* judges the file with
   `EvaluateExplicitCkImportAsync` (tenant upgrade guard, below) before it queues the job and refuses a breaking one unless forced.
   A downgrade that passes may happen, logged WARN `Explicit downgrade of CK model ... from X
-  to Y` and counted in `octo.ck.explicit_import.downgraded` (tag `model`). An explicit downgrade of a model that
-  this process *embeds* in a newer version does not stick: the next tenant resolve (at the latest, the migration
-  step of the import itself) sees "installed older" and upgrades it back.
+  to Y` and counted in `octo.ck.explicit_import.downgraded` (tag `model`).
 - **No notification after a swallowed `ModelValidationException`** in the `CkModelId` overload any more (the System
   path already returned early): announcing a failed import made every service re-run its tenant setup.
 - **Consequence for a service with an older embedded System:** it runs against the tenant's newer System (runtime
@@ -320,7 +342,7 @@ Basic.Accounting stayed `ResolveFailed` after System went back to the version it
   rejection reads `X-[2.5,3.0): the tenant has no Available version of X (installed: 2.5.0 ResolveFailed)` instead of a catalog wording.
 
 Pinned by `CkModelImportGuard/CkModelImportGuardTests` (real MongoDB, throwaway tenants: same-major and major skip,
-explicit downgrade + upgrade back, same-version short-circuit, embedded vs explicit service-model overloads,
+refused caller downgrade of System + upgrade back of a service-installed older System, same-version short-circuit, embedded vs explicit service-model overloads,
 notification counts and tenant ids, log levels and once-per-process logging, counters, operation-result warnings, the
 deterministic under-lock skip plus a concurrent-import smoke test, a system database with a newer System, the stale
 `ResolveFailed` heal with collection/index restore, the missing-dependency skip without notifications, and the R2-3

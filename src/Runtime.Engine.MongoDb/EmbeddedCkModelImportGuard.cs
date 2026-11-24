@@ -40,8 +40,10 @@ internal sealed record InstalledCkModel(CkModelId ModelId, ModelState ModelState
 ///     deletes every CK model row of the same NAME before it inserts, so an exact-id existence check (the previous
 ///     behaviour) silently reverted an additive System bump within a second of the next tenant resolve.
 ///     <para>
-///         Explicit imports (<c>ImportCk</c> via CLI/API, <c>ITenantContext.ImportCkModelAsync(CkCompiledModelRoot)</c>)
-///         are not guarded: a downgrade stays possible there and is logged WARN (platform-owner decision Q5).
+///         Caller imports (<c>ImportCk</c> via CLI/API, <c>ITenantContext.ImportCkModelAsync(CkCompiledModelRoot)</c>) do not
+///         pass this guard: they refuse every service-managed model (<c>System</c>, <c>System.*</c>) outright with
+///         <c>CK_SERVICE_MANAGED_MODEL</c> (AB#9325), and may downgrade any other model with a WARN (platform-owner
+///         decision Q5). A tenant restore is a separate path (it brings the dump's models).
 ///     </para>
 /// </summary>
 internal static class EmbeddedCkModelImportGuard

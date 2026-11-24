@@ -489,17 +489,26 @@ public interface ITenantContext
     #region Construction Kits
 
     /// <summary>
-    ///     Explicit import of a construction kit model into the tenant (CLI/API <c>ImportCk</c>, bot import
-    ///     command). This method itself is not guarded (the embedded path has its own downgrade guard); the
-    ///     <b>API</b> endpoint judges the file with <see cref="EvaluateExplicitCkImportAsync" /> before it queues the import
-    ///     and refuses a breaking one unless forced (AB#6966). A downgrade is allowed here — the operator's escape
-    ///     hatch — but logged as WARN <c>explicit downgrade from X to Y</c> and counted in
-    ///     <c>octo.ck.explicit_import.downgraded</c> (CK v2 F1.0-S1, AB#5900). Like every import, it ends with the
-    ///     re-validation of all installed models, which returns <c>ResolveFailed</c> models whose dependencies
-    ///     became satisfiable to <c>Available</c> (AB#5901).
+    ///     Caller import of a compiled construction kit model into the tenant (CLI/API <c>ImportCk</c>, catalog imports,
+    ///     the bot's <c>ImportCk</c> / <c>ImportCkBatch</c> jobs - every caller-initiated import ends here).
+    ///     <para>
+    ///         A service-managed model (<see cref="ServiceManagedCkModels.IsServiceManaged" />: <c>System</c>,
+    ///         <c>System.*</c>) is refused in every version, with or without an installed one, before anything is read or
+    ///         written: <see cref="ServiceManagedCkModelImportRefusedException" /> (code <c>CK_SERVICE_MANAGED_MODEL</c>,
+    ///         AB#9325). Service-managed models enter a tenant only through
+    ///         <see cref="ImportCkModelAsync(CkModelId, OperationResult)" /> (embedded/startup and blueprint import).
+    ///     </para>
+    ///     <para>
+    ///         Any other model: this method has no guard of its own; the <b>API</b> endpoint judges the file with
+    ///         <see cref="EvaluateExplicitCkImportAsync" /> before it queues the import and refuses a breaking one unless
+    ///         forced (AB#6966). A downgrade is allowed here - the operator's escape hatch - but logged as WARN
+    ///         <c>explicit downgrade from X to Y</c> and counted in <c>octo.ck.explicit_import.downgraded</c> (CK v2
+    ///         F1.0-S1, AB#5900). Like every import, it ends with the re-validation of all installed models, which returns
+    ///         <c>ResolveFailed</c> models whose dependencies became satisfiable to <c>Available</c> (AB#5901).
+    ///     </para>
     /// </summary>
-    /// <param name="ckCompiledModelRoot"></param>
-    /// <returns></returns>
+    /// <param name="ckCompiledModelRoot">The caller-supplied compiled model.</param>
+    /// <exception cref="ServiceManagedCkModelImportRefusedException">The model is service-managed.</exception>
     Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot);
 
     /// <summary>

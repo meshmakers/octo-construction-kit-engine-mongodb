@@ -1584,6 +1584,15 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     }
 
     /// <summary>
+    ///     The MongoDB pattern that selects the element rows of every version of the model <paramref name="modelName" />
+    ///     (their <c>ckModelId</c> is <c>Name-Version</c>). The name is escaped: it can come from a caller's compiled model,
+    ///     and an unescaped <c>Sy.tem.Identity</c> or <c>.*</c> matched the rows of other models - a caller import of an
+    ///     ordinary model then deleted the element rows of a service-managed one (AB#9325). The version must start with a
+    ///     digit, so the name <c>Foo</c> never selects a model named <c>Foo-Bar</c>.
+    /// </summary>
+    internal static string ModelElementsPattern(string modelName) => $"^{Regex.Escape(modelName)}-[0-9]";
+
+    /// <summary>
     /// This method deletes the previous version of the model.
     /// </summary>
     /// <remarks>
@@ -1608,49 +1617,49 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         }
 
         await mongoDbRepositoryDataSource.CkRecords.DeleteManyAsync(session,
-            Builders<CkRecord>.Filter.Regex(nameof(CkRecord.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
+            Builders<CkRecord>.Filter.Regex(nameof(CkRecord.CkModelId).ToCamelCase(), ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkEnums.DeleteManyAsync(session,
-            Builders<CkEnum>.Filter.Regex(nameof(CkEnum.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
+            Builders<CkEnum>.Filter.Regex(nameof(CkEnum.CkModelId).ToCamelCase(), ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkAttributes.DeleteManyAsync(session,
-            Builders<CkAttribute>.Filter.Regex(nameof(CkAttribute.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
+            Builders<CkAttribute>.Filter.Regex(nameof(CkAttribute.CkModelId).ToCamelCase(), ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkAssociationRoles.DeleteManyAsync(session,
             Builders<CkAssociationRole>.Filter.Regex(nameof(CkAssociationRole.CkModelId).ToCamelCase(),
-                $"^{ckModel.ModelId}-.*$"));
+                ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkTypes.DeleteManyAsync(session,
-            Builders<CkType>.Filter.Regex(nameof(CkType.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
+            Builders<CkType>.Filter.Regex(nameof(CkType.CkModelId).ToCamelCase(), ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkTypeAssociations.DeleteManyAsync(session,
             Builders<CkTypeAssociation>.Filter.Regex(nameof(CkTypeAssociation.CkModelId).ToCamelCase(),
-                $"^{ckModel.ModelId}-.*$"));
+                ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkTypeInheritances.DeleteManyAsync(session,
             Builders<CkTypeInheritance>.Filter.Regex(nameof(CkTypeInheritance.CkModelId).ToCamelCase(),
-                $"^{ckModel.ModelId}-.*$"));
+                ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkRecordInheritances.DeleteManyAsync(session,
             Builders<CkRecordInheritance>.Filter.Regex(nameof(CkRecordInheritance.CkModelId).ToCamelCase(),
-                $"^{ckModel.ModelId}-.*$"));
+                ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         // CK v2 (AB#5667)
         await mongoDbRepositoryDataSource.CkInterfaces.DeleteManyAsync(session,
-            Builders<CkInterface>.Filter.Regex(nameof(CkInterface.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
+            Builders<CkInterface>.Filter.Regex(nameof(CkInterface.CkModelId).ToCamelCase(), ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkTypeInterfaceImplementations.DeleteManyAsync(session,
             Builders<CkTypeInterfaceImplementation>.Filter.Regex(
-                nameof(CkTypeInterfaceImplementation.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
+                nameof(CkTypeInterfaceImplementation.CkModelId).ToCamelCase(), ModelElementsPattern(ckModel.ModelId)));
         CheckCancellation(cancellationToken);
     }
 
@@ -1669,7 +1678,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         // Find all existing extensible enums for this model
         var existingEnums = await mongoDbRepositoryDataSource.CkEnums.FindManyAsync(session,
             Builders<CkEnum>.Filter.And(
-                Builders<CkEnum>.Filter.Regex(nameof(CkEnum.CkModelId).ToCamelCase(), $"^{ckModelId.Name}-.*$"),
+                Builders<CkEnum>.Filter.Regex(nameof(CkEnum.CkModelId).ToCamelCase(), ModelElementsPattern(ckModelId.Name)),
                 Builders<CkEnum>.Filter.Eq(x => x.IsExtensible, true)));
 
         if (existingEnums.Count == 0)
