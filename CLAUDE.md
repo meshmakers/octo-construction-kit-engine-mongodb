@@ -3090,6 +3090,23 @@ the catalog side.
   models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute
   metadata of all states is loaded anyway, and outside an import no `Importing` model exists.
 
+### Index attribute paths resolve against the inheritance chain (AB#9524)
+
+- A stored `CkType` lists only the attributes it assigns itself. `PrepareAndCreateIndex` therefore resolves the paths of
+  an index against the **inheritance chain of the index-defining type** (`IndexAttributePaths.BuildTypeChains`: base
+  chain from `CollectBaseTypesForCollectionRoots`, the root, descendants through `CkTypeInfo.InheritedTypes`), most-base
+  first, so the type's own assignment wins over an inherited one of the same name (`IndexAttributePaths.ProviderFor`).
+  The Secret guard and the Hidden backstop (every type of the collection, each with its chain) use the same providers.
+- **Key-spec invariant:** a path that resolved against the type's own attributes resolves exactly as before; a plain
+  inherited attribute (`Name`) resolves to the very string the fallback built (`attributes.` + camelCase of the written
+  path), so no index is rebuilt. Inherited record paths (`attributes.timeRange.attributes.from` instead of the fallback
+  `attributes.timeRange.From`) and array paths (`attributes.tags`) change the key spec once - the old index pointed at
+  a field that is never stored (decided by Odin 2026-11-24; no shipped model indexes such a path).
+- A path that still does not resolve logs `Could not resolve attribute path ... using fallback` and falls back as
+  before. Known limitation: the merged text index is defined on the collection root and takes fields of descendants;
+  those resolve against the root's chain only. Tests: `IndexAttributePathsTests` (unit, one per abuse case),
+  `InheritedIndexAttributePathTests` (MongoDB, exact key specs and a no-op second update).
+
 ### Hidden Backstop and v1 / Rollback Compatibility (CK v2 F1.3-S4, AB#5917)
 
 - **Hidden is never indexed (review N6).** Unlike Secret, a Hidden attribute is stored in plain text and has no
