@@ -16,6 +16,20 @@
   can then differ from the sequential order, all of them are idempotent guarded upserts, and a retry of the same insert
   converges. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#9524 Fix: the index update resolves index attribute paths against the inheritance chain of the index-defining type
+  (its own attributes and those of its base types, the chain the update already loads; the type's own assignment wins
+  over an inherited one of the same name), not only against the attributes the type assigns itself. An inherited plain
+  attribute such as `Name` (Basic.Energy `EdaProcess`) no longer logs "Could not resolve attribute path ... using
+  fallback" on every index update; its key spec is byte-identical to the fallback (`attributes.` + camelCase), so no
+  index is rebuilt. An inherited record path (`TimeRange.From`) now resolves to the stored path
+  (`attributes.timeRange.attributes.from`) and an inherited array path (`Tags[*]`) to `attributes.tags`; the fallback
+  of before (`attributes.timeRange.From`, `attributes.tags[*]`) pointed at a field that is never stored, so a tenant
+  with a custom model that indexes an inherited record or array path gets a one-time rebuild of that index (no shipped
+  model does: every dotted index path in the monorepo's models is on the type's own attribute). The Secret guard
+  (AB#5533) and the Hidden backstop consider inherited assignments the same way. A path that still does not resolve
+  logs the warning and falls back as before. Known limitation: the merged text index is defined on the collection root
+  and takes fields of descendants; those still resolve against the root's chain and may fall back. Code:
+  `IndexAttributePaths`. Tests: `IndexAttributePathsTests` (unit), `InheritedIndexAttributePathTests` (MongoDB).
 - AB#9302 Fix: a CK import no longer waits for the whole tenant of a running tiebreak index upgrade: the upgrade releases
   the lock between collections and lets a waiting import take it. This reduces contention; it is no bound - the import
   keeps its 90 s wait and can still time out when one collection's builds, or several sections before it gets its turn,
