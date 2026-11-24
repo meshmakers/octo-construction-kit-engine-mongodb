@@ -1,4 +1,5 @@
 using System;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Npgsql;
@@ -71,5 +72,20 @@ public class CrateDbConnectionStringPoolingTests
         var csb = new NpgsqlConnectionStringBuilder(CrateDbConnectionAccess.BuildConnectionString(config));
 
         Assert.True(csb.ConnectionIdleLifetime >= 1);
+    }
+
+    [Fact]
+    public void PoolSizeOverrideBelowTheHostMinimum_KeepsAPoolNpgsqlCanBuild()
+    {
+        var config = NewConfig();
+        config.MinPoolSize = 8;
+        var instance = new StreamDataInstanceConfiguration { MaxPoolSize = 4 };
+
+        var connectionString = CrateDbConnectionAccess.BuildConnectionString(config, instance);
+        var csb = new NpgsqlConnectionStringBuilder(connectionString);
+
+        Assert.Equal(4, csb.MaxPoolSize);
+        Assert.True(csb.MinPoolSize <= csb.MaxPoolSize);
+        using var dataSource = NpgsqlDataSource.Create(connectionString);
     }
 }

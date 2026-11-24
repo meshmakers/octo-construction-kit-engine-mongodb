@@ -27,7 +27,8 @@ public class StreamDataConfiguration
     /// <summary>
     /// Maximum number of physical connections per tenant data source. CrateDB clusters typically
     /// tolerate hundreds of pooled connections; the default is conservative — tune upward when
-    /// stream data writes become a bottleneck.
+    /// stream data writes become a bottleneck. A positive <c>StreamData:MaxPoolSize</c>
+    /// (<c>StreamDataInstanceConfiguration.MaxPoolSize</c>) overrides this value (AB#8875).
     /// </summary>
     public int MaxPoolSize { get; set; } = 32;
 

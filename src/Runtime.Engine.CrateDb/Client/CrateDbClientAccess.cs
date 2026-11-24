@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
 using Microsoft.Extensions.Logging;
@@ -42,11 +43,21 @@ internal interface ICrateDbConnectionAccess : IAsyncDisposable
 /// </remarks>
 internal class CrateDbConnectionAccess(
     IOptions<StreamDataConfiguration> options,
-    ILogger<CrateDbConnectionAccess> logger)
+    ILogger<CrateDbConnectionAccess> logger,
+    IOptions<StreamDataInstanceConfiguration>? instanceOptions = null)
     : ICrateDbConnectionAccess
 {
     private readonly ConcurrentDictionary<string, Lazy<NpgsqlDataSource>> _dataSources = new();
     private int _disposed;
+
+    /// <summary>
+    /// Pool size of a tenant's data source (AB#8875): <c>StreamData:MaxPoolSize</c> of the instance configuration when it is
+    /// positive, otherwise the host's <see cref="StreamDataConfiguration.MaxPoolSize" /> (default 32).
+    /// </summary>
+    internal static int EffectivePoolSize(StreamDataConfiguration config, StreamDataInstanceConfiguration? instance)
+        => instance?.MaxPoolSize is > 0 and var configured ? configured : config.MaxPoolSize;
+
+    internal string ConnectionString => BuildConnectionString(options.Value, instanceOptions?.Value);
 
     public Task<NpgsqlConnection> CreateConnectionAsync(string tenantId, CancellationToken cancellationToken = default)
     {
@@ -74,7 +85,7 @@ internal class CrateDbConnectionAccess(
                 "Building CrateDB datasource '{DatasourceId}' for tenant '{TenantId}' (pooling=true, No Reset On Close=true; " +
                 "max pool {MaxPoolSize}, idle lifetime {IdleLifetimeSeconds}s, prune {PruningSeconds}s, keepalive {KeepaliveSeconds}s)",
                 datasourceId, tenantId,
-                config.MaxPoolSize,
+                Math.Max(1, EffectivePoolSize(config, instanceOptions?.Value)),
                 (int)Math.Max(1, config.ConnectionIdleLifetime.TotalSeconds),
                 (int)Math.Max(1, config.ConnectionPruningInterval.TotalSeconds),
                 (int)Math.Max(0, config.Keepalive.TotalSeconds));
@@ -89,7 +100,7 @@ internal class CrateDbConnectionAccess(
 
         logger.LogDebug("Connection string: {ConnectionString}", config.ConnectionString);
 
-        var connectionString = BuildConnectionString(config);
+        var connectionString = BuildConnectionString(config, instanceOptions?.Value);
 
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
         dataSourceBuilder.EnableDynamicJson([typeof(IReadOnlyDictionary<string, object?>)]);
@@ -141,7 +152,8 @@ internal class CrateDbConnectionAccess(
     /// physical connection per operation, closed on dispose. <c>No Reset On Close</c> stays set
     /// belt-and-braces; the pool-tuning keys are irrelevant when unpooled and are omitted.</para>
     /// </remarks>
-    internal static string BuildConnectionString(StreamDataConfiguration config)
+    internal static string BuildConnectionString(StreamDataConfiguration config,
+        StreamDataInstanceConfiguration? instance = null)
     {
         var idleLifetimeSeconds = (int)Math.Max(1, config.ConnectionIdleLifetime.TotalSeconds);
 
@@ -158,8 +170,8 @@ internal class CrateDbConnectionAccess(
 
         if (config.PoolingEnabled)
         {
-            csb.MaxPoolSize = Math.Max(1, config.MaxPoolSize);
-            csb.MinPoolSize = Math.Max(0, config.MinPoolSize);
+            csb.MaxPoolSize = Math.Max(1, EffectivePoolSize(config, instance));
+            csb.MinPoolSize = Math.Min(Math.Max(0, config.MinPoolSize), csb.MaxPoolSize);
             // Prune idle connections on a tight cadence so a half-closed/broken connection is evicted
             // within ~one interval instead of being handed out and failing on next use.
             csb.ConnectionPruningInterval = (int)Math.Max(1, config.ConnectionPruningInterval.TotalSeconds);

@@ -49,6 +49,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     private readonly ResiliencePipeline _resilience;
     private readonly TimeSpan _interactiveStatementTimeout;
     private readonly TimeSpan _maintenanceStatementTimeout;
+    private readonly int _maxConcurrentInsertStatements;
 
     /// <summary>
     /// Constructor.
@@ -71,6 +72,9 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         _resilience = CrateResiliencePipeline.Build(resilienceOptions.Value, logger);
         _interactiveStatementTimeout = resilienceOptions.Value.PerAttemptTimeout;
         _maintenanceStatementTimeout = recomputeOptions.Value.CommandTimeout;
+        _maxConcurrentInsertStatements = EffectiveMaxConcurrentInsertStatements(
+            instanceConfiguration.Value.MaxConcurrentInsertStatements,
+            CrateDbConnectionAccess.EffectivePoolSize(_configuration, instanceConfiguration.Value));
 
         // AB#4946: configure the process-wide schema instance prefix from the root "StreamData"
         // section (env OCTO_STREAMDATA__SCHEMAINSTANCEPREFIX — uniform across services). The
@@ -320,19 +324,12 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
             // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
             // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
-            for (var offset = 0; offset < group.Indexes.Count; offset += rowsPerStatement)
-            {
-                var end = Math.Min(offset + rowsPerStatement, group.Indexes.Count);
-                var batch = new int[end - offset];
-                for (var i = 0; i < batch.Length; i++)
-                {
-                    batch[i] = group.Indexes[offset + i];
-                }
+            var lanes = PlanInsertStatements(rows, group.Indexes, keyOf, rowsPerStatement, _maxConcurrentInsertStatements);
 
-                // One sub-batch as one statement; rows CrateDB did not write are written once more, then the write
-                // fails (AB#8679, MissingRowRetry).
-                skipped.AddRange(await MissingRowRetry.WriteAsync(batch, guarded, qualifiedTable, ExecuteSubBatchAsync, _logger));
-            }
+            // One sub-batch as one statement; rows CrateDB did not write are written once more, then the write
+            // fails (AB#8679, MissingRowRetry).
+            skipped.AddRange(await InsertStatementLanes.RunAsync(lanes,
+                batch => MissingRowRetry.WriteAsync(batch, guarded, qualifiedTable, ExecuteSubBatchAsync, _logger)));
 
             // Runs one statement over `statementRows` and returns the skipped rows and the missing rows, both as
             // positions in `rows`. For an unguarded statement "missing" is the shortfall of the affected-row count.
@@ -377,6 +374,24 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         return skipped;
     }
+
+    /// <summary>
+    /// Splits the rows of one statement shape into lanes of statements (AB#8875): by row key, with at most
+    /// <paramref name="maxConcurrentInsertStatements" /> lanes.
+    /// </summary>
+    internal static IReadOnlyList<IReadOnlyList<int[]>> PlanInsertStatements<T>(T[] rows, IReadOnlyList<int> indexes,
+        Func<T, string> keyOf, int rowsPerStatement, int maxConcurrentInsertStatements)
+        => InsertStatementLanes.Plan(indexes, i => keyOf(rows[i]), rowsPerStatement, maxConcurrentInsertStatements);
+
+    /// <summary>
+    /// Most sub-batch statements of one insert in flight at once (AB#8875,
+    /// <see cref="StreamDataInstanceConfiguration.MaxConcurrentInsertStatements" />), at least one and at most the tenant's
+    /// pool size.
+    /// </summary>
+    internal static int EffectiveMaxConcurrentInsertStatements(int configured, int maxPoolSize)
+        => Math.Clamp(configured, 1, Math.Max(1, maxPoolSize));
+
+    internal int MaxConcurrentInsertStatements => _maxConcurrentInsertStatements;
 
     /// <inheritdoc />
     public async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(

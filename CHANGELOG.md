@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- AB#8875 Fix: a large raw or time-range archive write no longer runs its 1,000-row statements one after another.
+  `CrateDatabaseClient.InsertGroupedAsync` splits the rows of a statement shape into lanes by row key and runs the lanes at
+  the same time (`InsertStatementLanes`), so two statements in flight never carry the same key and the rows of one key are
+  written in the order they were sent; the conflict guard, the skipped rows (same order) and `MissingRowRetry` per
+  statement are unchanged. **New setting** `StreamData:MaxConcurrentInsertStatements` (`StreamDataInstanceConfiguration`,
+  default 4, not positive = 1, at most the pool size; environment variable `OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS`
+  in the services, which read `OCTO_`-prefixed variables, or `StreamData__MaxConcurrentInsertStatements` in a host without
+  a prefix). **`StreamData:MaxPoolSize` is now read from configuration** (`StreamDataInstanceConfiguration.MaxPoolSize`,
+  environment variable `OCTO_STREAMDATA__MAXPOOLSIZE`): a positive value overrides the pool size the host sets on
+  `StreamDataConfiguration`, otherwise the host's value (default 32) applies, for the tenant's data source
+  (`CrateDbConnectionAccess`) and for the clamp above. Both keys are bound with the `StreamData` section by
+  `AddCrateDbStreamDataRepository`, like `Enabled` and `SchemaInstancePrefix`; `AddStreamDataDatabase` (used by test
+  fixtures) does not bind that section, so there the limit is 4 and the pool the host's. Without the keys nothing changes
+  but the limit of 4. A write of one statement runs as before. On a failed write no new
+  statement starts, the ones in flight finish and the first failure is rethrown unchanged; the set of rows already written
+  can then differ from the sequential order. All of them are idempotent upserts (guarded where the archive has conflict
+  precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
+  conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
+  (real CrateDB, 130,000 guarded rows, both modes compared).
 - AB#9524 Fix: the index update resolves index attribute paths against the inheritance chain of the index-defining type
   (its own attributes and those of its base types, the chain the update already loads; the type's own assignment wins
   over an inherited one of the same name), not only against the attributes the type assigns itself. An inherited plain

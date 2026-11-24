@@ -626,6 +626,7 @@ Rationale:
 - Matches D7 (required violations are exceptions, not silent skips).
 - Pipeline callers see batch success or full failure — no silent partial commits.
 - CrateDB's multi-row insert is not transactionally atomic; pre-validation guarantees no partial commit can come from validation problems. A DB-level failure after pre-validation (e.g. transient connection error) is surfaced as exception; partial server-state is theoretically possible but is treated as an operational issue (see §11 reconciliation, T13 resilience).
+- The statements of one write run up to `StreamData:MaxConcurrentInsertStatements` (default 4, bound with the instance settings of the `StreamData` section; environment variable `OCTO_STREAMDATA__MAXCONCURRENTINSERTSTATEMENTS` in the services, `StreamData__MaxConcurrentInsertStatements` in a host without the `OCTO_` prefix) at a time, split by row key (AB#8875): on a failed write the set of rows already written can differ from the sequential order. All of them are idempotent upserts (guarded where the archive has conflict precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile.
 
 Future extension (not in this iteration): `BulkInsertOptions { ContinueOnError: bool }` to opt into best-effort mode that returns `{ successCount, errors[] }` instead of throwing.
 

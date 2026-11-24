@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration.DependencyInjection;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Extensions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
