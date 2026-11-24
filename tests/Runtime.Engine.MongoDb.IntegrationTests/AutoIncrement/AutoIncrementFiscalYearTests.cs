@@ -3,6 +3,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Exchange;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
@@ -147,6 +148,40 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
             var counter = (await FindDocumentAsync(database, counterId))["attributes"].AsBsonDocument;
             Assert.Equal(43, counter["currentValue"].ToInt64());
             Assert.False(counter.Contains("periods"));
+        });
+    }
+
+    /// <summary>
+    ///     AB#9757: the seed example of the octo-documentation page "Number ranges" (a fiscal-year invoice range,
+    ///     <c>testData/numberRangeDocs/fiscal-year-invoice-range.yaml</c>, a byte-identical copy of the page's YAML block)
+    ///     imports with ImportRt on the embedded System and numbers as the page says: <c>RE-2026-00001</c>,
+    ///     <c>RE-2026-00002</c>, and <c>RE-2027-00001</c> after 1 January in Vienna time.
+    /// </summary>
+    [Fact]
+    public async Task DocumentationSeedExample_Imports_AndNumbersPerFiscalYear()
+    {
+        await WithTenantAsync("fydocs", async (dataSource, database) =>
+        {
+            var repository = await GetRepositoryAsync(dataSource.TenantId);
+            await ImportRtAsync(repository, Path.Combine("testData", "numberRangeDocs", "fiscal-year-invoice-range.yaml"));
+            var counterId = new OctoObjectId("6750a1c2e4b0f1a2b3c4d5e6");
+            var counter = await ReadCounterAsync(dataSource, counterId);
+            Assert.Equal(RtAutoIncrementPeriodKindsEnum.FiscalYear, counter.PeriodKind);
+            Assert.Equal(Vienna, counter.ReferenceTimeZone);
+
+            var clock = new FakeClock(At("2026-12-31T10:00:00+01:00"));
+            var modifier = NewModifier(clock);
+            var first = Invoice();
+            var second = Invoice();
+            await RunAsync(modifier, dataSource, first, second);
+            clock.Now = At("2027-01-01T00:30:00+01:00");
+            var newYear = Invoice();
+            await RunAsync(modifier, dataSource, newYear);
+
+            Assert.Equal(["RE-2026-00001", "RE-2026-00002", "RE-2027-00001"],
+                new[] { first, second, newYear }.Select(Number));
+            Assert.Equal(new Dictionary<int, long> { { 2026, 2 }, { 2027, 1 } },
+                await PeriodsAsync(database, counterId));
         });
     }
 
@@ -464,6 +499,12 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
         var counter = await repository.GetRtEntityByRtIdAsync<RtAutoIncrement>(session, counterId);
         Assert.NotNull(counter);
         return counter;
+    }
+
+    private async Task ImportRtAsync(ITenantRepository repository, string file)
+    {
+        await fixture.GetService<IImportRtModelCommand>().ImportAsync(repository, file,
+            ExchangeMimeTypes.MimeTypeYaml, ImportStrategy.Upsert);
     }
 
     private static async Task ApplyAsync(ITenantRepository repository, params IEntityUpdateInfo<RtEntity>[] updates)

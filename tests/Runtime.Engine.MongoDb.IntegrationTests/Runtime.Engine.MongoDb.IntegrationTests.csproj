@@ -73,6 +73,11 @@
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
           <Pack>false</Pack>
         </Content>
+        <!-- AB#9757: copy of the seed example of the octo-documentation page "Number ranges". -->
+        <Content Include="testData\numberRangeDocs\*.yaml">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+          <Pack>false</Pack>
+        </Content>
         <Content Include="TestBlueprints/**/*.yaml">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
           <Pack>false</Pack>
