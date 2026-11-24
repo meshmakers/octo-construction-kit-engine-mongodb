@@ -1009,6 +1009,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var collectionTypes = baseTypes.Cast<CkType>().Append(collectionRootType)
             .Concat(collectionRootType.Inheritances).DistinctBy(t => t.CkTypeId).ToList();
 
+        // AB#9524: index attribute paths resolve against the inheritance chain of their defining type.
+        var typeChains = IndexAttributePaths.BuildTypeChains(baseTypes, collectionRootType);
+
         // Begin tracking index operations
         _indexStateService.BeginTracking(collection.CollectionName, collectionTypes.Select(t => t.CkTypeId));
 
@@ -1088,7 +1091,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     lockLostToken.ThrowIfCancellationRequested();
                     await PrepareAndCreateIndex(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
                         uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes,
-                        upgradeTiebreakIndexes, keySpecs);
+                        upgradeTiebreakIndexes, keySpecs, typeChains);
                     uniqueIndexNumber++;
                 }
 
@@ -1100,7 +1103,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                         lockLostToken.ThrowIfCancellationRequested();
                         await PrepareAndCreateIndex(keyValuePair.Key, textIndex, repositoryIndices, collection,
                             uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes,
-                            upgradeTiebreakIndexes, keySpecs);
+                            upgradeTiebreakIndexes, keySpecs, typeChains);
                     }
                     else
                     {
@@ -1261,6 +1264,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <param name="uniqueIndexNumber">Unique number for index naming</param>
     /// <param name="collectionRootType">Optional collection root type info</param>
     /// <param name="keySpecs">The indexes kept or built in this collection run (AB#9342)</param>
+    /// <param name="typeChains">The inheritance chain of every type of the collection (AB#9524)</param>
     private async Task PrepareAndCreateIndex(CkType indexDefiningType, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
@@ -1268,7 +1272,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute>? allCkAttributes = null,
         IReadOnlyDictionary<CkId<CkRecordId>, CkRecord>? allCkRecords = null,
         IReadOnlyCollection<CkType>? collectionTypes = null, bool upgradeTiebreakIndexes = false,
-        SharedIndexKeySpecs? keySpecs = null)
+        SharedIndexKeySpecs? keySpecs = null,
+        IReadOnlyDictionary<CkId<CkTypeId>, IReadOnlyList<CkType>>? typeChains = null)
     {
         if (ckTypeIndex.IndexType == IndexTypes.None)
         {
@@ -1296,13 +1301,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // e.g. "TimeRange.From" → "attributes.timeRange.attributes.from"
         if (allCkAttributes != null && allCkRecords != null)
         {
-            var metadataProvider = new DatabaseAttributeMetadataProvider(
-                indexDefiningType.Attributes, allCkAttributes, allCkRecords, isRecordContext: false);
-            // Review M-M1: the Hidden backstop looks at every type of the collection (see UpdateIndexesForCollectionRoot).
+            // AB#9524: resolve against the inheritance chain of the defining type (its own attributes and those of its
+            // base types; its own assignment wins), not only the attributes the type assigns itself.
+            var metadataProvider = IndexAttributePaths.ProviderFor(
+                IndexAttributePaths.ChainOf(indexDefiningType, typeChains), allCkAttributes, allCkRecords);
+            // Review M-M1: the Hidden backstop looks at every type of the collection (see UpdateIndexesForCollectionRoot),
+            // each with its inheritance chain (AB#9524).
             var hiddenProviders = (collectionTypes ?? [indexDefiningType])
                 .Append(indexDefiningType)
-                .Select(t => new DatabaseAttributeMetadataProvider(t.Attributes, allCkAttributes, allCkRecords,
-                    isRecordContext: false))
+                .Select(t => IndexAttributePaths.ProviderFor(IndexAttributePaths.ChainOf(t, typeChains),
+                    allCkAttributes, allCkRecords))
                 .ToList();
 
             foreach (var fields in localIndex.Fields)
@@ -1310,48 +1318,24 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 // AB#5533: never index a Secret attribute (incl. text indexes). The CK compiler
                 // already rejects it (message 70-77); a model compiled by an older compiler is
                 // guarded here - the field is skipped with a warning instead of indexing ciphertext.
-                fields.AttributeNames = MongoDbAttributePathResolver.WithoutSecretAttributePaths(
-                    fields.AttributeNames, metadataProvider,
+                // CK v2 F1.3-S4 (review N6): never index a Hidden attribute either. Unlike Secret, Hidden has
+                // no runtime backstop (the value is stored in plain text); a unique index would reveal values
+                // through duplicate-key errors, a text index through search hits. The compiler rejects it
+                // (message 106); this guards hand-edited or older compiled models and the case-insensitive
+                // match the database applies to field names.
+                fields.AttributeNames = IndexAttributePaths.ResolveFields(fields.AttributeNames, metadataProvider,
+                    hiddenProviders,
                     name => _logger.LogWarning(
                         "Skipping Secret attribute '{AttributePath}' in a {IndexType} index on type '{CkTypeId}': " +
                         "Secret attributes are never indexed",
-                        name, localIndex.IndexType, indexDefiningType.CkTypeId))
-                    // CK v2 F1.3-S4 (review N6): never index a Hidden attribute either. Unlike Secret, Hidden has
-                    // no runtime backstop (the value is stored in plain text); a unique index would reveal values
-                    // through duplicate-key errors, a text index through search hits. The compiler rejects it
-                    // (message 106); this guards hand-edited or older compiled models and the case-insensitive
-                    // match the database applies to field names.
-                    .Where(name =>
-                    {
-                        if (Constants.IsSystemAttribute(name) ||
-                            !hiddenProviders.Any(provider => provider.ReachesHiddenAttribute(name)))
-                        {
-                            return true;
-                        }
-
-                        _logger.LogError(
-                            "Skipping Hidden attribute '{AttributePath}' in a {IndexType} index on type '{CkTypeId}': " +
-                            "Hidden attributes are never indexed (a type stored in the same collection assigns it Hidden)",
-                            name, localIndex.IndexType, indexDefiningType.CkTypeId);
-                        return false;
-                    }).Select(name =>
-                {
-                    if (Constants.IsSystemAttribute(name))
-                    {
-                        return name;
-                    }
-
-                    var resolved = MongoDbAttributePathResolver.ResolveToMongoDbFieldPath(name, metadataProvider);
-                    if (resolved != null)
-                    {
-                        return resolved;
-                    }
-
-                    _logger.LogWarning(
+                        name, localIndex.IndexType, indexDefiningType.CkTypeId),
+                    name => _logger.LogError(
+                        "Skipping Hidden attribute '{AttributePath}' in a {IndexType} index on type '{CkTypeId}': " +
+                        "Hidden attributes are never indexed (a type stored in the same collection assigns it Hidden)",
+                        name, localIndex.IndexType, indexDefiningType.CkTypeId),
+                    name => _logger.LogWarning(
                         "Could not resolve attribute path '{AttributePath}' for index on type '{CkTypeId}', using fallback",
-                        name, indexDefiningType.CkTypeId);
-                    return Constants.AttributesName + Constants.PathSeparator + name.ToCamelCase();
-                }).ToList();
+                        name, indexDefiningType.CkTypeId));
             }
         }
 
