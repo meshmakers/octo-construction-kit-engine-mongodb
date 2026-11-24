@@ -21,6 +21,23 @@
   precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
   conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#9754 New: number ranges per document type and fiscal year with format tokens (System 2.9.0). A
+  `System/AutoIncrement` with `PeriodKind = FiscalYear` keeps one counter per fiscal year in `Periods` and restarts at
+  `StartValue` (or 1) when a fiscal year starts. The fiscal year is taken from the creation time of each entity (an
+  injected `TimeProvider`, read per entity, so a batch across the year boundary numbers each entity in its own year)
+  read in the range's IANA `ReferenceTimeZone`, with `FiscalYearStartMonth` (1-12, default 1); it is named by the
+  calendar year in which it starts. Allocation stays atomic: one `$inc` on the year's entry per counter, year and
+  batch, bounded by `End`; the first number of a new year adds the entry with its block in one conditional update
+  that matches only while the year is missing, so parallel writers never create it twice. `Format` knows the tokens
+  `{yyyy}`, `{yy}` (fiscal year) and `{counter}` / `{counter:D<n>}` with literal text around them
+  (`RE-{yyyy}-{counter:D5}`); every other format is passed to `string.Format` exactly as before, and a range without a
+  period numbers exactly as before (same single statement, no read). A range whose configuration is not valid is
+  refused with `AutoIncrementFailedException` (`InvalidNumberRange`) when it is inserted or replaced (new
+  `AutoIncrementRangeValidator`) and again before numbers are taken from it: `FiscalYear` without a known IANA zone
+  (no UTC default; Windows ids refused), a start month outside 1-12, a token format that does not parse, or
+  `{yyyy}`/`{yy}` without `FiscalYear`. Tests: `AutoIncrementFiscalYearTests` (MongoDB, fake clock: restart on
+  1 January and 1 July, two types, legacy `{0:D4}`, batch across midnight, 20 parallel creations across the boundary
+  with and without transactions, configuration refusals) and `AutoIncrementNumberFormatTests`.
 - AB#9753 New: `AutoIncrementModifier` allocates numbers atomically. Before, it read the counters once per batch,
   incremented `CurrentValue` in memory and replaced the whole counter entity, so two parallel writers outside a
   transaction could get the same number. Now one `findOneAndUpdate` with `$inc` per counter and batch takes a block of

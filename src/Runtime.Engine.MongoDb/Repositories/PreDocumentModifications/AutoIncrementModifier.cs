@@ -12,6 +12,8 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Microsoft.Extensions.Logging;
 
 using MongoDB.Bson;
+using MongoDB.Bson.IO;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
@@ -35,24 +37,43 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 ///         handed out in batch order (the entity rule engine keeps the order of the input).
 ///     </para>
 ///     <para>
-///         Transactions: the <c>$inc</c> runs in the caller's session. Inside a transaction it is part of it, so an
+///         Fiscal-year ranges (AB#9754, <c>PeriodKind = FiscalYear</c>): every entity's fiscal year is taken from its
+///         creation time (the injected clock) read in the range's <c>ReferenceTimeZone</c>, and the counter of that
+///         year in <c>Periods</c> is advanced - one atomic statement per counter, fiscal year and batch, so a batch
+///         that spans the start of a fiscal year gives each entity the number of its own year. The first number of a
+///         new fiscal year adds its period entry in the same atomic statement (a conditional update that matches only
+///         while the year is missing), so two writers can never both create it; the loser of that race takes its
+///         numbers from the entry the winner created. A range without periods (legacy) numbers exactly as before,
+///         with one statement and no read.
+///     </para>
+///     <para>
+///         Transactions: the statements run in the caller's session. Inside a transaction they are part of it, so an
 ///         abort rolls the counter back together with the entities. A concurrent writer of the same counter makes the
 ///         server abort the transaction with the label <c>TransientTransactionError</c>; that exception is passed on
-///         unchanged, because only the owner of the transaction can retry it (the whole transaction). Outside a
-///         transaction the <c>$inc</c> is retried here (bounded) on that label or a write conflict; it is committed at
+///         unchanged, because only the owner of the transaction can retry it (the whole transaction, with the entities
+///         built again from the input: the modifier writes the rolled-back number into the entity object). Outside a
+///         transaction every statement is retried here (bounded) on that label or a write conflict; it is committed at
 ///         once, so a later failure of the write leaves a gap in the numbers.
 ///     </para>
 /// </summary>
 public class AutoIncrementModifier(
     ICkCacheService ckCacheService,
-    ILogger<AutoIncrementModifier> logger)
+    ILogger<AutoIncrementModifier> logger,
+    TimeProvider? timeProvider = null)
     : IPreDocumentModification<RtEntity>
 {
-    /// <summary>Attempts of one allocation outside a transaction (the first one included).</summary>
+    /// <summary>Attempts of one allocation statement outside a transaction (the first one included).</summary>
     internal const int MaxAllocationAttempts = 3;
 
     private const string CurrentValueField = "attributes.currentValue";
     private const string EndField = "attributes.end";
+    private const string PeriodKindField = "attributes.periodKind";
+    private const string PeriodsField = "attributes.periods";
+    private const string PeriodFiscalYearMember = "attributes.fiscalYear";
+    private const string PeriodCurrentValueMember = "attributes.currentValue";
+    private const string PeriodIdentifier = "p";
+
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     /// <summary>Test seam (AB#9753): runs before every allocation attempt, e.g. to inject a transient error.</summary>
     internal Func<Task>? BeforeAllocationAttemptAsync { get; init; }
@@ -132,7 +153,10 @@ public class AutoIncrementModifier(
                     continue;
                 }
 
-                requests.Add(new NumberRequest(rtEntity, ckTypeAttributeGraph, reference, autoIncrementType.CkTypeId));
+                // The creation time of this entity decides its fiscal year (AB#9754); read per entity, so a batch
+                // that runs across the start of a fiscal year numbers each entity in its own year.
+                requests.Add(new NumberRequest(rtEntity, ckTypeAttributeGraph, reference, autoIncrementType.CkTypeId,
+                    _timeProvider.GetUtcNow()));
             }
         }
 
@@ -152,24 +176,7 @@ public class AutoIncrementModifier(
 
         foreach (var counterRequests in requests.GroupBy(r => r.Reference))
         {
-            var block = counterRequests.ToList();
-            var (counter, firstNumber) = await AllocateAsync(session, autoIncrementCollection, counterRequests.Key,
-                block.Count, block[0].CkTypeId);
-
-            for (var i = 0; i < block.Count; i++)
-            {
-                var attribute = block[i].Attribute;
-                var value = firstNumber + i;
-                if (!string.IsNullOrEmpty(counter.Format) && attribute.ValueType == AttributeValueTypesDto.String)
-                {
-                    block[i].Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType,
-                        string.Format(counter.Format, value));
-                }
-                else
-                {
-                    block[i].Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType, value);
-                }
-            }
+            await NumberAsync(session, autoIncrementCollection, counterRequests.Key, counterRequests.ToList());
         }
     }
 
@@ -181,22 +188,105 @@ public class AutoIncrementModifier(
             _ => true
         };
 
-    /// <summary>
-    ///     Takes <paramref name="count" /> consecutive numbers from the counter <paramref name="reference" /> with one
-    ///     <c>findOneAndUpdate</c>: <c>$inc</c> by <paramref name="count" />, filtered on
-    ///     <c>currentValue + count &lt;= end</c>. Returns the counter after the increment and the first number of the
-    ///     block.
-    /// </summary>
-    private async Task<(RtAutoIncrement Counter, long FirstNumber)> AllocateAsync(IOctoSession session,
-        IDataSourceCollection<OctoObjectId, RtAutoIncrement> autoIncrementCollection, string reference, int count,
-        RtCkId<CkTypeId> requestingCkTypeId)
+    /// <summary>Allocates and writes the numbers of all <paramref name="block" /> requests of one counter.</summary>
+    private async Task NumberAsync(IOctoSession session,
+        IDataSourceCollection<OctoObjectId, RtAutoIncrement> autoIncrementCollection, string reference,
+        IReadOnlyList<NumberRequest> block)
     {
         var mongoCollection = ((IMongoDbDataSourceCollection<OctoObjectId, RtAutoIncrement>)autoIncrementCollection)
             .GetMongoCollection();
-        var octoSession = (IOctoSessionInternal)session;
+        var requestingCkTypeId = block[0].CkTypeId;
 
+        // A range without periods: exactly the AB#9753 statement, no read.
+        var counter = await AllocateWithoutPeriodsAsync(session, mongoCollection, reference, block.Count);
+        if (counter != null)
+        {
+            var settings = GetValidSettings(counter, reference);
+            var firstNumber = ToLong(counter.CurrentValue) - block.Count + 1;
+            for (var i = 0; i < block.Count; i++)
+            {
+                Assign(block[i], settings, firstNumber + i, null);
+            }
+
+            return;
+        }
+
+        // Nothing matched: there is no such counter, it cannot take the block without passing End, or it is a
+        // fiscal-year range. Read it once to tell which.
+        var stored = await FindCounterAsync(session, autoIncrementCollection, reference);
+        if (stored == null)
+        {
+            throw InvalidAttributeException.AutoIncrementReferenceNotFound(requestingCkTypeId, reference);
+        }
+
+        var storedSettings = GetValidSettings(stored, reference);
+        if (!storedSettings.HasFiscalYearPeriods)
+        {
+            throw AutoIncrementFailedException.AutoIncrementEndReached(stored.RtId, reference,
+                ToLong(stored.CurrentValue), ToLong(stored.End), block.Count);
+        }
+
+        // One statement per fiscal year of the batch; the requests of a year keep their batch order.
+        foreach (var yearRequests in block.GroupBy(r => storedSettings.FiscalYearOf(r.CreatedAt)))
+        {
+            var yearBlock = yearRequests.ToList();
+            var firstNumber = await AllocateInPeriodAsync(session, autoIncrementCollection, mongoCollection, stored.RtId,
+                reference, yearRequests.Key, yearBlock.Count, storedSettings.FirstNumberOfAPeriod,
+                requestingCkTypeId);
+            for (var i = 0; i < yearBlock.Count; i++)
+            {
+                Assign(yearBlock[i], storedSettings, firstNumber + i, yearRequests.Key);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Writes number <paramref name="value" /> into the entity: formatted for a String attribute of a range with a
+    ///     format, else the plain number (as before System 2.9.0).
+    /// </summary>
+    private static void Assign(NumberRequest request, AutoIncrementRangeSettings settings, long value, int? fiscalYear)
+    {
+        var attribute = request.Attribute;
+        if (settings.Format.IsSet && attribute.ValueType == AttributeValueTypesDto.String)
+        {
+            request.Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType,
+                settings.Format.Format(value, fiscalYear));
+        }
+        else
+        {
+            request.Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType, value);
+        }
+    }
+
+    private static AutoIncrementRangeSettings GetValidSettings(RtAutoIncrement counter, string reference)
+    {
+        if (!AutoIncrementRangeSettings.TryCreate(counter, out var settings, out var error))
+        {
+            throw AutoIncrementFailedException.InvalidNumberRange(counter.RtId, reference, error!);
+        }
+
+        return settings;
+    }
+
+    private static async Task<RtAutoIncrement?> FindCounterAsync(IOctoSession session,
+        IDataSourceCollection<OctoObjectId, RtAutoIncrement> autoIncrementCollection, string reference)
+    {
+        var existing = await autoIncrementCollection.FindManyAsync(session, c => c.RtWellKnownName == reference);
+        return existing.FirstOrDefault();
+    }
+
+    /// <summary>
+    ///     Takes <paramref name="count" /> consecutive numbers from the counter <paramref name="reference" /> with one
+    ///     <c>findOneAndUpdate</c>: <c>$inc</c> by <paramref name="count" />, filtered on
+    ///     <c>currentValue + count &lt;= end</c> and on a range without fiscal-year periods. Returns the counter after
+    ///     the increment, or null when nothing matched.
+    /// </summary>
+    private Task<RtAutoIncrement?> AllocateWithoutPeriodsAsync(IOctoSession session,
+        IMongoCollection<RtAutoIncrement> mongoCollection, string reference, int count)
+    {
         var filter = Builders<RtAutoIncrement>.Filter.And(
             Builders<RtAutoIncrement>.Filter.Eq(c => c.RtWellKnownName, reference),
+            new BsonDocument(PeriodKindField, new BsonDocument("$ne", AutoIncrementRangeSettings.PeriodKindFiscalYear)),
             new BsonDocument("$expr", new BsonDocument("$lte", new BsonArray
             {
                 new BsonDocument("$add", new BsonArray { "$" + CurrentValueField, count }),
@@ -205,7 +295,134 @@ public class AutoIncrementModifier(
         var update = Builders<RtAutoIncrement>.Update.Inc(CurrentValueField, (long)count);
         var options = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
 
-        RtAutoIncrement? counter;
+        return ExecuteAsync<RtAutoIncrement?>(session, reference, count, async sessionHandle =>
+            await mongoCollection.FindOneAndUpdateAsync(sessionHandle, filter, update, options));
+    }
+
+    /// <summary>
+    ///     Takes <paramref name="count" /> consecutive numbers from the period <paramref name="fiscalYear" /> of the
+    ///     fiscal-year range <paramref name="counterRtId" /> and returns the first of them. The period counter is advanced
+    ///     with one <c>$inc</c> on <c>Periods.$[p].CurrentValue</c>; a missing period is added together with its first
+    ///     block by one conditional update that matches only while no entry of that year exists. When a parallel
+    ///     writer added it first, the increment runs again on the entry it added. <c>End</c> bounds every period.
+    /// </summary>
+    private async Task<long> AllocateInPeriodAsync(IOctoSession session,
+        IDataSourceCollection<OctoObjectId, RtAutoIncrement> autoIncrementCollection,
+        IMongoCollection<RtAutoIncrement> mongoCollection, OctoObjectId counterRtId, string reference, int fiscalYear,
+        int count, long firstNumberOfAPeriod, RtCkId<CkTypeId> requestingCkTypeId)
+    {
+        var counterFilter = Builders<RtAutoIncrement>.Filter.And(
+            Builders<RtAutoIncrement>.Filter.Eq(c => c.RtId, counterRtId),
+            new BsonDocument(PeriodKindField, AutoIncrementRangeSettings.PeriodKindFiscalYear));
+
+        // 1. The period exists and can take the block.
+        var incrementFilter = Builders<RtAutoIncrement>.Filter.And(counterFilter,
+            new BsonDocument("$expr", new BsonDocument("$anyElementTrue", new BsonArray
+            {
+                new BsonDocument("$map", new BsonDocument
+                {
+                    { "input", new BsonDocument("$ifNull", new BsonArray { "$" + PeriodsField, new BsonArray() }) },
+                    { "as", PeriodIdentifier },
+                    {
+                        "in", new BsonDocument("$and", new BsonArray
+                        {
+                            new BsonDocument("$eq", new BsonArray
+                                { $"$${PeriodIdentifier}.{PeriodFiscalYearMember}", fiscalYear }),
+                            new BsonDocument("$lte", new BsonArray
+                            {
+                                new BsonDocument("$add", new BsonArray
+                                    { $"$${PeriodIdentifier}.{PeriodCurrentValueMember}", count }),
+                                "$" + EndField
+                            })
+                        })
+                    }
+                })
+            })));
+        var increment = Builders<RtAutoIncrement>.Update.Inc(
+            $"{PeriodsField}.$[{PeriodIdentifier}].{PeriodCurrentValueMember}", (long)count);
+        var incrementOptions = new FindOneAndUpdateOptions<RtAutoIncrement>
+        {
+            ReturnDocument = ReturnDocument.After,
+            ArrayFilters =
+            [
+                new BsonDocumentArrayFilterDefinition<BsonDocument>(
+                    new BsonDocument($"{PeriodIdentifier}.{PeriodFiscalYearMember}", fiscalYear))
+            ]
+        };
+
+        // 2. The period does not exist yet: add it with its first block, only while it is missing.
+        var lastNumberOfTheBlock = firstNumberOfAPeriod + count - 1;
+        var createFilter = Builders<RtAutoIncrement>.Filter.And(counterFilter,
+            new BsonDocument($"{PeriodsField}.{PeriodFiscalYearMember}", new BsonDocument("$ne", fiscalYear)),
+            new BsonDocument("$expr", new BsonDocument("$lte", new BsonArray
+                { lastNumberOfTheBlock, "$" + EndField })));
+        var newPeriod = NewPeriodDocument(fiscalYear, lastNumberOfTheBlock);
+        var create = Builders<RtAutoIncrement>.Update.Pipeline(new BsonDocument[]
+        {
+            new("$set", new BsonDocument(PeriodsField, new BsonDocument("$concatArrays", new BsonArray
+            {
+                new BsonDocument("$ifNull", new BsonArray { "$" + PeriodsField, new BsonArray() }),
+                new BsonArray { new BsonDocument("$literal", newPeriod) }
+            })))
+        });
+        var createOptions = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
+
+        for (var round = 1; round <= 2; round++)
+        {
+            var incremented = await ExecuteAsync<RtAutoIncrement?>(session, reference, count, async sessionHandle =>
+                await mongoCollection.FindOneAndUpdateAsync(sessionHandle, incrementFilter, increment, incrementOptions));
+            if (incremented != null)
+            {
+                return PeriodCurrentValue(incremented, fiscalYear) - count + 1;
+            }
+
+            if (round == 2)
+            {
+                break;
+            }
+
+            var created = await ExecuteAsync<RtAutoIncrement?>(session, reference, count, async sessionHandle =>
+                await mongoCollection.FindOneAndUpdateAsync(sessionHandle, createFilter, create, createOptions));
+            if (created != null)
+            {
+                return firstNumberOfAPeriod;
+            }
+
+            // Not created: a parallel writer added the year first, or the block passes End. Increment again.
+        }
+
+        // Neither matched: tell the caller why.
+        var stored = await FindCounterAsync(session, autoIncrementCollection, reference);
+        if (stored == null)
+        {
+            throw InvalidAttributeException.AutoIncrementReferenceNotFound(requestingCkTypeId, reference);
+        }
+
+        if (!AutoIncrementRangeSettings.TryCreate(stored, out var settings, out var error))
+        {
+            throw AutoIncrementFailedException.InvalidNumberRange(stored.RtId, reference, error!);
+        }
+
+        if (!settings.HasFiscalYearPeriods)
+        {
+            throw AutoIncrementFailedException.InvalidNumberRange(stored.RtId, reference,
+                "PeriodKind was changed while numbers were allocated; write again.");
+        }
+
+        var current = TryGetPeriodCurrentValue(stored, fiscalYear) ?? firstNumberOfAPeriod - 1;
+        throw AutoIncrementFailedException.AutoIncrementEndReached(stored.RtId, reference, fiscalYear, current,
+            ToLong(stored.End), count);
+    }
+
+    /// <summary>
+    ///     Runs one allocation statement. Outside a transaction a failed statement did not apply, so it is retried
+    ///     (bounded) on a transient error and hands out its block once. Inside a transaction the server has aborted it:
+    ///     the exception goes to the owner unchanged.
+    /// </summary>
+    private async Task<TResult> ExecuteAsync<TResult>(IOctoSession session, string reference, int count,
+        Func<IClientSessionHandle, Task<TResult>> statement)
+    {
+        var octoSession = (IOctoSessionInternal)session;
         for (var attempt = 1;; attempt++)
         {
             try
@@ -215,38 +432,49 @@ public class AutoIncrementModifier(
                     await BeforeAllocationAttemptAsync();
                 }
 
-                counter = await mongoCollection.FindOneAndUpdateAsync(octoSession.SessionHandle, filter, update,
-                    options);
-                break;
+                return await statement(octoSession.SessionHandle);
             }
             catch (Exception ex) when (!octoSession.IsTransactionActive && attempt < MaxAllocationAttempts &&
                                        RepositoryDistributedLockService.IsTransientTransactionError(ex))
             {
-                // Outside a transaction the failed $inc did not apply, so retrying it hands out the block once.
-                // Inside a transaction the server has aborted it: the exception goes to the owner unchanged.
                 logger.LogWarning(
                     "Transient error while allocating {Count} number(s) from counter {Reference} (attempt {Attempt}/{MaxAttempts}), retrying",
                     count, reference, attempt, MaxAllocationAttempts);
                 await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt));
             }
         }
-
-        if (counter != null)
-        {
-            return (counter, counter.CurrentValue - count + 1);
-        }
-
-        // Nothing matched: either there is no such counter, or it cannot take the block without passing End.
-        var existing = await autoIncrementCollection.FindManyAsync(session, c => c.RtWellKnownName == reference);
-        var stored = existing.FirstOrDefault();
-        if (stored == null)
-        {
-            throw InvalidAttributeException.AutoIncrementReferenceNotFound(requestingCkTypeId, reference);
-        }
-
-        throw AutoIncrementFailedException.AutoIncrementEndReached(stored.RtId, reference, stored.CurrentValue,
-            stored.End, count);
     }
+
+    /// <summary>
+    ///     The stored shape of a <c>System/AutoIncrementPeriod</c> record, written by the repository's own serializer
+    ///     (<c>{ ckRecordId, attributes: { fiscalYear, currentValue } }</c>), so the counter reads back as written.
+    /// </summary>
+    private static BsonDocument NewPeriodDocument(int fiscalYear, long currentValue)
+    {
+        var period = new RtAutoIncrementPeriodRecord();
+        period.SetAttributeValue(nameof(RtAutoIncrementPeriodRecord.FiscalYear), AttributeValueTypesDto.Int,
+            fiscalYear);
+        period.SetAttributeValue(nameof(RtAutoIncrementPeriodRecord.CurrentValue), AttributeValueTypesDto.Int,
+            currentValue);
+
+        var document = new BsonDocument();
+        using var writer = new BsonDocumentWriter(document);
+        BsonSerializer.LookupSerializer<RtRecord>().Serialize(BsonSerializationContext.CreateRoot(writer), period);
+        return document;
+    }
+
+    private static long PeriodCurrentValue(RtAutoIncrement counter, int fiscalYear) =>
+        TryGetPeriodCurrentValue(counter, fiscalYear) ??
+        throw new InvalidOperationException(
+            $"Counter '{counter.RtId}' has no period {fiscalYear} after it was incremented.");
+
+    private static long? TryGetPeriodCurrentValue(RtAutoIncrement counter, int fiscalYear)
+    {
+        var period = counter.Periods?.FirstOrDefault(p => ToLong(p.FiscalYear) == fiscalYear);
+        return period == null ? null : ToLong(period.CurrentValue);
+    }
+
+    private static long ToLong(object? value) => Convert.ToInt64(value ?? 0L);
 
     private sealed record AutoIncrementType(
         RtCkId<CkTypeId> CkTypeId,
@@ -257,5 +485,6 @@ public class AutoIncrementModifier(
         RtEntity Entity,
         CkTypeAttributeGraph Attribute,
         string Reference,
-        RtCkId<CkTypeId> CkTypeId);
+        RtCkId<CkTypeId> CkTypeId,
+        DateTimeOffset CreatedAt);
 }
