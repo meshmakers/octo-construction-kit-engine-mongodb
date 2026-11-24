@@ -256,7 +256,8 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
 
     /// <summary>
     ///     One batch with five Tickets (and Notes in between) is numbered n+1 .. n+5 in batch order, with exactly one
-    ///     operation on the counter: a findAndModify with <c>$inc</c> by 5 - no read, no update and no replace.
+    ///     operation on the counter: a findAndModify that adds 5 (since AB#9755 a pipeline update with the
+    ///     <c>StartValue</c> floor) - no read, no separate update and no replace.
     /// </summary>
     [Fact]
     public async Task Batch_IsNumberedInBatchOrder_WithOneFindAndModifyAndNoReplace()
@@ -284,8 +285,16 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
             var counterOperations = profiled.Where(IsCounterOperation).ToList();
             var findAndModify = Assert.Single(counterOperations);
             Assert.True(IsCounterFindAndModify(findAndModify), findAndModify.ToJson());
-            var update = findAndModify["command"]["update"].AsBsonDocument;
-            Assert.Equal(new BsonDocument("$inc", new BsonDocument("attributes.currentValue", 5L)), update);
+            // AB#9755: one pipeline update that sets the counter to max(counter, StartValue - 1) + 5 (the D5 floor).
+            var stage = Assert.Single(findAndModify["command"]["update"].AsBsonArray).AsBsonDocument;
+            var set = Assert.Single(stage.Elements);
+            Assert.Equal("$set", set.Name);
+            var assignment = Assert.Single(set.Value.AsBsonDocument.Elements);
+            Assert.Equal("attributes.currentValue", assignment.Name);
+            var add = assignment.Value["$add"].AsBsonArray;
+            Assert.Equal(2, add.Count);
+            Assert.True(add[0].AsBsonDocument.Contains("$max"), add.ToJson());
+            Assert.Equal(new BsonInt64(5), add[1]);
         });
     }
 

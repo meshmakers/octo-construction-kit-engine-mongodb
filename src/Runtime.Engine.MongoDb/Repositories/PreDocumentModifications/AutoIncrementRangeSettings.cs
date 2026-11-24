@@ -17,6 +17,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 ///         <item><c>FiscalYearStartMonth</c> is 1-12 (absent: 1, fiscal year = calendar year).</item>
 ///         <item>A token format must parse; <c>{yyyy}</c> / <c>{yy}</c> need <c>PeriodKind = FiscalYear</c>, because a
 ///         range without periods has no fiscal year to show.</item>
+///         <item><c>StartValue</c> (AB#9755, D5) is at least 1 and not above <c>End</c>. It is a floor, never a reset: a
+///         start value below a counter already in use is valid and ignored by the allocation, so it is not refused.</item>
 ///         <item>A legacy format and a range without the new attributes are taken as they are: they number as before.</item>
 ///     </list>
 /// </remarks>
@@ -24,6 +26,7 @@ public sealed class AutoIncrementRangeSettings
 {
     internal const string FormatAttribute = "Format";
     internal const string StartValueAttribute = "StartValue";
+    internal const string EndAttribute = "End";
     internal const string PeriodKindAttribute = "PeriodKind";
     internal const string FiscalYearStartMonthAttribute = "FiscalYearStartMonth";
     internal const string ReferenceTimeZoneAttribute = "ReferenceTimeZone";
@@ -85,8 +88,21 @@ public sealed class AutoIncrementRangeSettings
 
         if (!TryGetLong(counter, PeriodKindAttribute, out var periodKind, out error) ||
             !TryGetLong(counter, FiscalYearStartMonthAttribute, out var startMonth, out error) ||
-            !TryGetLong(counter, StartValueAttribute, out var startValue, out error))
+            !TryGetLong(counter, StartValueAttribute, out var startValue, out error) ||
+            !TryGetLong(counter, EndAttribute, out var end, out error))
         {
+            return false;
+        }
+
+        if (startValue < 1)
+        {
+            error = $"StartValue {startValue} is below 1.";
+            return false;
+        }
+
+        if (startValue > end)
+        {
+            error = $"StartValue {startValue} is above End {end}.";
             return false;
         }
 

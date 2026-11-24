@@ -31,9 +31,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 ///     </list>
 ///     Every entity of a mixed batch is handled; an entity or type without auto-increment attributes is skipped.
 ///     <para>
-///         Allocation (AB#9753) is atomic: one <c>findOneAndUpdate</c> with <c>$inc</c> per counter and batch takes a
-///         block of consecutive numbers, and its filter holds the <c>End</c> bound, so two writers never get the same
-///         number and a counter never passes <c>End</c>. The counter is neither read first nor replaced. The block is
+///         Allocation (AB#9753) is atomic: one <c>findOneAndUpdate</c> per counter and batch takes a block of
+///         consecutive numbers - from <c>max(counter, StartValue - 1) + 1</c> on, the floor of D5 (AB#9755), so a
+///         start value continues an external range and one set below the counter is ignored - and its filter holds
+///         the <c>End</c> bound, so two writers never get the same number and a counter never passes <c>End</c>. The counter is neither read first nor replaced. The block is
 ///         handed out in batch order (the entity rule engine keeps the order of the input).
 ///     </para>
 ///     <para>
@@ -67,11 +68,14 @@ public class AutoIncrementModifier(
 
     private const string CurrentValueField = "attributes.currentValue";
     private const string EndField = "attributes.end";
+    private const string StartValueField = "attributes.startValue";
     private const string PeriodKindField = "attributes.periodKind";
     private const string PeriodsField = "attributes.periods";
     private const string PeriodFiscalYearMember = "attributes.fiscalYear";
     private const string PeriodCurrentValueMember = "attributes.currentValue";
     private const string PeriodIdentifier = "p";
+    private const string PeriodAttributesMember = "attributes";
+    private const string PeriodCurrentValueName = "currentValue";
 
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
@@ -277,22 +281,24 @@ public class AutoIncrementModifier(
 
     /// <summary>
     ///     Takes <paramref name="count" /> consecutive numbers from the counter <paramref name="reference" /> with one
-    ///     <c>findOneAndUpdate</c>: <c>$inc</c> by <paramref name="count" />, filtered on
-    ///     <c>currentValue + count &lt;= end</c> and on a range without fiscal-year periods. Returns the counter after
-    ///     the increment, or null when nothing matched.
+    ///     <c>findOneAndUpdate</c> on a range without fiscal-year periods: the counter becomes
+    ///     <c>max(currentValue, StartValue - 1) + count</c> (the <c>StartValue</c> floor of D5, AB#9755; without a
+    ///     start value exactly the increment of AB#9753), filtered on that value being <c>&lt;= end</c>. One pipeline
+    ///     update, so the floor and the increment are one atomic statement. Returns the counter after the update, or
+    ///     null when nothing matched.
     /// </summary>
     private Task<RtAutoIncrement?> AllocateWithoutPeriodsAsync(IOctoSession session,
         IMongoCollection<RtAutoIncrement> mongoCollection, string reference, int count)
     {
+        var next = NextValue("$" + CurrentValueField, count);
         var filter = Builders<RtAutoIncrement>.Filter.And(
             Builders<RtAutoIncrement>.Filter.Eq(c => c.RtWellKnownName, reference),
             new BsonDocument(PeriodKindField, new BsonDocument("$ne", AutoIncrementRangeSettings.PeriodKindFiscalYear)),
-            new BsonDocument("$expr", new BsonDocument("$lte", new BsonArray
-            {
-                new BsonDocument("$add", new BsonArray { "$" + CurrentValueField, count }),
-                "$" + EndField
-            })));
-        var update = Builders<RtAutoIncrement>.Update.Inc(CurrentValueField, (long)count);
+            new BsonDocument("$expr", new BsonDocument("$lte", new BsonArray { next, "$" + EndField })));
+        var update = Builders<RtAutoIncrement>.Update.Pipeline(new BsonDocument[]
+        {
+            new("$set", new BsonDocument(CurrentValueField, next))
+        });
         var options = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
 
         return ExecuteAsync<RtAutoIncrement?>(session, reference, count, async sessionHandle =>
@@ -300,11 +306,41 @@ public class AutoIncrementModifier(
     }
 
     /// <summary>
+    ///     The counter after taking <paramref name="count" /> numbers (aggregation expression):
+    ///     <c>max(current, StartValue - 1) + count</c> (D5), as a long. A missing counter counts as 0, a missing start
+    ///     value as 1; a stored start value that is not a number counts as absent here, and the range rules refuse it
+    ///     right after the statement.
+    /// </summary>
+    private static BsonDocument NextValue(string currentValueExpression, int count) =>
+        new("$add", new BsonArray
+        {
+            new BsonDocument("$max", new BsonArray
+            {
+                new BsonDocument("$ifNull", new BsonArray { currentValueExpression, 0L }),
+                new BsonDocument("$subtract", new BsonArray
+                {
+                    new BsonDocument("$ifNull", new BsonArray
+                    {
+                        new BsonDocument("$convert", new BsonDocument
+                        {
+                            { "input", "$" + StartValueField }, { "to", "long" }, { "onError", BsonNull.Value },
+                            { "onNull", BsonNull.Value }
+                        }),
+                        1L
+                    }),
+                    1L
+                })
+            }),
+            (long)count
+        });
+
+    /// <summary>
     ///     Takes <paramref name="count" /> consecutive numbers from the period <paramref name="fiscalYear" /> of the
     ///     fiscal-year range <paramref name="counterRtId" /> and returns the first of them. The period counter is advanced
-    ///     with one <c>$inc</c> on <c>Periods.$[p].CurrentValue</c>; a missing period is added together with its first
+    ///     with one pipeline update of its <c>Periods</c> entry; a missing period is added together with its first
     ///     block by one conditional update that matches only while no entry of that year exists. When a parallel
-    ///     writer added it first, the increment runs again on the entry it added. <c>End</c> bounds every period.
+    ///     writer added it first, the increment runs again on the entry it added. <c>End</c> bounds every period, and a
+    ///     <c>StartValue</c> raised above the period's counter is its floor (D5).
     /// </summary>
     private async Task<long> AllocateInPeriodAsync(IOctoSession session,
         IDataSourceCollection<OctoObjectId, RtAutoIncrement> autoIncrementCollection,
@@ -315,7 +351,11 @@ public class AutoIncrementModifier(
             Builders<RtAutoIncrement>.Filter.Eq(c => c.RtId, counterRtId),
             new BsonDocument(PeriodKindField, AutoIncrementRangeSettings.PeriodKindFiscalYear));
 
-        // 1. The period exists and can take the block.
+        // 1. The period exists and can take the block. Its counter becomes max(currentValue, StartValue - 1) + count
+        //    (the StartValue floor of D5, AB#9755), in one pipeline update of the period array.
+        var nextInPeriod = NextValue($"$${PeriodIdentifier}.{PeriodCurrentValueMember}", count);
+        var isTheYear = new BsonDocument("$eq", new BsonArray
+            { $"$${PeriodIdentifier}.{PeriodFiscalYearMember}", fiscalYear });
         var incrementFilter = Builders<RtAutoIncrement>.Filter.And(counterFilter,
             new BsonDocument("$expr", new BsonDocument("$anyElementTrue", new BsonArray
             {
@@ -326,29 +366,36 @@ public class AutoIncrementModifier(
                     {
                         "in", new BsonDocument("$and", new BsonArray
                         {
-                            new BsonDocument("$eq", new BsonArray
-                                { $"$${PeriodIdentifier}.{PeriodFiscalYearMember}", fiscalYear }),
-                            new BsonDocument("$lte", new BsonArray
-                            {
-                                new BsonDocument("$add", new BsonArray
-                                    { $"$${PeriodIdentifier}.{PeriodCurrentValueMember}", count }),
-                                "$" + EndField
-                            })
+                            isTheYear, new BsonDocument("$lte", new BsonArray { nextInPeriod, "$" + EndField })
                         })
                     }
                 })
             })));
-        var increment = Builders<RtAutoIncrement>.Update.Inc(
-            $"{PeriodsField}.$[{PeriodIdentifier}].{PeriodCurrentValueMember}", (long)count);
-        var incrementOptions = new FindOneAndUpdateOptions<RtAutoIncrement>
+        var increment = Builders<RtAutoIncrement>.Update.Pipeline(new BsonDocument[]
         {
-            ReturnDocument = ReturnDocument.After,
-            ArrayFilters =
-            [
-                new BsonDocumentArrayFilterDefinition<BsonDocument>(
-                    new BsonDocument($"{PeriodIdentifier}.{PeriodFiscalYearMember}", fiscalYear))
-            ]
-        };
+            new("$set", new BsonDocument(PeriodsField, new BsonDocument("$map", new BsonDocument
+            {
+                { "input", "$" + PeriodsField },
+                { "as", PeriodIdentifier },
+                {
+                    "in", new BsonDocument("$cond", new BsonArray
+                    {
+                        isTheYear,
+                        new BsonDocument("$mergeObjects", new BsonArray
+                        {
+                            $"$${PeriodIdentifier}",
+                            new BsonDocument(PeriodAttributesMember, new BsonDocument("$mergeObjects", new BsonArray
+                            {
+                                $"$${PeriodIdentifier}.{PeriodAttributesMember}",
+                                new BsonDocument(PeriodCurrentValueName, nextInPeriod)
+                            }))
+                        }),
+                        $"$${PeriodIdentifier}"
+                    })
+                }
+            })))
+        });
+        var incrementOptions = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
 
         // 2. The period does not exist yet: add it with its first block, only while it is missing.
         var lastNumberOfTheBlock = firstNumberOfAPeriod + count - 1;

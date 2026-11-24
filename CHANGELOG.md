@@ -21,12 +21,25 @@
   precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
   conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#9755 New: a number range continues from its `StartValue` (System 2.9.0, design note D5). Every allocation takes
+  its block from `max(counter, StartValue - 1) + 1` on, with and without fiscal-year periods: a range with start value
+  1235 continues an external range that ended at 1234, and a start value set below a counter already in use is ignored,
+  so it never produces a duplicate. The floor is part of the single allocation statement (a pipeline update instead of
+  `$inc`), so allocation stays one atomic statement per counter, year and batch; without a start value the numbers are
+  exactly as before. The range rules refuse a `StartValue` below 1 or above `End`, and `AutoIncrementRangeValidator`
+  now also checks partial updates of a range (engine hook `IPreDocumentUpdateValidation`): the stored range with the
+  update laid over it must be valid, so an update that sets `PeriodKind = FiscalYear` without a zone, an unknown zone,
+  a fiscal-year token without periods or a start value outside 1..`End` is refused before anything is written (it was
+  refused only at the next allocation). Updates that touch no configuration attribute read nothing. Tests:
+  `AutoIncrementStartValueTests` (MongoDB: start value 1235, start value below the counter, the floor in a fiscal year
+  in use, two company tenants under one group tenant in two tenant databases, seed re-apply keeps `CurrentValue`,
+  `Periods` and a tenant-changed start value, partial-update refusals).
 - AB#9754 New: number ranges per document type and fiscal year with format tokens (System 2.9.0). A
   `System/AutoIncrement` with `PeriodKind = FiscalYear` keeps one counter per fiscal year in `Periods` and restarts at
   `StartValue` (or 1) when a fiscal year starts. The fiscal year is taken from the creation time of each entity (an
   injected `TimeProvider`, read per entity, so a batch across the year boundary numbers each entity in its own year)
   read in the range's IANA `ReferenceTimeZone`, with `FiscalYearStartMonth` (1-12, default 1); it is named by the
-  calendar year in which it starts. Allocation stays atomic: one `$inc` on the year's entry per counter, year and
+  calendar year in which it starts. Allocation stays atomic: one update of the year's entry per counter, year and
   batch, bounded by `End`; the first number of a new year adds the entry with its block in one conditional update
   that matches only while the year is missing, so parallel writers never create it twice. `Format` knows the tokens
   `{yyyy}`, `{yy}` (fiscal year) and `{counter}` / `{counter:D<n>}` with literal text around them

@@ -179,6 +179,9 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementModifier>();
         builder.Services.AddTransient<IPreDocumentModification<RtEntity>, DisplayNameModifier>();
 
+        // AB#9755: partial updates of a number range are checked by the same rules before anything is written.
+        builder.Services.AddTransient<IPreDocumentUpdateValidation<RtEntity>, AutoIncrementRangeValidator>();
+
         // Register MongoDB-specific CK model migration support by default
         // This enables automatic migration detection when CK models are updated
         builder.Services.AddSingleton<IRuntimeRepositoryProvider, MongoRuntimeRepositoryProvider>();

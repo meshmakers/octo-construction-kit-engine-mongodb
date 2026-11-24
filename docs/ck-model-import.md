@@ -295,12 +295,16 @@ lacks the installed `Available` version (next bullet but one).
   injected `TimeProvider`, read per entity) in the range's IANA `ReferenceTimeZone`, named by the year it starts in.
   One `$inc` on `Periods.$[p].currentValue` per counter, year and batch; a missing year is added with its first block
   by one conditional pipeline update that matches only while the year is missing (no read-modify-write), a loser of
-  that race increments the winner's entry. A legacy range keeps the AB#9753 statement unchanged (filter
+  that race increments the winner's entry. A legacy range keeps one statement and no read (filter
   `periodKind != FiscalYear`), so it costs nothing extra. `Format` tokens `{yyyy}`/`{yy}`/`{counter:D<n>}`
   (`AutoIncrementNumberFormat`); any other format is `string.Format` as before. The range rules
   (`AutoIncrementRangeSettings`: zone required and IANA for FiscalYear - never a UTC default -, start month 1-12,
-  tokens parse, year tokens need FiscalYear) are checked by `AutoIncrementRangeValidator` on insert/replace of a
-  counter and again before every allocation (partial updates do not run the pre-document modifications). Sweep result (engine-mongodb `src/`): this was the only versioned generated-id lookup; the other
+  tokens parse, year tokens need FiscalYear, StartValue 1..End) are checked by `AutoIncrementRangeValidator` on
+  insert/replace of a counter, on partial updates (AB#9755: engine hook `IPreDocumentUpdateValidation`, stored counter
+  with the update laid over it, read only when a configuration attribute changes) and again before every allocation.
+  AB#9755 `StartValue` floor (D5): both allocation statements are pipeline updates that set the counter (or the year's
+  entry) to `max(counter, StartValue - 1) + n`, still one atomic statement per counter, year and batch; a start value
+  below the counter is ignored, never a reset. Sweep result (engine-mongodb `src/`): this was the only versioned generated-id lookup; the other
   `GetCkType`/`GetCkRecord`/`GetCkEnum` calls take ids from the CK cache or the database, which are the installed
   versions. Pinned by `OlderEmbeddedSystem_CanWriteEntities_IntoATenantWithANewerSystem`.
 - Counters live in `CkModelImportDiagnostics` on the meter `Meshmakers.Octo.MongoDb` (no tenant tag; the tenant
