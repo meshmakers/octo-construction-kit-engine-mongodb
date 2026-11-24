@@ -89,7 +89,7 @@ Budget of the decision: one collection at most 1.25x of a type query returning t
 sort field: first-page p95 at most 100 ms (30 collections, 1M entities); unindexed sort field: no promise (O(matching rows)).
 The test `GetRtEntitiesByInterfacePerformanceTests` (trait `Category=Performance`; 100 000 entities by default,
 `OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000` for the 1M run) asserts the first two and prints the third. Measured numbers
-(.NET end to end through `ITenantRepository`, MongoDB 8.0.15 in a Testcontainer on a Mac mini, page size 50, 30 collection
+(.NET end to end through `ITenantRepository`, MongoDB 8.0.15 in a Testcontainer on a local development machine, page size 50, 30 collection
 roots, index `(ckTypeId, attributes.name, rtState)` on every root): see the table in `permissions-and-interface-query.md`, "Interface query".
 
 **Guidance: index the sort field of heavily used interface members.** The method creates and changes no index. A type that

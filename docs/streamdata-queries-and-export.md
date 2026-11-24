@@ -41,7 +41,7 @@ whatever is set to `CrateQueryBuilder.WithTimeFilter(DateTime?, DateTime?)`, and
 
 `CrateQueryBuilder.HasTimeFilter` (`From is not null || To is not null`) is the single condition
 driving the `WHERE` emission and the inter-condition `AND` wiring (ckType, IN-lists, field filters,
-generation predicate) — never a `{ From: not null, To: not null }` pattern. Before that change both
+generation predicate) — never a `{ From: not null, To: not null }` pattern. Before the one-sided time filter was supported both
 boundaries were required at every level, and a one-sided range was dropped **silently**: a
 persisted SD-query or a `GetQueryById@1` pipeline node configured with only a start returned the
 entire archive. `CompileCountQuery` shares `AppendWhereClause`, so `TotalCount` is scoped
@@ -51,7 +51,7 @@ identically to the page.
 `ExecuteDownsamplingQueryAsync`, so `AppendDownsamplingSourceFilters` never sees a one-sided range)
 and `TimeWeightedAverage` / `StateDuration` / `Integral` over a raw archive (the LOCF carry-in is defined
 relative to the window — explicit guard that throws the contracts `StreamDataException` with the archive id,
-a structured 400 / coded GraphQL error since that change; it used to be the uncoded connection-level exception).
+a structured 400 / coded GraphQL error; it used to be the uncoded connection-level exception).
 
 ### Integral over raw archives
 
@@ -178,7 +178,7 @@ Semantics preserved:
   waiting for runs on for at most 30 s and fills the cache; a query of another range takes only a single phase from it and checks it like a remembered one;
   forgotten on table drop/activation and on an in-process write (ingest or import) of another phase, also while a probe
   runs; at one window per bin an empty result evicts the phase and re-probes once). Never put the probe back
-  under `GetDataAsync`: ten parallel chart queries with retried probes exhausted the pool of 32 of a large tenant. Before that change the raw
+  under `GetDataAsync`: ten parallel chart queries with retried probes exhausted the pool of 32 of a large tenant. Before the bin edges followed the stored phase the raw
   `From` was the origin: a relative "last 2 days" request (From 18:37:42) put every bin edge inside a stored 15-minute
   window and the §7 predicate dropped all of them (FH lab: 0/192 bins with a value, resolution-aware charts empty until
   the resolver switched to a rollup).
@@ -193,7 +193,7 @@ Semantics preserved:
 
 ### Downsampling into local-day bins
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** Downsampling queries take
+**Behaviour change.** Downsampling queries take
 `TimeZone`, `BinOrigin` and `BinInterval` (engine `StreamDataDownsamplingQueryOptions`) and return one bin
 per local day (23 / 24 / 25 h across DST changes) from raw, time-range and rollup archives. **Behaviour change for every
 downsampling query: a COUNT column of an empty bin reads `0` instead of `null`** (a count over nothing is 0; Studio charts
@@ -301,7 +301,7 @@ TOOLS-4142, TOOLS-4145, TOOLS-2875 describe the byte rule overshooting). 100 doc
 (averages up to ~480 KB) - it reduces the risk, it does not exclude it: the count bounds the number of documents, not their size, so a few
 documents near 16 MiB can still exceed the limit; the rationale is in the xml doc of the property. Restore requirement: lower the value
 when a collection averages above ~480 KB or holds very large documents. Test: `LargeDocumentRestoreTests` (2400 documents averaging above 70 KB through the real dump and restore; not red without the
-fix against the local MongoDB container, see the comment in the test), `MongoToolArgumentsTests`. No CHANGELOG file exists in this repo.
+fix against the local MongoDB container, see the comment in the test), `MongoToolArgumentsTests`.
 
 ### Archive Export — Time Slices, Not Keyset Pages
 

@@ -1,6 +1,6 @@
 ---
 description: Tenant delete as two-phase drop, tenant namespace gate, database ownership marker
-applies_to: src/Runtime.Engine.MongoDb/Repositories/TenantOwnership/**, src/Runtime.Contracts.MongoDb/TenantOwnership/**, src/Runtime.Engine.MongoDb/Repositories/TenantLifecycle/**
+applies_to: src/Runtime.Engine.MongoDb/Repositories/Tenant*/**, src/Runtime.Contracts.MongoDb/TenantOwnership/**
 ---
 
 ### Race-safe Tenant Delete — Two-phase Drop
@@ -82,7 +82,7 @@ unreachable a Delete/Clear of a tenant *with the stream data model* (also one wi
 cleanup above) blocks for up to ~2 min (timeout × retries) before logging the error; it never fails the drop, and tenants
 without the stream data model never touch CrateDB.
 
-**The resurrection window is not fully closed, and since that change it bites harder.** Background work
+**The resurrection window is not fully closed, and it bites harder since the create path stopped reclaiming such shells.** Background work
 that outlives the delete — above all a `tenant_setup_retry` entry, whose retry loop keeps calling
 `SetupAsync` for a tenant that no longer exists — re-creates the database as an empty `CkModel` +
 `SysLock` shell seconds after the drop. The create path no longer reclaims such a shell (it used to,

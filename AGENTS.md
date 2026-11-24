@@ -10,16 +10,24 @@ This is the MongoDB implementation of the OctoMesh Runtime Engine. It provides:
 - Query engine with support for field filters, navigation properties, and aggregations
 - Integration with the Construction Kit (CK) model system
 
-### Key Classes
+### Entry points
+
+Where to start reading; the list is not complete (the classes sit in the folders named in the routing table below).
 
 - `TenantRepository` - Main repository for tenant-specific data operations
 - `SingleOriginRtQuery<T>` - Query engine for single-origin queries with field filters and navigation
 - `MultipleOriginHierarchicalDeepRtGraphQuery` - Deep graph queries following parent-child hierarchy
-- `RtPathEvaluator` - Tokenizes and evaluates attribute paths including navigation properties
-- `NavigationEnd` - Represents the end of a navigation (association target)
-- `MongoRepositoryClient` - Base class that registers BSON conventions and class maps and builds the driver client (write concern majority / 30 s, read concern majority, see *Write and read concern of the repository clients*)
+- `RtInterfaceQueryExecutor` - Interface query: one query per collection, merged in the application
+- `RtPathEvaluator` and `NavigationEnd` - Attribute paths and navigation ends; defined in the engine
+  (`octo-construction-kit-engine`, Runtime.Contracts), used here
+- `MongoRepositoryClient` - Base class that registers BSON conventions and class maps and builds the driver client
+  (write concern majority / 30 s, read concern majority, see *Write and read concern of the repository clients*)
 - `MongoRuntimeRepositoryProvider` - Provides tenant repositories for CK model migrations
-- `TenantContext` - Per-tenant context managing CK model imports and migration triggers
+- `TenantContext` and `SystemContext` - Per-tenant and installation-wide context: CK model imports, migration
+  triggers, tenant create, attach and delete
+- `TenantOwnershipStore` - Database ownership marker of a tenant database
+- `TenantUpgradeGuard` - Read-only check of what a CK model update would break
+- `CrateDbStreamDataRepository` - Stream data archives and rollups in CrateDB
 
 ## Read before you change
 
@@ -41,7 +49,7 @@ This is the MongoDB implementation of the OctoMesh Runtime Engine. It provides:
 | `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**` | `docs/streamdata-rollup-source-generation-read.md` |
 | `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**` | `docs/streamdata-rollups.md` |
 | `src/Runtime.Engine.CrateDb/**`, `src/Runtime.Engine.MongoDb/StreamData/**`, `tests/StreamData.UnitTests/**` | `docs/streamdata-write-path.md` |
-| `src/Runtime.Engine.MongoDb/Repositories/TenantOwnership/**`, `src/Runtime.Contracts.MongoDb/TenantOwnership/**`, `src/Runtime.Engine.MongoDb/Repositories/TenantLifecycle/**` | `docs/tenant-database-safety.md` |
+| `src/Runtime.Engine.MongoDb/Repositories/Tenant*/**`, `src/Runtime.Contracts.MongoDb/TenantOwnership/**` | `docs/tenant-database-safety.md` |
 | `src/Runtime.Contracts.MongoDb/TenantLifecycle/**`, `src/Runtime.Engine.MongoDb/Repositories/TenantLifecycle/**` | `docs/tenant-lifecycle-reconciler.md` |
 | `src/Runtime.Contracts.MongoDb/TenantLifecycle/**`, `src/Runtime.Engine.MongoDb/Repositories/TenantLifecycle/**` | `docs/tenant-lifecycle-stores.md` |
 | `src/Runtime.Engine.MongoDb/Repositories/MongoDb/**`, `src/Runtime.Engine.MongoDb/Services/**`, `src/Runtime.Contracts.MongoDb/Services/**` | `docs/tenant-registry-and-clients.md` |
@@ -77,4 +85,60 @@ Run the local full suite (see Build & test) and fix every failure before committ
 
 ## Rules
 
-The rules of this repository are the sections of the routed docs; read the matching file before you change code it covers.
+These rules bind new and changed code. Known exceptions in existing code are named in the linked docs.
+
+- **This repository is public.** No work item ids, internal hostnames, customer or tenant names, or secrets in docs and
+  in new or changed code comments and test names (work item ids stay in `CHANGELOG.md` entries); remove an existing one
+  when you touch its line.
+- **A tenant database is dropped only after its metadata delete is committed.** New delete paths call
+  `DeleteChildTenantMetadataAsync`, commit, then `DropTenantDatabaseAsync`; stream data tables are dropped per archive,
+  and only when the caller passes `dropStreamData`, never "everything in the tenant's schema"
+  ([docs/tenant-database-safety.md](docs/tenant-database-safety.md); `TenantDeletedNotificationOrderTests`,
+  `DeleteOwnershipGuardTests`).
+- **Tenant create and attach pass the namespace gate and the ownership marker.** `EnsureTenantNamespaceAvailableAsync`
+  runs before any side effect; its two conflict messages stay uniform and reason-free (the reason goes to the log); the
+  `TenantOwnershipStore` marker is never written into a system database. Known exception: the database does not
+  enforce tenant id uniqueness, a duplicate is only logged
+  ([docs/tenant-database-safety.md](docs/tenant-database-safety.md); `TenantNamespaceGuardTests`,
+  `TenantOwnershipCrossInstanceTests`, `RestoreOwnershipGuardTests`).
+- **Every read and write path applies the caller's data permissions, and a hidden record answers like a missing one.** A
+  new read path (type query, deep graph, interface query) builds on the shared security filter, a changed rule keeps
+  `TenantRepository.CreateEntityNotFoundException` in step with `MongoDbDataSourceCollection`. Known exception:
+  aggregations are not returned for a restricted deep graph
+  ([docs/permissions-and-interface-query.md](docs/permissions-and-interface-query.md);
+  `DataPermissionEvaluatorDifferentialTests`, `DataPermissionHiddenEqualsMissingTests`, `DeepGraphDataPermissionTests`).
+- **A failed commit or write concern keeps its cause.** Rethrow the driver exception unchanged after a failed
+  `OctoSession.CommitTransactionAsync`; map a write-concern-only failure to
+  `OperationFailedException.DatabaseOperationFailed` with the driver exception inside; repository clients keep
+  `w: majority` and read concern majority
+  ([docs/runtime-write-semantics.md](docs/runtime-write-semantics.md),
+  [docs/tenant-registry-and-clients.md](docs/tenant-registry-and-clients.md); `OctoSessionTransactionCallbackTests`,
+  `MongoDbWriteExceptionMappingTests`).
+- **Every MongoDB call of a runtime query goes through the time limiter.** A new call in the query classes runs through
+  `RuntimeQueryTimeLimiter` (as `SingleOriginQuery.AggregateToListAsync` and `RtInterfaceQueryExecutor.RunLimitedAsync`
+  do); overrides are call-site scopes (`RuntimeQueryTimeLimit.Override` / `Disable`), never a global switch. Known
+  exception: the association and deep-graph queries are not covered yet
+  ([docs/runtime-write-semantics.md](docs/runtime-write-semantics.md); `RuntimeQueryTimeLimitTests`).
+- **A sorted page is total and an index hint is safe.** A page sorts by the caller's keys plus the `_id` tiebreak;
+  a hint names only an index that provides the sort and is complete (never partial, sparse, hidden or collated), never
+  inside a transaction ([docs/runtime-query-paging.md](docs/runtime-query-paging.md); `SortIndexHintTests`,
+  `PagedQueryTiebreakTests`).
+- **An interface query validates before it touches a collection** and refuses with `InterfaceQueryException`; a
+  collection left with no allowed type is not queried at all
+  ([docs/interface-query.md](docs/interface-query.md); `GetRtEntitiesByInterfaceAsyncTests`).
+- **Hidden archive columns never leave through a backup or export.** New copy, export and restore code decides through
+  `CrateDbStreamDataRepository.FindHiddenColumnExclusion`. Known exception: a column made Hidden by a CK model that
+  cannot be read, and not yet recorded, can still end up in a backup
+  ([docs/streamdata-write-path.md](docs/streamdata-write-path.md), "Backups leave Hidden columns out";
+  `HiddenColumnExclusionTests`).
+- **The physical table of an activated archive only grows.** Reconciliation adds declared columns and never drops or
+  retypes one; a new column goes through the archive lifecycle, never into `Columns` alone
+  ([docs/streamdata-archive-schema-and-activation.md](docs/streamdata-archive-schema-and-activation.md),
+  [docs/streamdata-write-path.md](docs/streamdata-write-path.md); `ArchiveColumnReconciliationTests`,
+  `ArchiveDefinitionGuardIntegrationTests`).
+- **A `TimeSpan` attribute is stored as Int64 ticks.** Any new place that coerces an attribute value to `TimeSpan` also
+  accepts the bare-integer ticks string, or it rejects already imported data
+  ([docs/bson-serialization.md](docs/bson-serialization.md); `TimeSpanSerializerTests`).
+- **A wall-clock budget or stress test carries `Category=Performance` or `Category=Stress`**, which keeps it out of the
+  PR build and, with `Category=LoadSensitive`, out of the local full suite
+  ([docs/test-configuration.md](docs/test-configuration.md); `LoadSensitiveTraitTests`).

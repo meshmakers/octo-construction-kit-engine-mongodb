@@ -73,7 +73,7 @@ GridFS metadata is carried over unchanged. Existing entities and their `BinaryId
 
 `tests/.../LargeBinary/DeleteCapMeasurementTests.cs` (explicit, runs only with `OCTO_MEASURE_DELETE_CAP=500,1000,...`,
 results appended to `OCTO_MEASURE_OUT`) deletes N entities that each own a 4 KB linked binary in **one** transaction -
-the shape of the asset-repo recursive folder delete. Local run (Mac, Testcontainers MongoDB replica set, 2026-10-11):
+the shape of the asset-repo recursive folder delete. Local run (Testcontainers MongoDB replica set, measured 2026-10-11):
 
 | Entries | Transaction open (apply) | Commit + deferred GridFS delete | Total |
 |---:|---:|---:|---:|
@@ -98,7 +98,7 @@ setup can be repeated and run concurrently. The owner lookups that use it are `D
 orphan sweep. Existing tenants get the index with the next full index update after the engine-mongodb release;
 building the index on a very large `fs.files` takes time (MongoDB builds it online; plan the first index update of such a tenant outside peak load).
 
-Measured with `DeleteCapMeasurementTests` on the same machine and database (4 KB files; `OCTO_MEASURE_OWNER_INDEX=off|on`
+Measured on 2026-10-11 with `DeleteCapMeasurementTests` in the same local run and database (4 KB files; `OCTO_MEASURE_OWNER_INDEX=off|on`
 drops or creates the index before the run):
 
 | Entries | Transaction open (apply), no index | Transaction open (apply), with index | Commit + deferred GridFS delete (with index) | Total with index |
@@ -110,4 +110,4 @@ With the index the time inside the transaction grows linearly (2.3 s to 4.4 s fo
 transaction stays open for 4.4 s instead of 37.4 s. The after-commit delete (12.2 s) is outside the transaction. The
 asset-repo limit `FilesOptions.MaxDeleteEntries` (5,000) is **not** changed by this work: raising it is a decision of the
 product owner (the total of 16.6 s at 10,000 entries is a 3.6x margin to the 60 s transaction lifetime, the story asks for
-more than 4x). These numbers were not taken on the restored production-sized tenant.
+more than 4x). These numbers are a dated measurement (2026-10-11); they were not taken on a production-sized tenant.

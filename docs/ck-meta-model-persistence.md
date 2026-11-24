@@ -59,7 +59,7 @@ Mongo is camelCase `isRuntimeState` (global `CamelCaseElementNameConvention`).
 ### CK v2 Range Retention Round-Trip
 
 **Contract for classic models (decided 2026-10-14): "unchanged semantics", not "unchanged bytes".**
-Range retention is the compiler default since that change (the property/option `OctoCkRangeRetention` / `-rr` is gone; the code-level
+Range retention is the compiler default (the code-level
 `CkCompilerOptions.RangeRetention = false` remains for tests and re-pin tooling), and engines below 3.5.1 refuse a range-retaining
 model (`minEngineVersion` 3.5.1) - so a model newly compiled from unchanged sources is persisted with `dependencyRanges`,
 `minEngineVersion` and major-qualified references, and a rollback to an older engine can no longer read it. What stays: a classic
@@ -261,7 +261,7 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   `CkV2KitchenSinkModel` (`KitchenSinkCs-1.0.0`, also used for the next-version replacement test).
   A new DTO property that is not persisted fails here by itself. `RoundTripIgnoredPaths` lists what is
   legitimately not stored, each with a justification: `$schema`, `migrations` and `compatibility` (dependencies, dependency
-  ranges and, since that change, `types[*].indexes` are compared). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
+  ranges and `types[*].indexes` are compared). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
   because the import converts them to the attribute's value type by design.
 - `CkMetaModelCacheRoundTripTests`: the cache rebuilt from Mongo (YAML kitchen sink) exposes interfaces,
   declared AND inherited implements / methods (`AllImplementedInterfaces`, `AllMethods`, `ImplementingTypes`),

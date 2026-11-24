@@ -242,7 +242,7 @@ lacks the installed `Available` version (next bullet but one).
   comm-controller `TenantInitializationExtensions`, asset-repo `ModelsController` dependency status.
 
 - **Explicit imports may downgrade** (platform-owner decision Q5): `ImportCkModelAsync(CkCompiledModelRoot)`
-  (CLI/API `ImportCk`, bot import command) is not guarded itself; since that change the *API endpoint* judges the file with
+  (CLI/API `ImportCk`, bot import command) is not guarded itself; the *API endpoint* judges the file with
   `EvaluateExplicitCkImportAsync` (tenant upgrade guard, below) before it queues the job and refuses a breaking one unless forced.
   A downgrade that passes may happen, logged WARN `Explicit downgrade of CK model ... from X
   to Y` and counted in `octo.ck.explicit_import.downgraded` (tag `model`). An explicit downgrade of a model that
@@ -315,7 +315,7 @@ Basic.Accounting stayed `ResolveFailed` after System went back to the version it
   MongoDB: an import against an unsatisfiable range throws, nothing is installed, and the message names the range and
   the installed version). `DatabaseCkModelRepository` implements the engine's optional `IRepositoryVersionLister`
   (`ListVersionsAsync`: the versions `IsExistingAsync(range)` considers, ascending) so that the engine's
-  `RepositoryDependencyResolver` can name them in the rejection. Since that change the repository also implements
+  `RepositoryDependencyResolver` can name them in the rejection. The repository also implements
   `IRepositoryInstalledVersionLister` (`ListInstalledVersionsAsync`: every held version of the name with its state, `Importing` included), and the
   rejection reads `X-[2.5,3.0): the tenant has no Available version of X (installed: 2.5.0 ResolveFailed)` instead of a catalog wording.
 

@@ -5,7 +5,7 @@ applies_to: src/Runtime.Engine.MongoDb/RuntimeQueries/**, src/Runtime.Engine.Mon
 
 ## Deep sorted pages: the index hint
 
-Since that change a page (`$match`, `$sort`, `$skip`, `$limit`) is planned by MongoDB as a whole. For a deep page no
+A page (`$match`, `$sort`, `$skip`, `$limit`) is planned by MongoDB as a whole. For a deep page no
 candidate plan returns results early, so the multi-planner ran every candidate through its trial on every request, and
 the plan cache never kept the winner (the cached works value comes from page 1). On a large customer tenant (909,000 `EdaMessage`, skip
 50,000) that took 56-67 s; the execution itself took ~90 ms, and with a hint 52 ms. Rules:
@@ -75,7 +75,7 @@ as 300 items of which only 35 were distinct. Rules:
   `$sort` (`PreStagesDefineOrder`). The enrichment read of the page uses the same sort, so ties keep their page order.
 - **Only where no index order is lost (the gate).** `PagingTiebreakGate` decides per database, collection and caller
   sort. A page sorted by keys whose order an index provides that the tiebreak would break pages without it (the
-  order before that change, from that index): a CK Ascending index in the legacy shape that provides the complete caller
+  order of the pages before the tiebreak, from that index): a CK Ascending index in the legacy shape that provides the complete caller
   sort (`SortIndexHint.Provides`; with more keys than it provides the page sorts in memory anyway and gets the tiebreak),
   and a CK Unique index with exactly the engine's type filter when the sort starts with all of its keys, all in its
   directions or all reversed (measured for a single key: IXSCAN without the tiebreak, a SORT over every document with
@@ -109,14 +109,14 @@ as 300 items of which only 35 were distinct. Rules:
   `UpgradeTiebreakIndexesAsync`, collection by collection, each under `index_update_lock` of its own - see "Tiebreak
   upgrade holds the lock per collection" below) builds `<Type>_<n>_id` next to
   `<Type>_<n>` and drops the legacy index only in the cleanup at the end of the collection, after the build: the
-  collection never lacks the index. A failed build keeps the legacy index. Idempotent. An engine before that change (rollback)
+  collection never lacks the index. A failed build keeps the legacy index. Idempotent. An older engine (rollback)
   sorts its pages from the new index (prefix) and, on its next index update, rebuilds `<Type>_<n>` and then drops
   `<Type>_<n>_id` the same way. Both interface members are default interface methods (only NSubstitute fakes implement
   `ITenantContext` outside this repository); the caller that runs the upgrade per tenant is a story of its own.
 - **Index updates never leave a gap (AC 8, AC 13).** `CreateOrUpdateIndex` never drops an index before its replacement is
   built. An index with the right definition under another name is kept (adopted: no drop, no rebuild). The definition
   is compared by `SameDefinition`: a text index by its language (default `en`) and its paths with their weights (a set:
-  `listIndexes` groups them by weight; before that change the missing default language made every text index look changed,
+  `listIndexes` groups them by weight; previously the missing default language made every text index look changed,
   so it was dropped and rebuilt on every import), every other index by its keys in order
   (a definition with several field groups is built as one key list and read back as one group). A Unique or
   UniqueNotDeleted index must also name exactly the types of the definition in its partial filter
@@ -130,7 +130,7 @@ as 300 items of which only 35 were distinct. Rules:
   tracked as failed - an index is only dropped once its replacement is built. Both unique types carry a partial filter
   (their types); `MongoDbDataSourceCollection.GetIndexListAsync` reads an index as UniqueNotDeleted only when its partial
   filter has a condition on `rtState` (`TiebreakIndexShape.HasStateCondition`, not a text search: a type id such as
-  `Model/StartState` contains the text) (before that change every partial unique index was read as UniqueNotDeleted, so a CK Unique index was
+  `Model/StartState` contains the text) (previously every partial unique index was read as UniqueNotDeleted, so a CK Unique index was
   dropped and rebuilt on every import). The gate counts an Ascending index as legacy only when its keys start with
   `ckTypeId`, so a hand-made index whose default name (`attributes.code_1`) matches the name pattern gets the tiebreak. An index that
   holds the expected name with another definition (a CK update gave the slot other keys) stays until the cleanup at the
@@ -192,17 +192,17 @@ as 300 items of which only 35 were distinct. Rules:
     definition's expected name - another definition of the type is served by the index there (two definitions whose
     existing indexes hold each other's keys, in either order), or a legacy index with that name keeps serving it after a
     failed upgrade - the failure is recorded under `AlternateIndexName`, the name its index gets while the expected name is
-    taken and that a later successful build uses. Before that change the name was chosen at the failure, so a later
+    taken and that a later successful build uses. Previously the name was chosen at the failure, so a later
     definition's `Applied` replaced it until the next run. The index a failed build would have replaced (under the
     expected name, the alternate name or, for a unique index, with the keys) stays a candidate for the later definitions
     of the run - it is no longer taken out of the list - and the cleanup does not drop it
-    (`SharedIndexKeySpecs.KeepAfterFailedBuild`, released again when a later build replaces it); before that change a later
+    (`SharedIndexKeySpecs.KeepAfterFailedBuild`, released again when a later build replaces it); previously a later
     definition with its keys could not adopt it, failed with "Index already exists" and recorded a second wrong failure. `CkIndexState` is unchanged (no new field).
   - **No write without a change.** The merged states are compared with the stored ones by name, collection, state and
     error message; an unchanged run writes no CkType document (`AppliedAt` is ignored, an unchanged state keeps its stored
     `AppliedAt`). Before, every CK import rewrote the CkType documents of every type served by a kept, shared or adopted
     index. Only the `IndexStates` field is written (`$set`), never the whole document - by `BulkUpdateIndexStatesAsync`
-    and, since that change, by `ClearIndexStatesForCollectionAsync` (a collection whose types define no index) - so a CkType
+    and by `ClearIndexStatesForCollectionAsync` (a collection whose types define no index) - so a CkType
     change committed between the read and the write (a model import writes its types before it takes
     `index_update_lock`) is not reverted. Persisting reads
     the types of the collection with one query per collection run.
@@ -297,8 +297,7 @@ as 300 items of which only 35 were distinct. Rules:
   | tiebreak `{ckTypeId, name, _id, rtState}` | sort `Name` | 2 ms / 2 ms (IXSCAN, no SORT) | 464 ms / 626 ms (no SORT) |
   | tiebreak | no sort | 1 ms / 1 ms | 138 ms / 329 ms |
 
-  The gate therefore keeps row 1 without the tiebreak until the upgrade; "without" on the tiebreak index is an engine
-  before that change after a rollback. Deep unsorted pages cost the skip over more index keys (accepted for correctness).
+  The gate therefore keeps row 1 without the tiebreak until the upgrade; "without" on the tiebreak index is an older engine after a rollback. Deep unsorted pages cost the skip over more index keys (accepted for correctness).
 - Tests: `PagedQueryTiebreakTests` (all pages over tied and unsorted entities, skip and cursor-style paging, sort shapes),
   `PagedQueryParityTests.PagedQuery_Unsorted_PagesFollowTheRtIdOrder` (every parity shape), `PagedQueryPipelineTests`,
   `GetRtEntitiesByInterfaceAsyncTests.PagingThroughTiedSortKeys_ReturnsEveryEntityExactlyOnceInRtIdOrder`,

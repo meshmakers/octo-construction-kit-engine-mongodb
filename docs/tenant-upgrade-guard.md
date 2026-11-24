@@ -69,7 +69,7 @@ transient in `AddMongoDbRuntimeRepository`) is the same service for code that al
   dependent's); it is a suggestion - prove it by evaluating the combined set.
 
 **Installed baseline read-back.** The baseline of every check is the installed model rebuilt from the persisted rows
-(`MongoInstalledCkModelReader` → `TryLookupCkModelAsync`). Until that change that rebuild never mapped `CkType.Indexes` back (the
+(`MongoInstalledCkModelReader` → `TryLookupCkModelAsync`). Before the index read-back was added that rebuild never mapped `CkType.Indexes` back (the
 same defect class as the runtime-state flag: persisted, written on import, but missing in the read-back), so the baseline had no indexes, every
 index of the new version looked ADDED and `CkSemVerClassifier` rated an added unique index Major ("existing data may violate the new
 unique index"): a false `ElementChanged` blocker for every model that declares an index (e.g. `Basic.Energy` 1.9.0 to 1.10.0,

@@ -67,7 +67,7 @@ internals present).
 
 ### Backups leave Hidden columns out
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** A tenant backup leaves out the values of every column
+**Behaviour change.** A tenant backup leaves out the values of every column
 known to reach a Hidden attribute (residual risk below). `CrateDbStreamDataRepository.FindHiddenColumnExclusion(snapshot, includeRecorded)` is the one
 rule: the columns that reach Hidden under the current CK model (`ArchiveHiddenColumnGuard.FindHiddenColumns`, any status), with
 `includeRecorded` also `Archive.HiddenColumns`; for a rollup the aggregate columns of an aggregation over a Hidden attribute; plus
@@ -232,7 +232,7 @@ The repository inserts return `StreamDataWriteResult` (`Stored`, `Skipped` with 
 `LowerPrecedence` / `ManualValueProtected`). A guarded statement ends with `RETURNING` key + ranking columns +
 `row_origin`; `ConflictOutcome.Decide` decides stored ⇔ the returned values equal the sent ones (exact because
 the last key admits equality); the reason of a skipped row is the key that decided (
-**changelog entry:** an automated write that loses on a column key placed before `$Origin` was reported as
+**Behaviour note:** an automated write that loses on a column key placed before `$Origin` was reported as
 `ManualValueProtected` whenever the stored row was manual, now `LowerPrecedence`; storage is unchanged). Tests:
 `StreamDataOrigin/SkipReasonDecidingKeyIntegrationTests` (raw and time-range). The client inserts return the skipped rows as `SkippedArchiveRow(Index, Reason)`;
 unguarded statements send no `RETURNING`. Only stored rows feed the retroactive detection. A manual row that is
@@ -281,7 +281,7 @@ not lose a row.
 
 ### Value check on raw and time-range writes (raw path)
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** `InsertAsync` (raw archives) now
+**Behaviour change.** `InsertAsync` (raw archives) now
 runs the same value check as `InsertTimeRangeAsync`: `ArchiveWriteValueValidator.Normalize` has a `StreamDataPoint`
 overload, called first thing after the archive snapshot is loaded. A value that does not fit its column's CK type refuses
 the whole batch with an `ArgumentException` (asset repository: 400) naming point (index, rtId, timestamp), column and
@@ -300,7 +300,7 @@ text in a Double column is now refused up front with this message instead of bei
 
 ### Partial delivery: a column the point does not name keeps its value
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** Raw and time-range writes
+**Behaviour change.** Raw and time-range writes
 update only the columns a point names. A column not named keeps its stored value, a column named with `null` is
 cleared, a new row stores NULL for every column not named (decided by Reimar 2026-11-09). **Behaviour change for
 automated deliveries:** a partial re-delivery no longer clears the columns it did not send. Rules to keep:
@@ -337,10 +337,10 @@ Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `P
 
 ### Record values become their member columns on both write paths
 
-**Changelog entry (this repository has no CHANGELOG file; this is the entry).** `InsertAsync` (raw archives)
+**Behaviour change.** `InsertAsync` (raw archives)
 dropped every record value a point carried. A pipeline (`CreateUpdateInfo@1` → `SaveStreamDataInArchive@1`) delivers the
 entity's attributes as they are, so a column on a record sub-path (`NamePlate.SerialNumber`) arrived as one key
-`NamePlate` → `RtRecord`, which is no column: the member was neither written nor cleared, and since that change the stored
+`NamePlate` → `RtRecord`, which is no column: the member was neither written nor cleared, so the stored
 value simply stayed. The time-range path expanded records (`FlattenRecordValues`); the raw path did not. The REST raw
 `insert` was not affected because the asset repository accepts only dotted column paths (`ArchivePointValidation`
 refuses a record key with 400), so its points carry no record values. **Behaviour change for raw writes from pipelines:**

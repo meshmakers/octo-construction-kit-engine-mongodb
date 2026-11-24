@@ -128,7 +128,7 @@ round-trip gate lives in `RoundTrip/` (`CkMetaModelRoundTripTests`, `CkMetaModel
   setup (~2-5 s locally, 15-110 s on a loaded agent).
 - Never mutate process-wide state from a parallel collection (see the schema-prefix note below).
 
-**Measured (2026-10-09).** Locally (Mac mini, 14 cores, DebugL, `dotnet test <sln>`):
+**Measured (2026-10-09, one local run, 14 cores, DebugL, `dotnet test <sln>`; a dated measurement, not a guarantee):
 integration suite 590 passed / 2 skipped in **4 m 07 s**; with the 45 new CK v2 / RoundTrip tests
 filtered out it is **also 4 m 07 s** - they add ~50 s of summed test time (7.5 %) but none to the
 critical path. On CI the same suite took 9 m 46 s (r3.5.0, 50936, 545 tests) and 21-31 min after
@@ -229,7 +229,7 @@ Thing (inherits Named) and implements Coded, unrelated `Widget` implements Named
 record (`Address`) assignments, and `ReadWrite` / `ReadOnly` / `MethodOnly` on the association role `Link` (Hidden is
 not allowed on association roles, engine rule 108); methods `ChangePassword-2` (every field),
 `Reindex-1` (static) and `Ping-1` (minimal) on Thing. Extend it whenever a new meta-model field is added.
-Since that change (message 129) internal elements may only be referenced by internal ones: `Gadget`, `Widget`, `Coded-1`,
+Under engine message 129 internal elements may only be referenced by internal ones: `Gadget`, `Widget`, `Coded-1`,
 `Labeled-1` and `Legacy-1` are internal, and the internal attribute `Hint` (assigned by Widget) and the unreferenced
 internal record `Memo` keep every visibility kind covered (C# twin `CkV2KitchenSinkModel` likewise).
 

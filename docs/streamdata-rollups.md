@@ -31,7 +31,7 @@ A `CalendarDay` rollup may declare `ReferenceTimeZone` and `DayStartOffsetMs` (S
 - **No offset rollup before this is deployed.** An offset rollup must not be created or recomputed by a build without this change.
 - Tests: `GasDayRollupIntegrationTests` (real CrateDB: live pass 23/24/25 h through the engine's `RollupOrchestrator`, recompute, repair,
   backfill by the repair's rewind, downsampling bins equal the stored `window_start`), `MongoRollupArchiveRuntimeStoreDayStartOffsetTests`,
-  `RecomputeBucketEnumeratorGasDayTests`. No CHANGELOG file exists in this repo; this section is the entry.
+  `RecomputeBucketEnumeratorGasDayTests`.
 
 ### Optimistic Recompute — Per-Window Generation Pointer (Phase 6)
 

@@ -13,7 +13,7 @@ is exactly the one the evaluator allows (creator-owned `Test/Continent`, owner-a
 full / owned-only / read-only / write-only grants, AuditOnly, system context, type-level vs insert). A new
 data-permission rule in the read filter or the guard must keep that test green.
 
-Since that change the write guard applies the read visibility first, so the "write but not visible" cell is refused too
+The write guard applies the read visibility first, so the "write but not visible" cell is refused too
 (the evaluator says `NotVisible`, the repository raises "not found"): the differential test compares every record for
 Write and Delete, `HiddenRecord_IsRefusedExactlyLikeAMissingOne` pins that a hidden record raises the very exception
 (type and message) of a missing one for update, archive and erase, and `WriteWithoutRead_CanInsert_ButNotUpdateOrDeleteExistingRecords`
@@ -21,7 +21,7 @@ pins the compatibility change. `TenantRepository.CreateEntityNotFoundException` 
 the "not found" exception of `MongoDbDataSourceCollection` (update/replace/archive: `IdNotFound`, erase:
 `FilterNotMatching`). Needs the engine package that contains the guard change.
 
-Since that change `DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
+`DataPermissionHiddenEqualsMissingTests` pins on real MongoDB that, for a caller with restricted read
 (Read, Write and Delete owned-only; Write and Delete for all with Read owned-only; Write and Delete without Read), a
 hidden record answers exactly like a missing rtId with a valid or an invalid payload, also when addressed as a sibling
 type of the shared `Location` collection (`Test/Country`, run without a transaction; the stored record stays
@@ -61,7 +61,7 @@ afterwards (`TotalCount` = pruned count):
 
 `TenantRepository.CreateSecurityFilterAsync` publishes `DataPermissions.ReadViolation` once per repository
 call whose type graph hits `AuditDeniedCkTypeIds` (16 call sites; a `ForEach` of single queries makes
-thousands per run). Since that change:
+thousands per run). The audit event works as follows:
 
 - The event is built by the engine's `DataPermissionAudit.PublishReadViolationAsync` with the real
   action: queries pass `read` (default parameter), the update/replace/delete overrides pass
@@ -114,7 +114,7 @@ contract `ITenantRepository` + `RtInterfaceQueryResult` + `InterfaceQueryExcepti
 * **Budget and measured numbers** (`GetRtEntitiesByInterfacePerformanceTests`, trait `Category=Performance`, default 100 000
   entities over 30 collection roots, `OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000` for the opt-in 1M run; not in the PR/main CI,
   nightly in `azure-pipelines-performance.yml`; .NET end to end through
-  `ITenantRepository`, MongoDB 8.0.15 Testcontainer, Mac mini, page size 50, index on Name on every root, 20 runs after 3
+  `ITenantRepository`, MongoDB 8.0.15 Testcontainer, local development machine, page size 50, index on Name on every root, 20 runs after 3
   warm-ups, median / p95 in ms). Budget: one collection at most 1.25x of the type query with the same rows;
   indexed first page over 30 collections p95 at most 100 ms; unindexed: no promise (printed, not asserted).
 

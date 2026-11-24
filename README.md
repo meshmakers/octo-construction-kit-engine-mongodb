@@ -2,6 +2,9 @@
 
 MongoDB-based runtime engine for the OCTO Construction Kit. This library provides the data access layer and repository implementations for storing and managing Construction Kit (CK) models and runtime entities in MongoDB.
 
+Instructions for developers and coding agents (build, test, rules, which doc to read before changing which code) are in
+[`AGENTS.md`](AGENTS.md); the detail lives in [`docs/`](docs/).
+
 ## Overview
 
 This project contains two main assemblies:
