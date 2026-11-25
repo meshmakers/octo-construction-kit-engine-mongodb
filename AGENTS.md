@@ -105,6 +105,10 @@ These rules bind new and changed code. Known exceptions in existing code are nam
   aggregations are not returned for a restricted deep graph, which prunes as a post-step
   ([docs/permissions-and-interface-query.md](docs/permissions-and-interface-query.md);
   `DataPermissionEvaluatorDifferentialTests`, `DataPermissionHiddenEqualsMissingTests`, `DeepGraphDataPermissionTests`).
+- **A CK model validation refusal carries a number from the engine message catalog.** `CkModelValidationMessages`
+  uses 91, 126, 145 (system reference mismatch) and 146 (dependency not resolvable) of `MessageCodes.json`, never a
+  number of its own and never a free-text discriminator parameter
+  ([docs/runtime-write-semantics.md](docs/runtime-write-semantics.md); `ValidateCkModelTests`).
 - **A failed commit or write concern keeps its cause.** Rethrow the driver exception unchanged after a failed
   `OctoSession.CommitTransactionAsync`; map a write-concern-only failure to
   `OperationFailedException.DatabaseOperationFailed` with the driver exception inside; repository clients keep

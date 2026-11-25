@@ -7,6 +7,10 @@
   asserts that both versions of `Sy.tem.Identity` are installed - the second import runs `DeletePreviousVersion` - and
   that the snapshot holds System.Identity element rows; with the old unescaped pattern it fails. The `S.*` case is
   gone (model names allow only letters, digits, `_` and `.`), and the test class disposes its MongoDB client.
+- AB#8502 Fix: CK model validation refusals carry engine catalog numbers. `ValidateCkModelAsync` reports a system
+  reference mismatch as message 145 (`CkModelSystemReferenceMismatch`: `modelId`, `referencedModelId`,
+  `installedModelId`) and a refused dependency set as message 146 (`CkModelDependencyNotResolvable`: `modelId`,
+  `detail`) instead of 8492 with a `reason` parameter. The import's `ModelValidationException` texts are unchanged.
 
 - AB#8875 Fix: a large raw or time-range archive write no longer runs its 1,000-row statements one after another.
   `CrateDatabaseClient.InsertGroupedAsync` splits the rows of a statement shape into lanes by row key and runs the lanes at
