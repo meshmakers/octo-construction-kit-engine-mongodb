@@ -7,6 +7,9 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+
+using MongoDB.Bson;
 
 using TestCkModel.Generated.Test.v1;
 
@@ -15,10 +18,11 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Query;
 
 /// <summary>
-///     The count-only form of a nested association on a CK type with large attributes: twenty countries of about 1 MB each below one continent. Together
-///     the targets exceed MongoDB's 16 MB document limit, so every pipeline that collects the target documents of the
-///     origin into one array fails - as the unpaged nested query does. The count-only form (take 0) counts them
-///     without loading a target document; a paged query still works and reports the same total.
+///     The count-only form of a nested association on a CK type with large attributes: twenty countries of about 1 MB
+///     each below one continent. Together the targets exceed MongoDB's 16 MB document limit, so the unpaged item
+///     query, which collects every target document of the origin into one array, fails. The count-only form (take 0)
+///     runs its own pipeline - asserted on the executed query - and counts them; a paged query still works and reports
+///     the same total. The data is removed again afterwards, the collection is shared with other test classes.
 /// </summary>
 [Collection(ImportTestCkModelCollection.Name)]
 public class NestedAssociationCountOnlyLargeAttributeTests(ImportTestCkModelFixture fixture)
@@ -29,20 +33,34 @@ public class NestedAssociationCountOnlyLargeAttributeTests(ImportTestCkModelFixt
     [Fact]
     public async Task CountOnly_OfTargetsLargerThanADocument_CountsWithoutLoadingThem()
     {
-        var (repository, continentRtId) = await SeedAsync();
+        try
+        {
+            var (repository, continentRtId) = await SeedAsync();
+            var tenantRepository = (TenantRepository)repository;
 
-        using var session = await repository.GetSessionAsync();
-        session.StartTransaction();
+            using var session = await repository.GetSessionAsync();
+            session.StartTransaction();
 
-        var countOnly = (await CountriesOfAsync(repository, session, continentRtId, null, 0)).Single().Value;
-        var paged = (await CountriesOfAsync(repository, session, continentRtId, 0, 2)).Single().Value;
+            var observed = new List<IReadOnlyList<BsonDocument>>();
+            var query = await tenantRepository.CreateRtAssociationTargetsQueryAsync<RtEntity>(session,
+                [continentRtId], TestCkIds.RtCkContinentTypeId, SystemCkIds.RtCkParentChildRoleId,
+                GraphDirections.Inbound, null, [TestCkIds.RtCkCountryTypeId], RtEntityQueryOptions.Create());
+            query.CountOnlyPipelineObserver = observed.Add;
+            var countOnly = (await query.ExecuteQuery(session, null, 0)).Single().Value;
+            var paged = (await CountriesOfAsync(repository, session, continentRtId, 0, 2)).Single().Value;
 
-        await session.CommitTransactionAsync();
+            await session.CommitTransactionAsync();
 
-        Assert.Equal(CountryCount, countOnly.TotalCount);
-        Assert.Empty(countOnly.Items);
-        Assert.Equal(CountryCount, paged.TotalCount);
-        Assert.Equal(2, paged.Items.Count());
+            NestedAssociationCountOnlyTests.AssertCountOnlyAssociationStages(Assert.Single(observed));
+            Assert.Equal(CountryCount, countOnly.TotalCount);
+            Assert.Empty(countOnly.Items);
+            Assert.Equal(CountryCount, paged.TotalCount);
+            Assert.Equal(2, paged.Items.Count());
+        }
+        finally
+        {
+            await fixture.ClearCollectionAsync();
+        }
     }
 
     [Fact]
@@ -51,11 +69,19 @@ public class NestedAssociationCountOnlyLargeAttributeTests(ImportTestCkModelFixt
         // The hazard the count-only form avoids: before, a nested totalCount without first ran exactly this
         // query. Should the unpaged query ever stop collecting the targets into one array, this test documents it
         // and may go.
-        var (repository, continentRtId) = await SeedAsync();
+        try
+        {
+            var (repository, continentRtId) = await SeedAsync();
 
-        using var session = await repository.GetSessionAsync();
+            using var session = await repository.GetSessionAsync();
 
-        await Assert.ThrowsAnyAsync<Exception>(() => CountriesOfAsync(repository, session, continentRtId, null, null));
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                CountriesOfAsync(repository, session, continentRtId, null, null));
+        }
+        finally
+        {
+            await fixture.ClearCollectionAsync();
+        }
     }
 
     private static Task<IMultipleOriginResultSet<RtEntity>> CountriesOfAsync(ITenantRepository repository,

@@ -9,9 +9,12 @@
   association (many or big targets) could run out of memory like the top-level count of AB#8895. The new sub-pipeline
   matches the edges, probes each target by `_id` in its collection with the archived and field filters inside the probe
   and keeps only `_id`, then ends with `$count`: each origin receives one count document, never an array of targets or
-  target ids. Skip and sort do not change the count and are ignored; the dense-origin path (AB#4369) is not used for a
-  count, so with `take: 0` a dense origin's total is the exact count instead of its edge count (which included archived
-  edges). Every other paging (`take` null or above 0) is unchanged. Code: `MultipleOriginDirectAssociationsRtQuery`
+  target ids. The count equals the total of the unpaged item query (one per edge whose target exists and passes the
+  filters). Skip and sort do not change it and are ignored. Behaviour change of `take: 0` with a sort order: before, it
+  took the sorted paths and reported their total - without a field filter the number of non-archived edges, including
+  edges whose target is archived or missing (also the edge count of a dense origin, AB#4369); now it reports the exact
+  count, which can be lower. A sorted page (`take` above 0) still reports the edge count. Every other paging (`take` null
+  or above 0) is unchanged. Code: `MultipleOriginDirectAssociationsRtQuery`
   (`CreateCountOnlyAssociationStages`), `TenantRepository.CreateRtAssociationTargetsQueryAsync` (internal: the query
   construction of `GetRtAssociationTargetsAsync`, so tests can render the pipeline). Tests:
   `NestedAssociationCountOnlyTests` (pipeline assertion; parity with the item query for six option shapes, zero, `Any`),

@@ -310,10 +310,17 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         return stages;
     }
 
+    /// <summary>
+    ///     Called with the association sub-pipeline each time the count-only form runs, so that tests can prove
+    ///     which pipeline a query executes (the same pattern as <c>SingleOriginQuery.PipelineObserver</c>).
+    /// </summary>
+    internal Action<IReadOnlyList<BsonDocument>>? CountOnlyPipelineObserver { get; set; }
+
     private async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteCountOnlyAsync(IOctoSession session)
     {
         var (_, _, connectToFieldName) = GetDirectionFieldNames();
         var stages = CreateCountOnlyAssociationStages();
+        CountOnlyPipelineObserver?.Invoke(stages);
 
         var typedStages = new List<IPipelineStageDefinition>
         {

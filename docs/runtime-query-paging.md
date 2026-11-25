@@ -322,7 +322,9 @@ document (`CreateCountOnlyAssociationStages`):
   targets or ids; an origin without a matching edge counts 0. A large association therefore cannot reach the 16 MB
   document limit or the memory limit of a pipeline stage through this path.
 - No sort, no paging, no `$setWindowFields` and no dense-origin path: a total does not depend on them. The count equals
-  the `totalCount` of the item query with the same options (one per edge whose target exists and passes the filters).
+  the `totalCount` of the unpaged item query with the same options (one per edge whose target exists and passes the
+  filters). A sorted page without a field filter reports the number of non-archived edges instead, which also counts
+  edges whose target is archived or missing, so it can be higher than the count.
 
 Every other `take` keeps the item pipelines (edge-driven, optimized sorted and dense-origin paths). Tests:
 `NestedAssociationCountOnlyTests` (stage assertion, parity with the item query), `NestedAssociationCountOnlyLargeAttributeTests`

@@ -51,12 +51,26 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
         using var session = await repository.GetSessionAsync();
         session.StartTransaction();
 
-        var unpaged = await DistrictsOfSalzburgAsync(repository, session, Options(shape), null, null);
-        var paged = await DistrictsOfSalzburgAsync(repository, session, Options(shape), 0, 2);
-        var countOnly = await DistrictsOfSalzburgAsync(repository, session, Options(shape), null, 0);
-        var countOnlyWithSkip = await DistrictsOfSalzburgAsync(repository, session, Options(shape), 3, 0);
+        IReadOnlyList<OctoObjectId>? targetRtIds = null;
+        if (shape == "IdFilter")
+        {
+            // Two of the districts: the id filter must narrow both paths the same way.
+            var all = await DistrictsOfSalzburgAsync(repository, session, RtEntityQueryOptions.Create(), null, null);
+            targetRtIds = all.Items.Take(2).Select(e => e.RtId).ToList();
+        }
+
+        var unpaged = await DistrictsOfSalzburgAsync(repository, session, Options(shape), null, null, targetRtIds);
+        var paged = await DistrictsOfSalzburgAsync(repository, session, Options(shape), 0, 2, targetRtIds);
+        var countOnly = await DistrictsOfSalzburgAsync(repository, session, Options(shape), null, 0, targetRtIds);
+        var countOnlyWithSkip =
+            await DistrictsOfSalzburgAsync(repository, session, Options(shape), 3, 0, targetRtIds);
 
         await session.CommitTransactionAsync();
+
+        if (targetRtIds != null)
+        {
+            Assert.Equal(2, unpaged.TotalCount);
+        }
 
         Assert.Equal(unpaged.TotalCount, unpaged.Items.Count());
         Assert.Equal(unpaged.TotalCount, paged.TotalCount);
@@ -64,6 +78,53 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
         Assert.Equal(unpaged.TotalCount, countOnlyWithSkip.TotalCount);
         Assert.Empty(countOnly.Items);
         Assert.Empty(countOnlyWithSkip.Items);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(3)]
+    public async Task ExecuteQuery_TakeZero_RunsTheCountOnlyPipeline(int? skip)
+    {
+        var repository = (TenantRepository)fixture.GetSystemContext().GetTenantRepository();
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        var observed = new List<IReadOnlyList<BsonDocument>>();
+        var query = await repository.CreateRtAssociationTargetsQueryAsync<RtEntity>(session, [SalzburgRtId],
+            TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, GraphDirections.Inbound, null,
+            [TestCkIds.RtCkDistrictTypeId], Options("Sorted"));
+        query.CountOnlyPipelineObserver = observed.Add;
+
+        var result = await query.ExecuteQuery(session, skip, 0);
+
+        await session.CommitTransactionAsync();
+
+        var stages = Assert.Single(observed);
+        AssertCountOnlyAssociationStages(stages);
+        Assert.Empty(Assert.Single(result).Value.Items);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(2)]
+    public async Task ExecuteQuery_OtherTakes_DoNotRunTheCountOnlyPipeline(int? take)
+    {
+        var repository = (TenantRepository)fixture.GetSystemContext().GetTenantRepository();
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        var observed = new List<IReadOnlyList<BsonDocument>>();
+        var query = await repository.CreateRtAssociationTargetsQueryAsync<RtEntity>(session, [SalzburgRtId],
+            TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, GraphDirections.Inbound, null,
+            [TestCkIds.RtCkDistrictTypeId], Options("Sorted"));
+        query.CountOnlyPipelineObserver = observed.Add;
+
+        var result = await query.ExecuteQuery(session, take.HasValue ? 0 : null, take);
+
+        await session.CommitTransactionAsync();
+
+        Assert.Empty(observed);
+        Assert.NotEmpty(Assert.Single(result).Value.Items);
     }
 
     [Fact]
@@ -146,11 +207,11 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
 
     private static async Task<IResultSet<RtEntity>> DistrictsOfSalzburgAsync(
         Contracts.MongoDb.Repositories.ITenantRepository repository, IOctoSession session,
-        RtEntityQueryOptions options, int? skip, int? take)
+        RtEntityQueryOptions options, int? skip, int? take, IReadOnlyList<OctoObjectId>? targetRtIds = null)
     {
         var result = await repository.GetRtAssociationTargetsAsync(session, [SalzburgRtId],
             TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, TestCkIds.RtCkDistrictTypeId,
-            GraphDirections.Inbound, null, options, skip, take);
+            GraphDirections.Inbound, targetRtIds, options, skip, take);
         return result.Single().Value;
     }
 }
