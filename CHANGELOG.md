@@ -8,6 +8,23 @@
   that the snapshot holds System.Identity element rows; with the old unescaped pattern it fails. The `S.*` case is
   gone (model names allow only letters, digits, `_` and `.`), and the test class disposes its MongoDB client.
 
+- AB#9770 Fix: an update whose attribute value is a generated record class (any CK model's `Rt<Name>Record`, also
+  inside a record list) is stored as a plain record, like the insert of the same entity. The update path writes each
+  attribute as a boxed `$set` value (`MongoDataSourceMapper.ApplyUpdate`), and the registered object serializer allows
+  only the runtime contract types, so such an update failed with "Type … is not configured as a type that is allowed to
+  be serialized". `RtRecordValueNormalizer` copies the value to `RtRecord` / `List<RtRecord>` first; values without a
+  generated record are passed through unchanged. Test: `TypedRecordUpdateTests`.
+- AB#9770 New: opt-in delete events for runtime-entity watches. `WatchStreamFilter.IncludeDeleteEvents` (default
+  `false`) keeps every existing subscription exactly as it was: before, a delete never passed the watch (its change
+  event has no full document, and the watch matched on `fullDocument.ckTypeId`), and without the opt-in it still does
+  not. With the opt-in and `Delete` in `UpdateTypes` a delete event is matched in an own `$or` branch: on the pre-image
+  (`fullDocumentBeforeChange`: type set, RtId, field filters and before-field filters) when the collection root has
+  `EnableChangeStreamPreAndPostImages` - exact for derived types sharing the collection -, otherwise on the document key
+  alone (`documentKey._id` for a watched RtId), which is exact only for a watch on the collection root without field
+  filters; any other combination is refused at subscription (`OperationFailedException.DeleteEventsNeedPreImages`).
+  `IUpdateInfo<T>.DocumentRtId` (additive default member, `null` in other implementations) carries the RtId of the
+  document key for every event; `UpdateInfo` sets it. No consumer must rebuild: implementers keep compiling, and the
+  watch only changes for callers that set the opt-in. Tests: `WatchRtEntitiesDeleteEventTests` (real MongoDB).
 - AB#8875 Fix: a large raw or time-range archive write no longer runs its 1,000-row statements one after another.
   `CrateDatabaseClient.InsertGroupedAsync` splits the rows of a statement shape into lanes by row key and runs the lanes at
   the same time (`InsertStatementLanes`), so two statements in flight never carry the same key and the rows of one key are
