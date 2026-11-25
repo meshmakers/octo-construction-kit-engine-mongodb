@@ -1350,7 +1350,41 @@ internal class TenantRepository(
             subscription.AddIdFilter(new List<OctoObjectId> { watchStreamFilter.RtId.Value });
         }
 
-        return subscription.WatchRtEntitiesAsync(watchStreamFilter.UpdateTypes, cancellationToken);
+        var deleteEventMatch = ResolveDeleteEventMatch(ckCacheService, ckTypeGraph, watchStreamFilter);
+        return subscription.WatchRtEntitiesAsync(watchStreamFilter.UpdateTypes, deleteEventMatch,
+            watchStreamFilter.RtId, cancellationToken);
+    }
+
+    /// <summary>
+    ///     How the opt-in delete events of a subscription are matched (<see cref="WatchStreamFilter.IncludeDeleteEvents" />).
+    ///     The pre-image is exact for every type and filter and wins when the collection root captures it. Without it a
+    ///     delete event carries only the document key: that is exact only when the subscription covers every document
+    ///     of the collection (it watches the collection root, derived types included) and has no field filter. Any other
+    ///     combination would deliver deletes of types or documents the subscriber did not ask for, so it is refused.
+    /// </summary>
+    private DeleteEventMatch ResolveDeleteEventMatch(ICkCacheService ckCacheService, CkTypeGraph ckTypeGraph,
+        WatchStreamFilter watchStreamFilter)
+    {
+        if (!watchStreamFilter.IncludeDeleteEvents)
+        {
+            return DeleteEventMatch.None;
+        }
+
+        var rootCkTypeId = ckTypeGraph.DefiningCollectionRootCkTypeId ?? ckTypeGraph.CkTypeId;
+        var rootGraph = ckCacheService.GetCkType(TenantId, rootCkTypeId);
+        if (rootGraph.EnableChangeStreamPreAndPostImages)
+        {
+            return DeleteEventMatch.PreImage;
+        }
+
+        var watchesWholeCollection = Equals(ckTypeGraph.CkTypeId, rootCkTypeId);
+        if (watchesWholeCollection && watchStreamFilter.FieldFilterCriteria == null &&
+            watchStreamFilter.BeforeFieldFilterCriteria == null)
+        {
+            return DeleteEventMatch.DocumentKey;
+        }
+
+        throw OperationFailedException.DeleteEventsNeedPreImages(rootCkTypeId, ckTypeGraph.CkTypeId);
     }
 
     public IUpdateStream<RtAssociation> WatchToRtAssociationsAsync(RtCkId<CkTypeId> originCkTypeId,

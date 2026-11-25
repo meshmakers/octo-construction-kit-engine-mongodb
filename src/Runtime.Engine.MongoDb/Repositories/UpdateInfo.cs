@@ -1,4 +1,6 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories;
@@ -39,6 +41,7 @@ public class UpdateInfo<T> : IUpdateInfo<T> where T : class, new()
         UpdateFields = changeStreamDocument.UpdateDescription?.UpdatedFields.Names.ToArray() ?? Array.Empty<string>();
 
         Document = changeStreamDocument.FullDocument;
+        DocumentRtId = ReadDocumentRtId(changeStreamDocument.DocumentKey);
         DocumentBeforeChange = changeStreamDocument.FullDocumentBeforeChange;
 
         if (readNormalizer != null)
@@ -60,4 +63,17 @@ public class UpdateInfo<T> : IUpdateInfo<T> where T : class, new()
     public UpdateTypes UpdateType { get; }
     public T? Document { get; }
     public T? DocumentBeforeChange { get; }
+
+    /// <inheritdoc />
+    public OctoObjectId? DocumentRtId { get; }
+
+    private static OctoObjectId? ReadDocumentRtId(BsonDocument? documentKey)
+    {
+        if (documentKey == null || !documentKey.TryGetValue(Constants.IdField, out var id) || !id.IsObjectId)
+        {
+            return null;
+        }
+
+        return new OctoObjectId(id.AsObjectId.ToString());
+    }
 }
