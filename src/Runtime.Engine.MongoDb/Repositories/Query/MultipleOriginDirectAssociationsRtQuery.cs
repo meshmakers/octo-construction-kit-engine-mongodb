@@ -13,6 +13,7 @@ using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using MongoDB.Driver.GeoJsonObjectModel;
 
@@ -156,57 +157,45 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             throw OperationFailedException.PagingNeeded();
         }
 
-        // AB#6892: a page size of 0 is the count-only use case (children(first: 0) { totalCount }).
-        // Mongo rejects both "$limit: 0" and "$slice: [array, skip, 0]", so run the normal pipeline
-        // for one item (the totalCount is computed before the limit) and drop the targets afterwards.
+        // A page size of 0 is the count-only use case (children(first: 0) { totalCount },
+        // and a nested selection of totalCount alone, which the asset repository maps to take 0). It runs
+        // a count that loads no target document; skip and sort do not change a total count.
         if (take == 0)
         {
-            return await ExecuteQueryCore(session, skip, 1, true);
+            return await ExecuteCountOnlyAsync(session);
         }
 
-        return await ExecuteQueryCore(session, skip, take, false);
+        return await ExecuteQueryCore(session, skip, take);
     }
 
-    private async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteQueryCore(IOctoSession session, int? skip,
-        int? take, bool countOnly)
+    private (string InnerLocalFieldRtIdName, string InnerLocalFieldCkIdName, string ConnectToFieldName)
+        GetDirectionFieldNames()
     {
-
-        // Field names for the association lookup
-        var innerLocalFieldRtIdName = "targetRtId";
-        var innerLocalFieldCkIdName = "targetCkTypeId";
-        var connectToFieldName = "originRtId";
-
-        switch (_graphDirection)
+        return _graphDirection switch
         {
-            case GraphDirections.Inbound:
-                innerLocalFieldRtIdName = "originRtId";
-                innerLocalFieldCkIdName = "originCkTypeId";
-                connectToFieldName = "targetRtId";
-                break;
-            case GraphDirections.Outbound:
-                break;
-            default:
-                throw OperationFailedException.GraphDirectionUnsupported(_graphDirection);
-        }
+            GraphDirections.Inbound => ("originRtId", "originCkTypeId", "targetRtId"),
+            GraphDirections.Outbound => ("targetRtId", "targetCkTypeId", "originRtId"),
+            _ => throw OperationFailedException.GraphDirectionUnsupported(_graphDirection)
+        };
+    }
 
-        var connectToField = (FieldDefinition<RtAssociation, string>)connectToFieldName;
-
-        var connectFromField = (FieldDefinition<RtEntity, string[]>)"_id";
-        var @as = (FieldDefinition<BsonDocument, TTargetEntity[]>)"_associations";
-
+    private List<RtCkId<CkTypeId>> GetAllTargetCkIds()
+    {
         // Collect all derived types from all target type graphs
-        var allTargetCkIds = _targetCkTypeGraphs
+        return _targetCkTypeGraphs
             .SelectMany(graph => graph.GetAllDerivedTypes(true))
             .Select(t => t.ToRtCkId())
             .Distinct()
             .ToList();
+    }
 
-        // Group target type graphs by their collection root
-        var collectionGroups = _targetCkTypeGraphs
-            .GroupBy(g => g.DefiningCollectionRootCkTypeId)
-            .ToList();
-
-        // Build the association filter (matches all target types across all collections)
+    /// <summary>
+    ///     The <c>$match</c> on the association collection that every path starts its sub-pipeline with: the role,
+    ///     the target types across all collections and, unless archived entities are included, no archived edge.
+    /// </summary>
+    private BsonDocument BuildAssociationMatchStage(string innerLocalFieldCkIdName,
+        IReadOnlyList<RtCkId<CkTypeId>> allTargetCkIds)
+    {
         List<FilterDefinition<RtAssociation>> associationFilter =
         [
             Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
@@ -218,27 +207,175 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             associationFilter.Add(Builders<RtAssociation>.Filter.Ne(ckType => ckType.RtState, RtState.Archived));
         }
 
-        // Build the sub-pipeline using BsonDocument stages for flexibility with multiple lookups
         var associationRenderArgs = new RenderArgs<RtAssociation>(
             BsonSerializer.SerializerRegistry.GetSerializer<RtAssociation>(),
             BsonSerializer.SerializerRegistry);
 
+        return new BsonDocument("$match",
+            Builders<RtAssociation>.Filter.And(associationFilter).Render(associationRenderArgs));
+    }
+
+    /// <summary>
+    ///     The security, id and field filters on the target entities, rendered once, or null when there is none.
+    /// </summary>
+    private BsonDocument? RenderTargetFieldFilter()
+    {
+        var filterDefinitions = CreateFilterDefinitions();
+        if (filterDefinitions == null)
+        {
+            return null;
+        }
+
+        var filterRenderArgs = new RenderArgs<TTargetEntity>(
+            BsonSerializer.SerializerRegistry.GetSerializer<TTargetEntity>(),
+            BsonSerializer.SerializerRegistry);
+        return filterDefinitions.Render(filterRenderArgs);
+    }
+
+    /// <summary>
+    ///     The sub-pipeline over the association collection of the count-only path. It counts exactly what
+    ///     the standard path returns as totalCount - one per edge whose target exists in one of the target
+    ///     collections, is not archived (unless included) and passes the security, id and field filters - but no
+    ///     target document leaves its collection: the per-edge target <c>$lookup</c> filters inside its own
+    ///     pipeline and ends with <c>$project: { _id: 1 }</c> (at most one id per edge), and the sub-pipeline ends
+    ///     with <c>$count</c>, so the origin receives a single count document instead of an array of targets or
+    ///     ids. No sort, no paging, no <c>$setWindowFields</c>: a total count does not depend on them. The edge
+    ///     <c>$lookup</c> from the origins joins on the indexed originRtId / targetRtId field, every target probe on
+    ///     <c>_id</c>.
+    /// </summary>
+    internal IReadOnlyList<BsonDocument> CreateCountOnlyAssociationStages()
+    {
+        var (innerLocalFieldRtIdName, innerLocalFieldCkIdName, _) = GetDirectionFieldNames();
+        var collectionGroups = _targetCkTypeGraphs
+            .GroupBy(g => g.DefiningCollectionRootCkTypeId)
+            .ToList();
+        var renderedFieldFilter = RenderTargetFieldFilter();
+
+        var stages = new List<BsonDocument>
+        {
+            BuildAssociationMatchStage(innerLocalFieldCkIdName, GetAllTargetCkIds())
+        };
+
+        var collectionIndex = 0;
+        foreach (var group in collectionGroups)
+        {
+            var targetPipeline = new BsonArray();
+            if (!_includeArchivedEntities)
+            {
+                targetPipeline.Add(new BsonDocument("$match",
+                    new BsonDocument("rtState", new BsonDocument("$ne", (int)RtState.Archived))));
+            }
+
+            if (renderedFieldFilter != null)
+            {
+                targetPipeline.Add(new BsonDocument("$match", renderedFieldFilter));
+            }
+
+            targetPipeline.Add(new BsonDocument("$project", new BsonDocument("_id", 1)));
+
+            stages.Add(new BsonDocument("$lookup", new BsonDocument
+            {
+                {
+                    "from", _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(group.First())
+                        .GetMongoCollection().CollectionNamespace.CollectionName
+                },
+                { "localField", innerLocalFieldRtIdName },
+                { "foreignField", "_id" },
+                { "pipeline", targetPipeline },
+                { "as", $"target{collectionIndex}" }
+            }));
+
+            collectionIndex++;
+        }
+
+        if (collectionGroups.Count > 1)
+        {
+            var concatArrays = new BsonArray();
+            for (var i = 0; i < collectionGroups.Count; i++)
+            {
+                concatArrays.Add($"$target{i}");
+            }
+
+            stages.Add(new BsonDocument("$project",
+                new BsonDocument("target", new BsonDocument("$concatArrays", concatArrays))));
+        }
+        else
+        {
+            stages.Add(new BsonDocument("$project", new BsonDocument("target", "$target0")));
+        }
+
+        // One document per edge and found target, exactly as the standard path unwinds, then counted.
+        stages.Add(new BsonDocument("$unwind", "$target"));
+        stages.Add(new BsonDocument("$count", "_assocCount"));
+        return stages;
+    }
+
+    private async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteCountOnlyAsync(IOctoSession session)
+    {
+        var (_, _, connectToFieldName) = GetDirectionFieldNames();
+        var stages = CreateCountOnlyAssociationStages();
+
+        var typedStages = new List<IPipelineStageDefinition>
+        {
+            new BsonDocumentPipelineStageDefinition<RtAssociation, BsonDocument>(stages[0])
+        };
+        typedStages.AddRange(stages.Skip(1)
+            .Select(stage => new BsonDocumentPipelineStageDefinition<BsonDocument, BsonDocument>(stage)));
+
+        var pipelineDefinition = PipelineDefinition<RtAssociation, BsonDocument>.Create(
+            typedStages, BsonDocumentSerializer.Instance);
+
+        // An origin without a matching edge gets an empty array (no $count document): total 0.
+        var result = await _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)
+            .Aggregate(session)
+            .Match(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds))
+            .Lookup(
+                _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.GetMongoCollection(),
+                (FieldDefinition<RtEntity, string[]>)"_id",
+                (FieldDefinition<RtAssociation, string>)connectToFieldName,
+                pipelineDefinition,
+                (FieldDefinition<BsonDocument, BsonDocument[]>)"_associations")
+            .ReplaceWith((AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)
+                "{ _id: { 'rtId': '$_id', 'ckTypeId': '$ckTypeId' }, totalCount: { $ifNull: [ { $arrayElemAt: [ '$_associations._assocCount', 0 ] }, 0 ] }, 'targets': [] }")
+            .ToListAsync();
+
+        foreach (var multipleResult in result)
+        {
+            var aggregations = FinalizeResults(multipleResult.Targets);
+            multipleResult.AggregationResult = aggregations.Item1;
+            multipleResult.FieldAggregationResults = aggregations.Item2;
+        }
+
+        return new MultipleOriginResultSet<TTargetEntity>(result);
+    }
+
+    private async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteQueryCore(IOctoSession session, int? skip,
+        int? take)
+    {
+        // Field names for the association lookup
+        var (innerLocalFieldRtIdName, innerLocalFieldCkIdName, connectToFieldName) = GetDirectionFieldNames();
+
+        var connectToField = (FieldDefinition<RtAssociation, string>)connectToFieldName;
+
+        var connectFromField = (FieldDefinition<RtEntity, string[]>)"_id";
+        var @as = (FieldDefinition<BsonDocument, TTargetEntity[]>)"_associations";
+
+        var allTargetCkIds = GetAllTargetCkIds();
+
+        // Group target type graphs by their collection root
+        var collectionGroups = _targetCkTypeGraphs
+            .GroupBy(g => g.DefiningCollectionRootCkTypeId)
+            .ToList();
+
+        // Build the sub-pipeline using BsonDocument stages for flexibility with multiple lookups
         var pipelineStages = new List<BsonDocument>
         {
             // Match associations
-            new("$match", Builders<RtAssociation>.Filter.And(associationFilter).Render(associationRenderArgs))
+            BuildAssociationMatchStage(innerLocalFieldCkIdName, allTargetCkIds)
         };
 
         // Pre-render field filters (used by both paths)
-        BsonDocument? renderedFieldFilter = null;
-        var filterDefinitions = CreateFilterDefinitions();
-        if (filterDefinitions != null)
-        {
-            var filterRenderArgs = new RenderArgs<TTargetEntity>(
-                BsonSerializer.SerializerRegistry.GetSerializer<TTargetEntity>(),
-                BsonSerializer.SerializerRegistry);
-            renderedFieldFilter = filterDefinitions.Render(filterRenderArgs);
-        }
+        var renderedFieldFilter = RenderTargetFieldFilter();
 
         var sortStage = GetSortStageBsonDocument();
 
@@ -309,11 +446,6 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 {
                     foreach (var reversedResult in reversedResults)
                     {
-                        if (countOnly)
-                        {
-                            reversedResult.Targets = [];
-                        }
-
                         var reversedAggregations = FinalizeResults(reversedResult.Targets);
                         reversedResult.AggregationResult = reversedAggregations.Item1;
                         reversedResult.FieldAggregationResults = reversedAggregations.Item2;
@@ -619,11 +751,6 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
         foreach (var multipleResult in result)
         {
-            if (countOnly)
-            {
-                multipleResult.Targets = [];
-            }
-
             var targetEntities = FinalizeResults(multipleResult.Targets);
             multipleResult.AggregationResult = targetEntities.Item1;
             multipleResult.FieldAggregationResults = targetEntities.Item2;

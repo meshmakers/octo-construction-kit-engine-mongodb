@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- AB#9750 Fix: the count-only form of a nested association query (`GetRtAssociationTargetsAsync` with `take: 0`, the
+  form of `children(first: 0) { totalCount }` and, with the asset repository of the same change, of every nested
+  selection of `totalCount` alone) counts on the server and loads no target document. Before, it ran the item pipeline
+  for one item: every target document went through a per-edge `$lookup` and an unbounded `$setWindowFields`, so a large
+  association (many or big targets) could run out of memory like the top-level count of AB#8895. The new sub-pipeline
+  matches the edges, probes each target by `_id` in its collection with the archived and field filters inside the probe
+  and keeps only `_id`, then ends with `$count`: each origin receives one count document, never an array of targets or
+  target ids. Skip and sort do not change the count and are ignored; the dense-origin path (AB#4369) is not used for a
+  count, so with `take: 0` a dense origin's total is the exact count instead of its edge count (which included archived
+  edges). Every other paging (`take` null or above 0) is unchanged. Code: `MultipleOriginDirectAssociationsRtQuery`
+  (`CreateCountOnlyAssociationStages`), `TenantRepository.CreateRtAssociationTargetsQueryAsync` (internal: the query
+  construction of `GetRtAssociationTargetsAsync`, so tests can render the pipeline). Tests:
+  `NestedAssociationCountOnlyTests` (pipeline assertion; parity with the item query for six option shapes, zero, `Any`),
+  `NestedAssociationCountOnlyLargeAttributeTests` (twenty targets of 1 MB each). CK compatibility: no CK model, API or
+  contract change.
 - AB#8875 Fix: a large raw or time-range archive write no longer runs its 1,000-row statements one after another.
   `CrateDatabaseClient.InsertGroupedAsync` splits the rows of a statement shape into lanes by row key and runs the lanes at
   the same time (`InsertStatementLanes`), so two statements in flight never carry the same key and the rows of one key are

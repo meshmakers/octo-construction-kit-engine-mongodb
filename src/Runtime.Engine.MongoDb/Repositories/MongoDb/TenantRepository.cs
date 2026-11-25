@@ -683,6 +683,50 @@ internal class TenantRepository(
             targetRtIds, [targetCkTypeId], queryOptions, skip, take);
     }
 
+    /// <summary>
+    ///     The direct association query of one direction (<see cref="GraphDirections.Inbound" /> or
+    ///     <see cref="GraphDirections.Outbound" />) with every option and the caller's security filter applied, as
+    ///     <see cref="GetRtAssociationTargetsAsync{TTargetEntity}" /> runs it. Internal so that tests can render its
+    ///     pipelines.
+    /// </summary>
+    internal async Task<MultipleOriginDirectAssociationsRtQuery<TTargetEntity>>
+        CreateRtAssociationTargetsQueryAsync<TTargetEntity>(IOctoSession session,
+            IReadOnlyList<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId,
+            RtCkId<CkAssociationRoleId> roleId, GraphDirections direction, IReadOnlyList<OctoObjectId>? targetRtIds,
+            IReadOnlyList<RtCkId<CkTypeId>> targetCkTypeIds, RtEntityQueryOptions queryOptions)
+        where TTargetEntity : RtEntity, new()
+    {
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
+
+        // Build type graphs for all target types
+        var targetTypeGraphs = new List<CkTypeGraph>();
+        foreach (var targetCkTypeId in targetCkTypeIds)
+        {
+            targetTypeGraphs.Add(await GetCkTypeGraphAsync(targetCkTypeId));
+        }
+
+        var securityFilter = await CreateSecurityFilterAsync(session, originTypeGraph);
+
+        var query =
+            new MultipleOriginDirectAssociationsRtQuery<TTargetEntity>(ckCacheService, TenantId,
+                mongoDbRepositoryDataSource,
+                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false,
+                originRtIds,
+                originTypeGraph, roleId, direction, targetTypeGraphs);
+
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddIdFilter(targetRtIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+        query.AddGeospatialFilters(queryOptions.GeospatialFilters);
+        query.SetSecurityPreFilter(DataSecurityFilterRenderer.Build<TTargetEntity>(securityFilter));
+        return query;
+    }
+
     private async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<
         TTargetEntity>(
         IOctoSession session,
@@ -694,41 +738,14 @@ internal class TenantRepository(
         int? take = null)
         where TTargetEntity : RtEntity, new()
     {
-        var ckCacheService = await GetCkCacheServiceAsync();
-        var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
-
-        // Build type graphs for all target types
-        var targetTypeGraphs = new List<CkTypeGraph>();
-        foreach (var targetCkTypeId in targetCkTypeIds)
-        {
-            var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
-            targetTypeGraphs.Add(targetTypeGraph);
-        }
-
         // Materialise once — an "Any" traversal runs the same origin set through two directed queries.
         var originRtIdList = originRtIds as IReadOnlyList<OctoObjectId> ?? originRtIds.ToList();
-
-        var securityFilter = await CreateSecurityFilterAsync(session, originTypeGraph);
+        var targetCkTypeIdList = targetCkTypeIds as IReadOnlyList<RtCkId<CkTypeId>> ?? targetCkTypeIds.ToList();
 
         async Task<IMultipleOriginResultSet<TTargetEntity>> RunAsync(GraphDirections direction)
         {
-            var query =
-                new MultipleOriginDirectAssociationsRtQuery<TTargetEntity>(ckCacheService, TenantId,
-                    mongoDbRepositoryDataSource,
-                    queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false,
-                    originRtIdList,
-                    originTypeGraph, roleId, direction, targetTypeGraphs);
-
-            query.AddFieldFilterCriteria(queryOptions);
-            query.AddIdFilter(targetRtIds);
-            query.AddTextSearchFilter(queryOptions.TextSearchFilter);
-            query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
-            query.AddPostStagesToPipeline(queryOptions.SortOrders);
-            query.AddFieldAggregation(queryOptions.FieldAggregation);
-            query.AddResultAggregation(queryOptions.ResultAggregation);
-            query.AddGeospatialFilters(queryOptions.GeospatialFilters);
-            query.SetSecurityPreFilter(DataSecurityFilterRenderer.Build<TTargetEntity>(securityFilter));
-
+            var query = await CreateRtAssociationTargetsQueryAsync<TTargetEntity>(session, originRtIdList,
+                originCkTypeId, roleId, direction, targetRtIds, targetCkTypeIdList, queryOptions);
             return await query.ExecuteQuery(session, skip, take);
         }
 

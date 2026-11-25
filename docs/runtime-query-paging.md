@@ -306,3 +306,24 @@ as 300 items of which only 35 were distinct. Rules:
   attribute, Unique and UniqueNotDeleted sort attributes, compound unique, unique index with a further predicate, failed
   build of a slot under its alternate name), `TiebreakIndexShapeTests` (unit), `PagedQueryTiebreakTests`
   (also the `$geoNear` page).
+
+## Counting the targets of an association navigation
+
+`MultipleOriginDirectAssociationsRtQuery` answers `take: 0` (GraphQL `children(first: 0) { totalCount }`, and every
+nested selection of `totalCount` alone, which the asset repository maps to `take: 0`) with a count that loads no target
+document (`CreateCountOnlyAssociationStages`):
+
+- The origins join the association collection on the indexed `originRtId` / `targetRtId` field; the sub-pipeline matches
+  the role, the target types and (unless archived entities are included) non-archived edges.
+- Per target collection one `$lookup` probes the target by `_id` (`localField` → `_id`, index-backed). The archived
+  filter and the security, id and field filters run inside the probe, which ends with `$project: { _id: 1 }`: at most one
+  id per edge, never a target document.
+- `$unwind` and `$count` close the sub-pipeline, so each origin receives one count document instead of an array of
+  targets or ids; an origin without a matching edge counts 0. A large association therefore cannot reach the 16 MB
+  document limit or the memory limit of a pipeline stage through this path.
+- No sort, no paging, no `$setWindowFields` and no dense-origin path: a total does not depend on them. The count equals
+  the `totalCount` of the item query with the same options (one per edge whose target exists and passes the filters).
+
+Every other `take` keeps the item pipelines (edge-driven, optimized sorted and dense-origin paths). Tests:
+`NestedAssociationCountOnlyTests` (stage assertion, parity with the item query), `NestedAssociationCountOnlyLargeAttributeTests`
+(targets that together exceed the document limit).
