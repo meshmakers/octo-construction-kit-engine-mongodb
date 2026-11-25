@@ -53,21 +53,22 @@ public class AutoIncrementRangeValidator(ICkCacheService ckCacheService)
             Validate(range, range);
         }
 
-        // A replace that switches a range in use to FiscalYear is checked against the stored range. Only fiscal-year
-        // ranges cause the read, so legacy counters and other entities read nothing.
-        var fiscalYearRanges = ranges.Where(IsFiscalYear).ToList();
-        if (fiscalYearRanges.Count == 0)
+        // A legacy format without the counter is refused when it is configured: on an insert, and on a replace that
+        // changes the format. A stored range keeps its format on a replace (e.g. a seed re-apply) and keeps numbering.
+        // Only such formats cause the read, so every other write reads nothing.
+        var withoutCounter = ranges.Where(r => !ShowsTheCounter(r)).ToList();
+        if (withoutCounter.Count == 0)
         {
             return;
         }
 
         var stored = await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource,
-            GetAutoIncrementTypeGraph(repositoryDataSource), fiscalYearRanges);
-        foreach (var range in fiscalYearRanges)
+            GetAutoIncrementTypeGraph(repositoryDataSource), withoutCounter);
+        foreach (var range in withoutCounter)
         {
-            if (stored.TryGetValue(range.RtId, out var storedRange))
+            if (!stored.TryGetValue(range.RtId, out var storedRange) || FormatOf(storedRange) != FormatOf(range))
             {
-                ValidateSwitch(storedRange, range, range);
+                RefuseWithoutCounter(range, range);
             }
         }
     }
@@ -94,15 +95,17 @@ public class AutoIncrementRangeValidator(ICkCacheService ckCacheService)
                 continue;
             }
 
-            var before = new RtEntity(counter.GetRtCkTypeId(), counter.RtId,
-                new Dictionary<string, object?>(counter.Attributes));
+            var formatBefore = FormatOf(counter);
             foreach (var (attributeName, value) in update.Attributes)
             {
                 counter.SetAttributeRawValue(attributeName, value);
             }
 
             Validate(counter, update);
-            ValidateSwitch(before, counter, update);
+            if (FormatOf(counter) != formatBefore && !ShowsTheCounter(counter))
+            {
+                RefuseWithoutCounter(counter, update);
+            }
         }
     }
 
@@ -115,19 +118,21 @@ public class AutoIncrementRangeValidator(ICkCacheService ckCacheService)
         }
     }
 
-    private static bool IsFiscalYear(RtEntity range) =>
-        AutoIncrementRangeSettings.TryCreate(range, out var settings, out _) && settings.HasFiscalYearPeriods;
+    private static string? FormatOf(RtEntity range) =>
+        range.GetAttributeValueOrDefault(AutoIncrementRangeSettings.FormatAttribute) as string;
 
-    /// <summary>Refuses switching a range in use to FiscalYear without a StartValue above its counter.</summary>
-    private static void ValidateSwitch(RtEntity stored, RtEntity next, RtEntity written)
-    {
-        var error = AutoIncrementRangeSettings.CheckSwitchToFiscalYear(stored, next);
-        if (error != null)
-        {
-            throw AutoIncrementFailedException.InvalidNumberRange(written.RtId,
-                written.RtWellKnownName ?? next.RtWellKnownName ?? stored.RtWellKnownName, error);
-        }
-    }
+    /// <summary>
+    ///     True unless the range has a legacy format whose text does not depend on the number. Called after
+    ///     <see cref="Validate" />, so the format parses.
+    /// </summary>
+    private static bool ShowsTheCounter(RtEntity range) =>
+        !AutoIncrementNumberFormat.TryParse(FormatOf(range), out var format, out _) || format.ShowsTheCounter;
+
+    private static void RefuseWithoutCounter(RtEntity range, RtEntity written) =>
+        throw AutoIncrementFailedException.InvalidNumberRange(written.RtId,
+            written.RtWellKnownName ?? range.RtWellKnownName,
+            $"Format '{FormatOf(range)}' does not show the counter ({{0}}), so every number would be the same text; " +
+            "use {0} or {0:D<n>} for the counter, or a token format such as {counter:D5}.");
 
     // Version-less, as the AutoIncrementModifier looks the type up (D-G1-1).
     private CkTypeGraph GetAutoIncrementTypeGraph(IRepositoryDataSource repositoryDataSource) =>

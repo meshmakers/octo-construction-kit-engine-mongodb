@@ -31,6 +31,14 @@ public sealed partial class AutoIncrementNumberFormat
     /// <summary>True for a token format, false for a legacy <c>string.Format</c> format or no format.</summary>
     public bool IsTokenFormat => _parts != null;
 
+    /// <summary>
+    ///     False for a legacy format whose text does not depend on the number (no <c>{0}</c>, e.g. <c>INV</c>): every
+    ///     number would be the same text. True for a token format (it always has <c>{counter}</c>) and for no format.
+    /// </summary>
+    public bool ShowsTheCounter => _legacyFormat == null ||
+                                   string.Format(CultureInfo.InvariantCulture, _legacyFormat, 1L) !=
+                                   string.Format(CultureInfo.InvariantCulture, _legacyFormat, 2L);
+
     /// <summary>True when the format shows the fiscal year (<c>{yyyy}</c> or <c>{yy}</c>).</summary>
     public bool UsesFiscalYear => _parts?.Any(p => p.Kind is PartKind.Year4 or PartKind.Year2) == true;
 

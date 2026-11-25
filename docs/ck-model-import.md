@@ -308,9 +308,11 @@ lacks the installed `Available` version (next bullet but one).
   with the update laid over it, read only when a configuration attribute changes) and again at allocation: a
   fiscal-year range before a number is taken, a range without periods right after its statement (it reads nothing
   first), so the block a refused range without periods took stays unused - a gap, never a duplicate (a counter at 40
-  refused for a batch of 2 is at 42, and after the repair the next number is 43). Switching a range in use (no
-  periods, `CurrentValue` n > 0) to FiscalYear needs a `StartValue` above n (insert/replace read the stored range for
-  fiscal-year ranges only). Token detection ignores `{{`-escaped text.
+  refused for a batch of 2 is at 42, and after the repair the next number is 43). A FiscalYear range that was
+  numbered without periods (`CurrentValue` n > 0) and has no period yet needs a `StartValue` above n (a range rule:
+  every write and every allocation). A legacy format without `{0}` is refused when it is configured (insert, a
+  replace that changes the format, a partial update of the format; only such formats read the stored range); a stored
+  one keeps numbering. Token detection ignores `{{`-escaped text.
   AB#9755 `StartValue` floor (D5): both allocation statements are pipeline updates that set the counter (or the year's
   entry) to `max(counter, StartValue - 1) + n`, still one atomic statement per counter, year and batch; a start value
   below the counter is ignored, never a reset. A FiscalYear range numbers only String attributes (an Int attribute

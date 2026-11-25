@@ -389,7 +389,7 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
 
             var refused = Assert.IsType<AutoIncrementFailedException>(exception);
             Assert.Contains($"Number range '{Reference}'", refused.Message);
-            Assert.Contains("in use without fiscal-year periods (CurrentValue 7)", refused.Message);
+            Assert.Contains("numbered without fiscal-year periods up to CurrentValue 7", refused.Message);
             var stored = (await FindCounterAsync(database, counterId))["attributes"].AsBsonDocument;
             Assert.Equal("26-{0:D4}", stored["format"].AsString);
             Assert.False(stored.Contains("periodKind") && !stored["periodKind"].IsBsonNull &&
@@ -445,6 +445,158 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
 
             await SetStoredFormatAsync(database, counterId, LegacyFormat);
             Assert.Equal(["0043"], await NumberWithModifierAsync(modifier, dataSource, 1));
+        });
+    }
+
+    /// <summary>
+    ///     The positive case of the switch: a replace that switches the range in use (counter at 7) to FiscalYear with
+    ///     StartValue 8 is written, and the first fiscal-year number is 8.
+    /// </summary>
+    [Fact]
+    public async Task SwitchingARangeInUse_ToFiscalYear_WithAStartValueAboveTheCounter_ByReplace_IsWritten()
+    {
+        await WithTenantAsync("svswitchok", async (repository, database) =>
+        {
+            var counterId = await InsertCounterAsync(repository, "26-{0:D4}", currentValue: 7);
+            var replacement = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
+            replacement.RtId = counterId;
+            replacement.RtWellKnownName = Reference;
+            replacement.Format = "{yy}-{counter:D4}";
+            replacement.CurrentValue = 7;
+            replacement.End = 100000;
+            replacement.PeriodKind = RtAutoIncrementPeriodKindsEnum.FiscalYear;
+            replacement.ReferenceTimeZone = Vienna;
+            replacement.StartValue = 8;
+
+            await ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateReplace(replacement.ToRtEntityId(), replacement));
+
+            var modifier = new AutoIncrementModifier(fixture.GetService<ICkCacheService>(),
+                NullLogger<AutoIncrementModifier>.Instance,
+                new FixedClock(DateTimeOffset.Parse("2026-05-04T10:00:00+02:00")));
+            Assert.Equal(["26-0008"], await NumberWithModifierAsync(modifier, DataSourceOf(database), 1));
+        });
+    }
+
+    /// <summary>
+    ///     Kassandra round 3: the StartValue a switched range needs cannot be taken back in a second step. After the
+    ///     switch with StartValue 8, lowering it before the first fiscal-year number is refused; and a range that got
+    ///     there past the validator (direct write) hands out no number, so 26-0001 is never issued again.
+    /// </summary>
+    [Fact]
+    public async Task SwitchedRange_WithoutAPeriodYet_KeepsItsStartValueFloor()
+    {
+        await WithTenantAsync("svswitch2", async (repository, database) =>
+        {
+            var counterId = await InsertCounterAsync(repository, "26-{0:D4}", currentValue: 7);
+            await UpdateCounterAsync(repository, counterId, c =>
+            {
+                c.PeriodKind = RtAutoIncrementPeriodKindsEnum.FiscalYear;
+                c.ReferenceTimeZone = Vienna;
+                c.Format = "{yy}-{counter:D4}";
+                c.StartValue = 8;
+            });
+
+            var lowered = await Record.ExceptionAsync(() =>
+                UpdateCounterAsync(repository, counterId, c => c.StartValue = 1));
+            Assert.Contains("numbered without fiscal-year periods up to CurrentValue 7",
+                Assert.IsType<AutoIncrementFailedException>(lowered).Message);
+
+            await database.GetCollection<BsonDocument>(CounterCollection).UpdateOneAsync(
+                new BsonDocument("_id", ObjectId.Parse(counterId.ToString())),
+                new BsonDocument("$unset", new BsonDocument("attributes.startValue", "")),
+                cancellationToken: TestContext.Current.CancellationToken);
+            var modifier = new AutoIncrementModifier(fixture.GetService<ICkCacheService>(),
+                NullLogger<AutoIncrementModifier>.Instance,
+                new FixedClock(DateTimeOffset.Parse("2026-05-04T10:00:00+02:00")));
+
+            var refused = await Record.ExceptionAsync(() =>
+                NumberWithModifierAsync(modifier, DataSourceOf(database), 1));
+
+            Assert.Contains("numbered without fiscal-year periods up to CurrentValue 7",
+                Assert.IsType<AutoIncrementFailedException>(refused).Message);
+            var stored = (await FindCounterAsync(database, counterId))["attributes"].AsBsonDocument;
+            Assert.False(stored.Contains("periods") && stored["periods"].IsBsonArray &&
+                         stored["periods"].AsBsonArray.Count > 0);
+        });
+    }
+
+    /// <summary>
+    ///     AB#6209 follow-up: a legacy format that does not show the counter (no {0}, e.g. 'INV') would give every
+    ///     document the same text. It is refused when it is configured - insert, replace that changes the format,
+    ///     partial update of the format - naming the range.
+    /// </summary>
+    [Theory]
+    [InlineData("insert")]
+    [InlineData("replace")]
+    [InlineData("update")]
+    public async Task LegacyFormat_WithoutTheCounter_IsRefused_WhenConfigured(string how)
+    {
+        await WithTenantAsync("svnocount", async (repository, database) =>
+        {
+            Exception? exception;
+            OctoObjectId? counterId = null;
+            if (how == "insert")
+            {
+                exception = await Record.ExceptionAsync(() => InsertCounterAsync(repository, "INV"));
+            }
+            else
+            {
+                counterId = await InsertCounterAsync(repository, LegacyFormat, currentValue: 3);
+                if (how == "replace")
+                {
+                    var replacement = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
+                    replacement.RtId = counterId.Value;
+                    replacement.RtWellKnownName = Reference;
+                    replacement.Format = "INV";
+                    replacement.CurrentValue = 3;
+                    replacement.End = 100000;
+                    exception = await Record.ExceptionAsync(() => ApplyAsync(repository,
+                        EntityUpdateInfo<RtEntity>.CreateReplace(replacement.ToRtEntityId(), replacement)));
+                }
+                else
+                {
+                    exception = await Record.ExceptionAsync(() =>
+                        UpdateCounterAsync(repository, counterId.Value, c => c.Format = "INV"));
+                }
+            }
+
+            var refused = Assert.IsType<AutoIncrementFailedException>(exception);
+            Assert.Contains($"Number range '{Reference}'", refused.Message);
+            Assert.Contains("Format 'INV' does not show the counter", refused.Message);
+            if (counterId != null)
+            {
+                Assert.Equal(LegacyFormat,
+                    (await FindCounterAsync(database, counterId.Value))["attributes"]["format"].AsString);
+            }
+        });
+    }
+
+    /// <summary>
+    ///     A range already stored with a legacy format without the counter keeps working: it still numbers at
+    ///     allocation, and a replace that keeps its format (e.g. a seed re-apply) is written.
+    /// </summary>
+    [Fact]
+    public async Task StoredLegacyFormat_WithoutTheCounter_KeepsWorking()
+    {
+        await WithTenantAsync("svnocountok", async (repository, database) =>
+        {
+            var counterId = await InsertCounterAsync(repository, LegacyFormat, currentValue: 3);
+            await SetStoredFormatAsync(database, counterId, "INV");
+            var modifier = new AutoIncrementModifier(fixture.GetService<ICkCacheService>(),
+                NullLogger<AutoIncrementModifier>.Instance);
+
+            Assert.Equal(["INV"], await NumberWithModifierAsync(modifier, DataSourceOf(database), 1));
+
+            var replacement = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
+            replacement.RtId = counterId;
+            replacement.RtWellKnownName = Reference;
+            replacement.Format = "INV";
+            replacement.CurrentValue = 4;
+            replacement.End = 100000;
+            await ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateReplace(replacement.ToRtEntityId(), replacement));
+            Assert.Equal(4, await StoredCurrentValueAsync(database, counterId));
         });
     }
 

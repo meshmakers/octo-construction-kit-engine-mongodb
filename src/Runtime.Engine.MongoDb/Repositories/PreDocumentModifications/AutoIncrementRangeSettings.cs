@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Globalization;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
@@ -31,6 +32,7 @@ public sealed class AutoIncrementRangeSettings
     internal const string StartValueAttribute = "StartValue";
     internal const string EndAttribute = "End";
     internal const string CurrentValueAttribute = "CurrentValue";
+    internal const string PeriodsAttribute = "Periods";
     internal const string PeriodKindAttribute = "PeriodKind";
     internal const string FiscalYearStartMonthAttribute = "FiscalYearStartMonth";
     internal const string ReferenceTimeZoneAttribute = "ReferenceTimeZone";
@@ -78,37 +80,9 @@ public sealed class AutoIncrementRangeSettings
         return local.Month >= FiscalYearStartMonth ? local.Year : local.Year - 1;
     }
 
-    /// <summary>
-    ///     A range already in use without fiscal-year periods (<c>CurrentValue</c> n &gt; 0) that is switched to
-    ///     <c>PeriodKind = FiscalYear</c> would start the current fiscal year at <c>StartValue</c> (or 1) and issue numbers
-    ///     it already issued (e.g. <c>26-{0:D4}</c> becoming <c>{yy}-{counter:D4}</c>). The switch is allowed only with
-    ///     a <c>StartValue</c> above n. Returns the reason when <paramref name="next" /> must be refused, else null.
-    /// </summary>
-    internal static string? CheckSwitchToFiscalYear(RtEntity stored, RtEntity next)
-    {
-        if (IsFiscalYear(stored) || !IsFiscalYear(next))
-        {
-            return null;
-        }
-
-        if (!TryGetLong(stored, CurrentValueAttribute, out var currentValue, out _) || currentValue is null or <= 0)
-        {
-            return null;
-        }
-
-        TryGetLong(next, StartValueAttribute, out var startValue, out _);
-        if (startValue > currentValue)
-        {
-            return null;
-        }
-
-        return $"the range is in use without fiscal-year periods (CurrentValue {currentValue}); switching it to " +
-               $"PeriodKind FiscalYear would issue numbers from {startValue ?? 1} on again. Set StartValue above " +
-               $"{currentValue}, or configure a new range.";
-    }
-
-    private static bool IsFiscalYear(RtEntity counter) =>
-        TryGetLong(counter, PeriodKindAttribute, out var periodKind, out _) && periodKind == PeriodKindFiscalYear;
+    private static bool HasPeriodEntries(RtEntity counter) =>
+        counter.GetAttributeValueOrDefault(PeriodsAttribute) is IEnumerable entries and not string &&
+        entries.Cast<object?>().Any();
 
     /// <summary>Reads and checks the range configuration of the counter entity <paramref name="counter" />.</summary>
     public static bool TryCreate(RtEntity counter, out AutoIncrementRangeSettings settings, out string? error)
@@ -193,6 +167,20 @@ public sealed class AutoIncrementRangeSettings
             var shown = string.IsNullOrEmpty(formatText) ? "no Format" : $"Format '{formatText}'";
             error = $"PeriodKind FiscalYear needs a Format that shows the fiscal year ({{yyyy}} or {{yy}}, e.g. " +
                     $"RE-{{yyyy}}-{{counter:D5}}); with {shown} the numbers would repeat every fiscal year.";
+            return false;
+        }
+
+        // A range numbered without periods (CurrentValue n > 0) that becomes a fiscal-year range would start its first
+        // fiscal year at StartValue (or 1) and issue numbers again (e.g. '26-{0:D4}' becoming '{yy}-{counter:D4}').
+        // Until its first period exists it therefore needs a StartValue above n - checked on every write of the
+        // range and before every allocation, so neither a later StartValue change nor a race gets around it.
+        if (hasPeriods && !HasPeriodEntries(counter) &&
+            TryGetLong(counter, CurrentValueAttribute, out var currentValue, out _) && currentValue > 0 &&
+            !(startValue > currentValue))
+        {
+            error = $"the range was numbered without fiscal-year periods up to CurrentValue {currentValue}; as a " +
+                    $"FiscalYear range its first fiscal year would issue numbers from {startValue ?? 1} on again. " +
+                    $"Set StartValue above {currentValue}.";
             return false;
         }
 

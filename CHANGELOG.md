@@ -21,12 +21,18 @@
   precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
   conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
-- AB#8675 Fix (review of PR #283): a range in use without periods (`CurrentValue` n > 0) that is switched to
-  `PeriodKind = FiscalYear` by a partial update or a replace is refused unless its `StartValue` is above n; the new
-  fiscal year would otherwise start at `StartValue` (or 1) and issue numbers again (e.g. `26-{0:D4}` becoming
-  `{yy}-{counter:D4}`). A legacy format whose token text is escaped (`{{yyyy}}-{0:D4}`) stays a legacy format. An
-  entity's numbers are all taken in one fiscal year (its creation time is read once). A range switched from
-  FiscalYear to legacy while numbers are taken is tried again instead of reporting end reached; the numbers left
+- AB#6209 Fix: a legacy format that does not show the counter (no `{0}`, e.g. `INV`) would give every document the
+  same text. It is refused when a range is configured - insert, a replace that changes the format, a partial update of
+  the format - with an error that names the range. A range already stored with such a format keeps numbering, and a
+  replace that keeps its format (a seed re-apply) is written.
+- AB#8675 Fix (review of PR #283): a `PeriodKind = FiscalYear` range that was numbered without periods (`CurrentValue`
+  n > 0) and has no fiscal-year period yet needs a `StartValue` above n; its first fiscal year would otherwise start
+  at `StartValue` (or 1) and issue numbers again (e.g. `26-{0:D4}` becoming `{yy}-{counter:D4}`). It is a range rule,
+  so it is checked on every write of the range (the switch itself, a later change of `StartValue`) and again before
+  allocation, which also covers a range written past the validator. A legacy format whose token text is escaped
+  (`{{yyyy}}-{0:D4}`) stays a legacy format. An entity's numbers are all taken in one fiscal year (its creation time
+  is read once). A range switched from FiscalYear to legacy after the first statement and before the read of the
+  range is tried again instead of reporting end reached; a switch after that read is refused with "write again". The numbers left
   in `AutoIncrementEndReached` count from the `StartValue` floor, and the message names the refused block only. A new
   period's block whose last number would pass `long.MaxValue` is refused instead of overflowing. Breaking for direct
   callers: the `AutoIncrementModifier` constructor takes `(ICkCacheService, ILogger<AutoIncrementModifier>,

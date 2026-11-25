@@ -149,6 +149,21 @@ public class AutoIncrementNumberFormatTests
     }
 
     [Theory]
+    [InlineData("INV", false)]
+    [InlineData("RE-2026", false)]
+    [InlineData("{{0}}", false)]
+    [InlineData("{0:D4}", true)]
+    [InlineData("INV-{0}", true)]
+    [InlineData("RE-{yyyy}-{counter:D5}", true)]
+    [InlineData(null, true)]
+    public void ShowsTheCounter_IsFalse_OnlyForALegacyFormatWhoseTextDoesNotDependOnTheNumber(string? format,
+        bool expected)
+    {
+        Assert.True(AutoIncrementNumberFormat.TryParse(format, out var parsed, out var error), error);
+        Assert.Equal(expected, parsed.ShowsTheCounter);
+    }
+
+    [Theory]
     [InlineData("RE-{yyyy}")]
     [InlineData("{yy}")]
     [InlineData("RE-{yyyy}-{yy}")]
