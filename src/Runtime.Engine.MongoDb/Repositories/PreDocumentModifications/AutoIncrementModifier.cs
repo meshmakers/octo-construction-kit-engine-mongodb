@@ -138,6 +138,7 @@ public class AutoIncrementModifier(
             }
 
             autoIncrementType.StoredEntities.TryGetValue(rtEntity.RtId, out var storedEntity);
+            DateTimeOffset? createdAt = null;
             foreach (var (ckTypeAttributeGraph, reference) in autoIncrementType.Attributes)
             {
                 var attributeName = ckTypeAttributeGraph.AttributeName;
@@ -159,10 +160,12 @@ public class AutoIncrementModifier(
                     continue;
                 }
 
-                // The creation time of this entity decides its fiscal year (AB#9754); read per entity, so a batch
-                // that runs across the start of a fiscal year numbers each entity in its own year.
+                // The creation time of this entity decides its fiscal year (AB#9754); read once per entity (and only
+                // when it needs a number), so a batch that runs across the start of a fiscal year numbers each entity
+                // in its own year, and all numbers of one entity are in the same year.
+                createdAt ??= _timeProvider.GetUtcNow();
                 requests.Add(new NumberRequest(rtEntity, ckTypeAttributeGraph, reference, autoIncrementType.CkTypeId,
-                    _timeProvider.GetUtcNow()));
+                    createdAt.Value));
             }
         }
 
@@ -232,8 +235,25 @@ public class AutoIncrementModifier(
         var storedSettings = GetValidSettings(stored, reference);
         if (!storedSettings.HasFiscalYearPeriods)
         {
+            // The statement matched nothing although the range has no periods: it was a fiscal-year range when the
+            // statement ran and was switched meanwhile, or the block passes End. Try once more against what is
+            // stored now; only a block that still does not fit is reported as end reached.
+            counter = await AllocateWithoutPeriodsAsync(session, mongoCollection, reference, block.Count);
+            if (counter != null)
+            {
+                var settings = GetValidSettings(counter, reference);
+                var firstNumber = ToLong(counter.CurrentValue) - block.Count + 1;
+                for (var i = 0; i < block.Count; i++)
+                {
+                    Assign(block[i], settings, firstNumber + i, null);
+                }
+
+                return;
+            }
+
+            stored = await FindCounterAsync(session, autoIncrementCollection, reference) ?? stored;
             throw AutoIncrementFailedException.AutoIncrementEndReached(stored.RtId, reference,
-                ToLong(stored.CurrentValue), ToLong(stored.End), block.Count);
+                ToLong(stored.CurrentValue), ToLong(stored.End), block.Count, storedSettings.StartValue);
         }
 
         // A fiscal-year number is the formatted text with the year; a plain (Int) attribute would get the bare period
@@ -430,8 +450,10 @@ public class AutoIncrementModifier(
         });
         var incrementOptions = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
 
-        // 2. The period does not exist yet: add it with its first block, only while it is missing.
-        var lastNumberOfTheBlock = firstNumberOfAPeriod + count - 1;
+        // 2. The period does not exist yet: add it with its first block, only while it is missing. A block whose last
+        //    number would pass long.MaxValue cannot fit below any End, so it is never created (no overflow).
+        var blockFitsInALong = count - 1 <= long.MaxValue - firstNumberOfAPeriod;
+        var lastNumberOfTheBlock = blockFitsInALong ? firstNumberOfAPeriod + count - 1 : long.MaxValue;
         var createFilter = Builders<RtAutoIncrement>.Filter.And(counterFilter,
             new BsonDocument($"{PeriodsField}.{PeriodFiscalYearMember}", new BsonDocument("$ne", fiscalYear)),
             new BsonDocument("$expr", new BsonDocument("$lte", new BsonArray
@@ -461,8 +483,10 @@ public class AutoIncrementModifier(
                 break;
             }
 
-            var created = await ExecuteAsync<RtAutoIncrement?>(session, reference, count, async sessionHandle =>
-                await mongoCollection.FindOneAndUpdateAsync(sessionHandle, createFilter, create, createOptions));
+            var created = !blockFitsInALong
+                ? null
+                : await ExecuteAsync<RtAutoIncrement?>(session, reference, count, async sessionHandle =>
+                    await mongoCollection.FindOneAndUpdateAsync(sessionHandle, createFilter, create, createOptions));
             if (created != null)
             {
                 return firstNumberOfAPeriod;
@@ -491,7 +515,7 @@ public class AutoIncrementModifier(
 
         var current = TryGetPeriodCurrentValue(stored, fiscalYear) ?? firstNumberOfAPeriod - 1;
         throw AutoIncrementFailedException.AutoIncrementEndReached(stored.RtId, reference, fiscalYear, current,
-            ToLong(stored.End), count);
+            ToLong(stored.End), count, settings.StartValue);
     }
 
     /// <summary>

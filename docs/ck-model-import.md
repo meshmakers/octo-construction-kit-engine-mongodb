@@ -285,12 +285,13 @@ lacks the installed `Available` version (next bullet but one).
   which, the modifier reads the stored entities of the batch by RtId: a stored entity is never renumbered (an empty
   payload value gets the stored number back), a new one is numbered only where the attribute has no value (ImportRt
   values kept, counter not advanced). AB#9753: numbers are allocated atomically - one `findOneAndUpdate` with
-  `$inc` per counter and batch (a block, filter `currentValue + n <= end`), handed out in batch order; the counter
+  pipeline update per counter and batch (a block, filter `max(currentValue, StartValue - 1) + n <= end`, see
+  AB#9755 below), handed out in batch order; the counter
   is never read first and never written back (so an older typed `RtAutoIncrement` cannot drop attributes only the
   newer System has). In a transaction a parallel writer of the same counter aborts the transaction with
   `TransientTransactionError`, which the modifier passes on unretried (only the transaction owner can retry, and it
   must rebuild the entities: the aborted attempt left its rolled-back number in the entity object); outside a
-  transaction the `$inc` is retried up to 3 times. AB#9754: fiscal-year ranges (`PeriodKind = FiscalYear`, System
+  transaction the statement runs at most 3 times (the first attempt and up to 2 retries). AB#9754: fiscal-year ranges (`PeriodKind = FiscalYear`, System
   2.9.0) keep one counter per fiscal year in `Periods`; the fiscal year comes from each entity's creation time (the
   injected `TimeProvider`, read per entity) in the range's IANA `ReferenceTimeZone`, named by the year it starts in.
   One pipeline update per counter, year and batch sets that year's entry in `Periods` (`$set` with `$map` over the
@@ -304,7 +305,12 @@ lacks the installed `Available` version (next bullet but one).
   `{yyyy}`/`{yy}` - no format and a legacy format are refused, the numbers would repeat every year -, StartValue
   1..End) are checked by `AutoIncrementRangeValidator` on
   insert/replace of a counter, on partial updates (AB#9755: engine hook `IPreDocumentUpdateValidation`, stored counter
-  with the update laid over it, read only when a configuration attribute changes) and again before every allocation.
+  with the update laid over it, read only when a configuration attribute changes) and again at allocation: a
+  fiscal-year range before a number is taken, a range without periods right after its statement (it reads nothing
+  first), so the block a refused range without periods took stays unused - a gap, never a duplicate (a counter at 40
+  refused for a batch of 2 is at 42, and after the repair the next number is 43). Switching a range in use (no
+  periods, `CurrentValue` n > 0) to FiscalYear needs a `StartValue` above n (insert/replace read the stored range for
+  fiscal-year ranges only). Token detection ignores `{{`-escaped text.
   AB#9755 `StartValue` floor (D5): both allocation statements are pipeline updates that set the counter (or the year's
   entry) to `max(counter, StartValue - 1) + n`, still one atomic statement per counter, year and batch; a start value
   below the counter is ignored, never a reset. A FiscalYear range numbers only String attributes (an Int attribute

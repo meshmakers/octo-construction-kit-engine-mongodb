@@ -43,6 +43,7 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
     private static readonly RtCkId<CkTypeId> CreditNoteTypeId = new("FiscalYearTest/CreditNote");
     private static readonly RtCkId<CkTypeId> LegacyDocTypeId = new("FiscalYearTest/LegacyDoc");
     private static readonly RtCkId<CkTypeId> IntDocTypeId = new("FiscalYearTest/IntDoc");
+    private static readonly RtCkId<CkTypeId> TwinDocTypeId = new("FiscalYearTest/TwinDoc");
 
     /// <summary>
     ///     AC 1: fiscal year = calendar year, format <c>RE-{yyyy}-{counter:D5}</c>: documents of 31 December 2026 get
@@ -308,13 +309,15 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
             await InsertCounterAsync(dataSource, "InvoiceNumber", InvoiceFormat);
             var repository = await GetRepositoryAsync(database.DatabaseNamespace.DatabaseName);
             var invoice = Invoice();
-            var fiscalYear = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow,
-                TimeZoneInfo.FindSystemTimeZoneById(Vienna)).Year;
+            // The repository's modifier reads the service clock: the year is read before and after the write, so a
+            // run across a year start in Vienna accepts either year instead of failing.
+            var yearBefore = ViennaYearNow();
 
             await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(invoice));
 
+            var yearAfter = ViennaYearNow();
             var stored = (await FindDocumentAsync(database, invoice.RtId))["attributes"]["number"].AsString;
-            Assert.Equal($"RE-{fiscalYear}-00001", stored);
+            Assert.Contains(stored, new[] { $"RE-{yearBefore}-00001", $"RE-{yearAfter}-00001" });
         });
     }
 
@@ -469,6 +472,28 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
         });
     }
 
+    /// <summary>
+    ///     An entity with two fiscal-year numbers gets both in the same fiscal year: its creation time is read once,
+    ///     although the clock here passes the start of 2027 between two reads.
+    /// </summary>
+    [Fact]
+    public async Task EntityWithTwoNumbers_GetsBothInTheSameFiscalYear()
+    {
+        await WithTenantAsync("fytwin", async (dataSource, _) =>
+        {
+            await InsertCounterAsync(dataSource, "InvoiceNumber", InvoiceFormat);
+            await InsertCounterAsync(dataSource, "CreditNoteNumber", "GS-{yyyy}-{counter:D4}");
+            var clock = new FakeClock(At("2026-12-31T23:59:59+01:00"), TimeSpan.FromSeconds(2));
+            var twin = new RtEntity(TwinDocTypeId, OctoObjectId.GenerateNewId(),
+                new Dictionary<string, object?> { { "Title", "twin" } });
+
+            await RunAsync(NewModifier(clock), dataSource, twin);
+
+            Assert.Equal("RE-2026-00001", Number(twin));
+            Assert.Equal("GS-2026-0001", Assert.IsType<string>(twin.GetAttributeValueOrDefault("SecondNumber")));
+        });
+    }
+
     private const string CounterCollection = "RtEntity_SystemAutoIncrement";
 
     private AutoIncrementModifier NewModifier(TimeProvider clock) =>
@@ -585,6 +610,9 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
         Assert.IsType<string>(entity.GetAttributeValueOrDefault(NumberAttribute));
 
     private static DateTimeOffset At(string instant) => DateTimeOffset.Parse(instant);
+
+    private static int ViennaYearNow() =>
+        TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TimeZoneInfo.FindSystemTimeZoneById(Vienna)).Year;
 
     private static async Task<Dictionary<int, long>> PeriodsAsync(IMongoDatabase database, OctoObjectId counterId)
     {
@@ -704,6 +732,17 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
             ]
         };
 
+        CkCompiledTypeDto TwinDocType()
+        {
+            var type = DocumentType("TwinDoc", "InvoiceNumber");
+            type.Attributes!.Add(new CkTypeAttributeDto
+            {
+                CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("SecondNumber-1")),
+                AttributeName = "SecondNumber", IsOptional = true, AutoIncrementReference = "CreditNoteNumber"
+            });
+            return type;
+        }
+
         return new CkCompiledModelRoot
         {
             ModelId = id,
@@ -715,14 +754,17 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
                 new CkAttributeDto
                     { AttributeId = new CkAttributeId("DocumentNumber-1"), ValueType = AttributeValueTypesDto.String },
                 new CkAttributeDto
-                    { AttributeId = new CkAttributeId("IntNumber-1"), ValueType = AttributeValueTypesDto.Int }
+                    { AttributeId = new CkAttributeId("IntNumber-1"), ValueType = AttributeValueTypesDto.Int },
+                new CkAttributeDto
+                    { AttributeId = new CkAttributeId("SecondNumber-1"), ValueType = AttributeValueTypesDto.String }
             ],
             Types =
             [
                 DocumentType("Invoice", "InvoiceNumber"),
                 DocumentType("CreditNote", "CreditNoteNumber"),
                 DocumentType("LegacyDoc", "LegacyNumber"),
-                DocumentType("IntDoc", "IntNumber", "IntNumber-1")
+                DocumentType("IntDoc", "IntNumber", "IntNumber-1"),
+                TwinDocType()
             ]
         };
     }

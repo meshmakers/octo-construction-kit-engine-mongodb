@@ -123,6 +123,31 @@ public class AutoIncrementNumberFormatTests
         Assert.Contains("FiscalYearStartMonth", error);
     }
 
+    /// <summary>
+    ///     A legacy format with string.Format-escaped braces around token text stays a legacy format and renders as
+    ///     before; an unescaped token still selects the token syntax.
+    /// </summary>
+    [Theory]
+    [InlineData("{{yyyy}}-{0:D4}", "{yyyy}-0042")]
+    [InlineData("{{counter}}/{0}", "{counter}/42")]
+    [InlineData("{{{{yy}}}}-{0:D4}", "{{yy}}-0042")]
+    public void EscapedTokenText_StaysALegacyFormat(string format, string expected)
+    {
+        Assert.False(AutoIncrementNumberFormat.IsTokenFormatString(format));
+        Assert.True(AutoIncrementNumberFormat.TryParse(format, out var result, out var error), error);
+        Assert.False(result.IsTokenFormat);
+        Assert.Equal(expected, result.Format(42, null));
+    }
+
+    [Theory]
+    [InlineData("RE-{yyyy}-{counter:D5}")]
+    [InlineData("{counter}")]
+    [InlineData("{{{yy}-{counter}")]
+    public void UnescapedToken_SelectsTheTokenSyntax(string format)
+    {
+        Assert.True(AutoIncrementNumberFormat.IsTokenFormatString(format));
+    }
+
     [Theory]
     [InlineData("RE-{yyyy}")]
     [InlineData("{yy}")]

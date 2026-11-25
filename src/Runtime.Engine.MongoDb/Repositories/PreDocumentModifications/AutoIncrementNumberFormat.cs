@@ -212,7 +212,10 @@ public sealed partial class AutoIncrementNumberFormat
 
     private static readonly AutoIncrementNumberFormat Empty = new(null, null);
 
-    [GeneratedRegex(@"\{(yyyy|yy|counter(:D\d+)?)\}", RegexOptions.CultureInvariant)]
+    // A token is an unescaped {yyyy}, {yy}, {counter} or {counter:D<n>}: preceded by an even number of '{' (none,
+    // or pairs that string.Format reads as an escaped '{'), so a legacy format such as '{{yyyy}}-{0:D4}' (literal
+    // text '{yyyy}') stays a legacy format.
+    [GeneratedRegex(@"(?<!\{)(?:\{\{)*\{(yyyy|yy|counter(:D\d+)?)\}", RegexOptions.CultureInvariant)]
     private static partial Regex TokenRegex();
 
     [GeneratedRegex(@"^counter:D(\d{1,2})$", RegexOptions.CultureInvariant)]

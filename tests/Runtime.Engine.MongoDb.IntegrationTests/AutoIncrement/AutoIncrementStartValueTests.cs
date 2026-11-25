@@ -212,10 +212,12 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
             await ImportSeedAsync(repository, seed);
 
             var issued = await CreateInvoicesAsync(repository, 3);
-            var fiscalYear = FiscalYearNow();
+            // One fixed instant for every fiscal-year allocation of the test, so it cannot run across a year start.
+            const int fiscalYear = 2026;
             var dataSource = DataSourceOf(database);
             var modifier = new AutoIncrementModifier(fixture.GetService<ICkCacheService>(),
-                NullLogger<AutoIncrementModifier>.Instance);
+                NullLogger<AutoIncrementModifier>.Instance,
+                new FixedClock(DateTimeOffset.Parse("2026-05-04T10:00:00+02:00")));
             var fiscalIssued = await NumberWithModifierAsync(modifier, dataSource, 2, "FiscalNumber");
             await UpdateCounterAsync(repository, legacyId, c => c.StartValue = 2000);
 
@@ -308,12 +310,91 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
                 c.PeriodKind = RtAutoIncrementPeriodKindsEnum.FiscalYear;
                 c.ReferenceTimeZone = Vienna;
                 c.Format = FiscalFormat;
+                c.StartValue = 8;
             });
 
             var stored = (await FindCounterAsync(database, counterId))["attributes"].AsBsonDocument;
             Assert.Equal(7, stored["currentValue"].ToInt64());
+            Assert.Equal((long)RtAutoIncrementPeriodKindsEnum.FiscalYear, stored["periodKind"].ToInt64());
             Assert.Equal(Vienna, stored["referenceTimeZone"].AsString);
             Assert.Equal(FiscalFormat, stored["format"].AsString);
+            Assert.Equal(8, stored["startValue"].ToInt64());
+        });
+    }
+
+    /// <summary>
+    ///     The numbers left in the end-reached error count from the StartValue floor: counter 0, StartValue 100,
+    ///     End 100 leaves one number, not 100.
+    /// </summary>
+    [Fact]
+    public async Task EndReached_CountsTheNumbersLeft_FromTheStartValue()
+    {
+        await WithTenantAsync("svleft", async (repository, database) =>
+        {
+            await InsertCounterAsync(repository, LegacyFormat, startValue: 100, end: 100);
+            var modifier = new AutoIncrementModifier(fixture.GetService<ICkCacheService>(),
+                NullLogger<AutoIncrementModifier>.Instance);
+
+            var exception = await Record.ExceptionAsync(() =>
+                NumberWithModifierAsync(modifier, DataSourceOf(database), 2));
+
+            var refused = Assert.IsType<AutoIncrementFailedException>(exception);
+            Assert.Contains("needs 2 number(s), 1 left up to End 100", refused.Message);
+            Assert.Equal(["0100"], await NumberWithModifierAsync(modifier, DataSourceOf(database), 1));
+        });
+    }
+
+    /// <summary>
+    ///     A range in use without periods (counter at 7) that is switched to FiscalYear without a StartValue above 7
+    ///     would start the current fiscal year at 1 and issue 1-7 again, e.g. '26-{0:D4}' becoming
+    ///     '{yy}-{counter:D4}'. The switch is refused, by a partial update and by a replace, and nothing changes.
+    /// </summary>
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(false, 7)]
+    [InlineData(true, null)]
+    [InlineData(true, 5)]
+    public async Task SwitchingARangeInUse_ToFiscalYear_WithoutAStartValueAboveTheCounter_IsRefused(bool replace,
+        int? startValue)
+    {
+        await WithTenantAsync("svswitch", async (repository, database) =>
+        {
+            var counterId = await InsertCounterAsync(repository, "26-{0:D4}", currentValue: 7);
+
+            Exception? exception;
+            if (replace)
+            {
+                var replacement = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
+                replacement.RtId = counterId;
+                replacement.RtWellKnownName = Reference;
+                replacement.Format = "{yy}-{counter:D4}";
+                replacement.CurrentValue = 7;
+                replacement.End = 100000;
+                replacement.PeriodKind = RtAutoIncrementPeriodKindsEnum.FiscalYear;
+                replacement.ReferenceTimeZone = Vienna;
+                replacement.StartValue = startValue;
+                exception = await Record.ExceptionAsync(() => ApplyAsync(repository,
+                    EntityUpdateInfo<RtEntity>.CreateReplace(replacement.ToRtEntityId(), replacement)));
+            }
+            else
+            {
+                exception = await Record.ExceptionAsync(() => UpdateCounterAsync(repository, counterId, c =>
+                {
+                    c.PeriodKind = RtAutoIncrementPeriodKindsEnum.FiscalYear;
+                    c.ReferenceTimeZone = Vienna;
+                    c.Format = "{yy}-{counter:D4}";
+                    c.StartValue = startValue;
+                }));
+            }
+
+            var refused = Assert.IsType<AutoIncrementFailedException>(exception);
+            Assert.Contains($"Number range '{Reference}'", refused.Message);
+            Assert.Contains("in use without fiscal-year periods (CurrentValue 7)", refused.Message);
+            var stored = (await FindCounterAsync(database, counterId))["attributes"].AsBsonDocument;
+            Assert.Equal("26-{0:D4}", stored["format"].AsString);
+            Assert.False(stored.Contains("periodKind") && !stored["periodKind"].IsBsonNull &&
+                         stored["periodKind"].ToInt64() == (long)RtAutoIncrementPeriodKindsEnum.FiscalYear);
+            Assert.Equal(7, stored["currentValue"].ToInt64());
         });
     }
 
@@ -433,9 +514,6 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
 
     private static string Number(RtEntity entity) =>
         Assert.IsType<string>(entity.GetAttributeValueOrDefault(NumberAttribute));
-
-    private static int FiscalYearNow() =>
-        TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TimeZoneInfo.FindSystemTimeZoneById(Vienna)).Year;
 
     /// <summary>Writes the format straight into the collection, past the range validator.</summary>
     private static async Task SetStoredFormatAsync(IMongoDatabase database, OctoObjectId counterId, string format) =>

@@ -21,6 +21,16 @@
   precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
   conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#8675 Fix (review of PR #283): a range in use without periods (`CurrentValue` n > 0) that is switched to
+  `PeriodKind = FiscalYear` by a partial update or a replace is refused unless its `StartValue` is above n; the new
+  fiscal year would otherwise start at `StartValue` (or 1) and issue numbers again (e.g. `26-{0:D4}` becoming
+  `{yy}-{counter:D4}`). A legacy format whose token text is escaped (`{{yyyy}}-{0:D4}`) stays a legacy format. An
+  entity's numbers are all taken in one fiscal year (its creation time is read once). A range switched from
+  FiscalYear to legacy while numbers are taken is tried again instead of reporting end reached; the numbers left
+  in `AutoIncrementEndReached` count from the `StartValue` floor, and the message names the refused block only. A new
+  period's block whose last number would pass `long.MaxValue` is refused instead of overflowing. Breaking for direct
+  callers: the `AutoIncrementModifier` constructor takes `(ICkCacheService, ILogger<AutoIncrementModifier>,
+  TimeProvider? = null)`; it is registered by `AddMongoDbRuntimeRepository`, no direct caller in the services.
 - AB#8675 Fix: number ranges refuse configurations that would issue a number twice. A token format without
   `{counter}` (e.g. `RE-{yyyy}`) is refused, it would give every document of a period the same number. A
   `PeriodKind = FiscalYear` range needs a token format with `{yyyy}` or `{yy}`: without a format, with a legacy
@@ -57,21 +67,24 @@
   (`RE-{yyyy}-{counter:D5}`); every other format is passed to `string.Format` exactly as before, and a range without a
   period numbers exactly as before (same single statement, no read). A range whose configuration is not valid is
   refused with `AutoIncrementFailedException` (`InvalidNumberRange`) when it is inserted or replaced (new
-  `AutoIncrementRangeValidator`) and again before numbers are taken from it: `FiscalYear` without a known IANA zone
+  `AutoIncrementRangeValidator`) and again at allocation (a fiscal-year range before a number is taken; a range
+  without periods right after its statement, so a refused block of such a range stays unused - a gap, never a
+  duplicate): `FiscalYear` without a known IANA zone
   (no UTC default; Windows ids refused), a start month outside 1-12, a token format that does not parse, or
   `{yyyy}`/`{yy}` without `FiscalYear`. Tests: `AutoIncrementFiscalYearTests` (MongoDB, fake clock: restart on
   1 January and 1 July, two types, legacy `{0:D4}`, batch across midnight, 20 parallel creations across the boundary
   with and without transactions, configuration refusals) and `AutoIncrementNumberFormatTests`.
 - AB#9753 New: `AutoIncrementModifier` allocates numbers atomically. Before, it read the counters once per batch,
   incremented `CurrentValue` in memory and replaced the whole counter entity, so two parallel writers outside a
-  transaction could get the same number. Now one `findOneAndUpdate` with `$inc` per counter and batch takes a block of
+  transaction could get the same number. Now one `findOneAndUpdate` per counter and batch takes a block of
   consecutive numbers; its filter holds the `End` bound (`currentValue + n <= end`), so the counter never passes `End`
   (`AutoIncrementEndReached`, also when the batch needs more numbers than are left: the batch is refused as a whole,
   nothing is taken, and the message names the range, the numbers needed and the numbers left) and `AutoIncrementReferenceNotFound` is raised as before when there is no counter. The counter is neither
-  read first nor replaced. Numbers follow the batch order (with the engine's ordered `EntityRuleEngine`). The `$inc`
+  read first nor replaced. Numbers follow the batch order (with the engine's ordered `EntityRuleEngine`). The statement
   runs in the caller's session: inside a transaction it is rolled back with it, and a parallel writer of the same
   counter aborts the transaction with `TransientTransactionError`, which is passed on unretried for the transaction
-  owner to run again; outside a transaction the `$inc` is retried up to 3 times on that label or a write conflict
+  owner to run again; outside a transaction the statement runs at most 3 times (the first attempt and up to 2
+  retries) on that label or a write conflict
   (committed at once, so a later failure leaves a gap). Tests: `AutoIncrementModifierTests` (20 parallel creations
   with and without transactions, injected and real transient errors, rollback, block over `End`, one findAndModify
   and no replace on the counter).

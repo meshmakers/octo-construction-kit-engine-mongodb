@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
@@ -43,18 +44,32 @@ public class AutoIncrementRangeValidator(ICkCacheService ckCacheService)
         AutoIncrementRangeSettings.ReferenceTimeZoneAttribute
     };
 
-    public Task RunAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
+    public async Task RunAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
         IEnumerable<RtEntity> documents)
     {
-        foreach (var document in documents)
+        var ranges = documents.Where(IsAutoIncrement).ToList();
+        foreach (var range in ranges)
         {
-            if (IsAutoIncrement(document))
-            {
-                Validate(document, document);
-            }
+            Validate(range, range);
         }
 
-        return Task.CompletedTask;
+        // A replace that switches a range in use to FiscalYear is checked against the stored range. Only fiscal-year
+        // ranges cause the read, so legacy counters and other entities read nothing.
+        var fiscalYearRanges = ranges.Where(IsFiscalYear).ToList();
+        if (fiscalYearRanges.Count == 0)
+        {
+            return;
+        }
+
+        var stored = await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource,
+            GetAutoIncrementTypeGraph(repositoryDataSource), fiscalYearRanges);
+        foreach (var range in fiscalYearRanges)
+        {
+            if (stored.TryGetValue(range.RtId, out var storedRange))
+            {
+                ValidateSwitch(storedRange, range, range);
+            }
+        }
     }
 
     public async Task RunAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
@@ -68,11 +83,8 @@ public class AutoIncrementRangeValidator(ICkCacheService ckCacheService)
             return;
         }
 
-        // Version-less, as the AutoIncrementModifier looks the type up (D-G1-1).
-        var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, AutoIncrementTypeId) ??
-                          throw InvalidCkTypeIdException.RtCkTypeIdNotFound(repositoryDataSource.TenantId,
-                              AutoIncrementTypeId);
-        var stored = await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource, ckTypeGraph, updates);
+        var stored = await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource,
+            GetAutoIncrementTypeGraph(repositoryDataSource), updates);
 
         foreach (var update in updates)
         {
@@ -82,12 +94,15 @@ public class AutoIncrementRangeValidator(ICkCacheService ckCacheService)
                 continue;
             }
 
+            var before = new RtEntity(counter.GetRtCkTypeId(), counter.RtId,
+                new Dictionary<string, object?>(counter.Attributes));
             foreach (var (attributeName, value) in update.Attributes)
             {
                 counter.SetAttributeRawValue(attributeName, value);
             }
 
             Validate(counter, update);
+            ValidateSwitch(before, counter, update);
         }
     }
 
@@ -99,6 +114,25 @@ public class AutoIncrementRangeValidator(ICkCacheService ckCacheService)
                 written.RtWellKnownName ?? range.RtWellKnownName, error!);
         }
     }
+
+    private static bool IsFiscalYear(RtEntity range) =>
+        AutoIncrementRangeSettings.TryCreate(range, out var settings, out _) && settings.HasFiscalYearPeriods;
+
+    /// <summary>Refuses switching a range in use to FiscalYear without a StartValue above its counter.</summary>
+    private static void ValidateSwitch(RtEntity stored, RtEntity next, RtEntity written)
+    {
+        var error = AutoIncrementRangeSettings.CheckSwitchToFiscalYear(stored, next);
+        if (error != null)
+        {
+            throw AutoIncrementFailedException.InvalidNumberRange(written.RtId,
+                written.RtWellKnownName ?? next.RtWellKnownName ?? stored.RtWellKnownName, error);
+        }
+    }
+
+    // Version-less, as the AutoIncrementModifier looks the type up (D-G1-1).
+    private CkTypeGraph GetAutoIncrementTypeGraph(IRepositoryDataSource repositoryDataSource) =>
+        ckCacheService.GetRtCkType(repositoryDataSource.TenantId, AutoIncrementTypeId) ??
+        throw InvalidCkTypeIdException.RtCkTypeIdNotFound(repositoryDataSource.TenantId, AutoIncrementTypeId);
 
     private static bool IsAutoIncrement(RtEntity document)
     {
