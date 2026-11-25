@@ -4,7 +4,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModificatio
 
 using Xunit;
 
-namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.AutoIncrement;
+namespace Meshmakers.Octo.Runtime.Engine.UnitTests.AutoIncrement;
 
 /// <summary>
 ///     AB#9754 without a database: the token format of a number range (<c>{yyyy}</c>, <c>{yy}</c>,

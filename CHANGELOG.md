@@ -21,6 +21,13 @@
   precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
   conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#6209 Test: the contention-heavy AutoIncrement integration tests (20 parallel writers with retry loops, with and
+  without transactions, also across the year boundary) are `Category=Stress` (+ `LoadSensitive`) and run in the
+  performance pipeline; the regular suite keeps one small concurrency test per criterion (3 parallel creations; 2+2
+  across the year boundary; no retry, no timing). The allocation decisions - retry only outside a transaction and at
+  most 3 attempts, the first number of a block, the overflow guard, the numbers left from the `StartValue` floor - are
+  unit tests without Docker (`AutoIncrementAllocationRulesTests`), and the format and range-rule tests moved to the unit
+  test project.
 - AB#6209 Fix: a legacy format that does not show the counter (no `{0}`, e.g. `INV`) would give every document the
   same text. It is refused when a range is configured - insert, a replace that changes the format, a partial update of
   the format - with an error that names the range. A range already stored with such a format keeps numbering, and a

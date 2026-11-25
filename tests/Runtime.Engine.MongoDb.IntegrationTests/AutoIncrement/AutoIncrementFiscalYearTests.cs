@@ -236,19 +236,37 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
     ///     anew. The 2027 period is added exactly once.
     /// </summary>
     [Fact]
+    // Contention-heavy (20 parallel writers, retry loops with random back-off): excluded from the regular suite
+    // (filter Category!=Stress); runs in the octo-construction-kit-engine-mongodb-Performance pipeline.
+    [Trait("Category", "Stress")]
+    [Trait("Category", "LoadSensitive")]
     public async Task ParallelCreationsAcrossTheYearBoundary_InTransactions_GetDistinctNumbers()
     {
-        await ParallelAcrossTheYearBoundaryAsync("fyparx", inTransactions: true);
+        await ParallelAcrossTheYearBoundaryAsync("fyparx", inTransactions: true, writersPerYear: 10);
     }
 
     /// <summary>AC 5 without transactions: every statement is atomic on its own.</summary>
     [Fact]
+    // Contention-heavy (20 parallel writers, retry loops with random back-off): excluded from the regular suite
+    // (filter Category!=Stress); runs in the octo-construction-kit-engine-mongodb-Performance pipeline.
+    [Trait("Category", "Stress")]
+    [Trait("Category", "LoadSensitive")]
     public async Task ParallelCreationsAcrossTheYearBoundary_WithoutTransactions_GetDistinctNumbers()
     {
-        await ParallelAcrossTheYearBoundaryAsync("fyparnotx", inTransactions: false);
+        await ParallelAcrossTheYearBoundaryAsync("fyparnotx", inTransactions: false, writersPerYear: 10);
     }
 
-    private async Task ParallelAcrossTheYearBoundaryAsync(string prefix, bool inTransactions)
+    /// <summary>
+    ///     AC 5 in the regular suite: two writers in 2026 and two in 2027 (whose period none of them finds) in parallel,
+    ///     without transactions, with fixed clocks: distinct numbers, the 2027 period added once (no retry, no timing).
+    /// </summary>
+    [Fact]
+    public async Task FourParallelCreationsAcrossTheYearBoundary_WithoutTransactions_GetDistinctNumbers()
+    {
+        await ParallelAcrossTheYearBoundaryAsync("fypar4", inTransactions: false, writersPerYear: 2);
+    }
+
+    private async Task ParallelAcrossTheYearBoundaryAsync(string prefix, bool inTransactions, int writersPerYear)
     {
         await WithTenantAsync(prefix, async (dataSource, database) =>
         {
@@ -257,17 +275,17 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
             var newYear = NewModifier(new FakeClock(At("2027-01-01T00:00:01+01:00")));
             await RunAsync(oldYear, dataSource, Invoice()); // 2026 exists with 1, 2027 does not.
 
-            var results = await Task.WhenAll(Enumerable.Range(0, 20).Select(i => Task.Run(() =>
+            var results = await Task.WhenAll(Enumerable.Range(0, 2 * writersPerYear).Select(i => Task.Run(() =>
                 CreateWithRetryAsync(i % 2 == 0 ? oldYear : newYear, dataSource, inTransactions))));
 
             var numbers2026 = results.Where(n => n.StartsWith("RE-2026-", StringComparison.Ordinal)).Order().ToList();
             var numbers2027 = results.Where(n => n.StartsWith("RE-2027-", StringComparison.Ordinal)).Order().ToList();
-            Assert.Equal(Enumerable.Range(2, 10).Select(n => $"RE-2026-{n:D5}"), numbers2026);
-            Assert.Equal(Enumerable.Range(1, 10).Select(n => $"RE-2027-{n:D5}"), numbers2027);
+            Assert.Equal(Enumerable.Range(2, writersPerYear).Select(n => $"RE-2026-{n:D5}"), numbers2026);
+            Assert.Equal(Enumerable.Range(1, writersPerYear).Select(n => $"RE-2027-{n:D5}"), numbers2027);
 
             var counter = (await FindDocumentAsync(database, counterId))["attributes"].AsBsonDocument;
             Assert.Equal(2, counter["periods"].AsBsonArray.Count);
-            Assert.Equal(new Dictionary<int, long> { { 2026, 11 }, { 2027, 10 } },
+            Assert.Equal(new Dictionary<int, long> { { 2026, 1 + writersPerYear }, { 2027, writersPerYear } },
                 await PeriodsAsync(database, counterId));
         });
     }

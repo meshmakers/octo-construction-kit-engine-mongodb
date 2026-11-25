@@ -215,7 +215,7 @@ public class AutoIncrementModifier(
             // naming the range; the block it took stays unused. The counter is never set back: another request may
             // have taken the next block meanwhile, so a gap is accepted, a duplicate never.
             var settings = GetValidSettings(counter, reference);
-            var firstNumber = ToLong(counter.CurrentValue) - block.Count + 1;
+            var firstNumber = FirstNumberOfTheBlock(ToLong(counter.CurrentValue), block.Count);
             for (var i = 0; i < block.Count; i++)
             {
                 Assign(block[i], settings, firstNumber + i, null);
@@ -242,7 +242,7 @@ public class AutoIncrementModifier(
             if (counter != null)
             {
                 var settings = GetValidSettings(counter, reference);
-                var firstNumber = ToLong(counter.CurrentValue) - block.Count + 1;
+                var firstNumber = FirstNumberOfTheBlock(ToLong(counter.CurrentValue), block.Count);
                 for (var i = 0; i < block.Count; i++)
                 {
                     Assign(block[i], settings, firstNumber + i, null);
@@ -452,7 +452,7 @@ public class AutoIncrementModifier(
 
         // 2. The period does not exist yet: add it with its first block, only while it is missing. A block whose last
         //    number would pass long.MaxValue cannot fit below any End, so it is never created (no overflow).
-        var blockFitsInALong = count - 1 <= long.MaxValue - firstNumberOfAPeriod;
+        var blockFitsInALong = BlockFitsInALong(firstNumberOfAPeriod, count);
         var lastNumberOfTheBlock = blockFitsInALong ? firstNumberOfAPeriod + count - 1 : long.MaxValue;
         var createFilter = Builders<RtAutoIncrement>.Filter.And(counterFilter,
             new BsonDocument($"{PeriodsField}.{PeriodFiscalYearMember}", new BsonDocument("$ne", fiscalYear)),
@@ -475,7 +475,7 @@ public class AutoIncrementModifier(
                 await mongoCollection.FindOneAndUpdateAsync(sessionHandle, incrementFilter, increment, incrementOptions));
             if (incremented != null)
             {
-                return PeriodCurrentValue(incremented, fiscalYear) - count + 1;
+                return FirstNumberOfTheBlock(PeriodCurrentValue(incremented, fiscalYear), count);
             }
 
             if (round == 2)
@@ -523,6 +523,21 @@ public class AutoIncrementModifier(
     ///     (bounded) on a transient error and hands out its block once. Inside a transaction the server has aborted it:
     ///     the exception goes to the owner unchanged.
     /// </summary>
+    /// <summary>
+    ///     Whether a failed allocation statement runs again: only outside a transaction (there it did not apply), only
+    ///     on a transient error, and at most <see cref="MaxAllocationAttempts" /> attempts in all. Inside a transaction
+    ///     the server has aborted it, so only the transaction owner can run it again.
+    /// </summary>
+    internal static bool ShouldRetryAllocation(Exception exception, bool inTransaction, int attempt) =>
+        !inTransaction && attempt < MaxAllocationAttempts &&
+        RepositoryDistributedLockService.IsTransientTransactionError(exception);
+
+    /// <summary>The first number of a block of <paramref name="count" /> that ended the counter at <paramref name="counterAfter" />.</summary>
+    internal static long FirstNumberOfTheBlock(long counterAfter, int count) => counterAfter - count + 1;
+
+    /// <summary>True when the last number of a block starting at <paramref name="first" /> fits in a long.</summary>
+    internal static bool BlockFitsInALong(long first, int count) => count - 1 <= long.MaxValue - first;
+
     private async Task<TResult> ExecuteAsync<TResult>(IOctoSession session, string reference, int count,
         Func<IClientSessionHandle, Task<TResult>> statement)
     {
@@ -538,8 +553,7 @@ public class AutoIncrementModifier(
 
                 return await statement(octoSession.SessionHandle);
             }
-            catch (Exception ex) when (!octoSession.IsTransactionActive && attempt < MaxAllocationAttempts &&
-                                       RepositoryDistributedLockService.IsTransientTransactionError(ex))
+            catch (Exception ex) when (ShouldRetryAllocation(ex, octoSession.IsTransactionActive, attempt))
             {
                 logger.LogWarning(
                     "Transient error while allocating {Count} number(s) from counter {Reference} (attempt {Attempt}/{MaxAttempts}), retrying",

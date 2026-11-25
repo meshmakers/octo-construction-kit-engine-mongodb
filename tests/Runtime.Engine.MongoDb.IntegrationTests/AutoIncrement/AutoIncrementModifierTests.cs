@@ -312,6 +312,10 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
     ///     transaction again.
     /// </summary>
     [Fact]
+    // Contention-heavy (20 parallel writers, retry loops with random back-off): excluded from the regular suite
+    // (filter Category!=Stress); runs in the octo-construction-kit-engine-mongodb-Performance pipeline.
+    [Trait("Category", "Stress")]
+    [Trait("Category", "LoadSensitive")]
     public async Task TwentyParallelCreations_InTransactions_GetTwentyDistinctConsecutiveNumbers()
     {
         await WithTicketTenantAsync("aipartx", async (repository, database, counterId) =>
@@ -332,13 +336,32 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
         });
     }
 
-    /// <summary>AC 1 without transactions: 20 parallel sessions, each $inc is atomic on its own.</summary>
+    /// <summary>AC 1 without transactions: 20 parallel sessions, each allocation is atomic on its own.</summary>
     [Fact]
+    // Contention-heavy (20 parallel writers, retry loops with random back-off): excluded from the regular suite
+    // (filter Category!=Stress); runs in the octo-construction-kit-engine-mongodb-Performance pipeline.
+    [Trait("Category", "Stress")]
+    [Trait("Category", "LoadSensitive")]
     public async Task TwentyParallelCreations_WithoutTransactions_GetTwentyDistinctConsecutiveNumbers()
     {
-        await WithTicketTenantAsync("aiparnotx", async (repository, database, counterId) =>
+        await ParallelCreationsWithoutTransactionsAsync("aiparnotx", 20);
+    }
+
+    /// <summary>
+    ///     AC 1 in the regular suite: three parallel creations, each in its own session without a transaction, get
+    ///     three distinct consecutive numbers (no retry, no timing). The 20-writer variants are Stress tests.
+    /// </summary>
+    [Fact]
+    public async Task ThreeParallelCreations_WithoutTransactions_GetThreeDistinctConsecutiveNumbers()
+    {
+        await ParallelCreationsWithoutTransactionsAsync("aipar3", 3);
+    }
+
+    private async Task ParallelCreationsWithoutTransactionsAsync(string prefix, int count)
+    {
+        await WithTicketTenantAsync(prefix, async (repository, database, counterId) =>
         {
-            var tickets = Enumerable.Range(1, 20).Select(i => Ticket($"parallel {i}")).ToList();
+            var tickets = Enumerable.Range(1, count).Select(i => Ticket($"parallel {i}")).ToList();
 
             await Task.WhenAll(tickets.Select(ticket => Task.Run(async () =>
             {
@@ -355,8 +378,8 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
                 numbers.Add(await NumberAsync(database, ticket.RtId));
             }
 
-            Assert.Equal(Enumerable.Range(CounterStart + 1, 20).Select(n => (long)n), numbers.Order());
-            Assert.Equal(CounterStart + 20, await CounterAsync(database, counterId));
+            Assert.Equal(Enumerable.Range(CounterStart + 1, count).Select(n => (long)n), numbers.Order());
+            Assert.Equal(CounterStart + count, await CounterAsync(database, counterId));
         });
     }
 
