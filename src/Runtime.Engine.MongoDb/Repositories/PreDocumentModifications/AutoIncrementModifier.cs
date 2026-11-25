@@ -205,6 +205,10 @@ public class AutoIncrementModifier(
         var counter = await AllocateWithoutPeriodsAsync(session, mongoCollection, reference, block.Count);
         if (counter != null)
         {
+            // The range rules are checked after the statement (it reads nothing before). A range that is not valid -
+            // e.g. a legacy format stored before System 2.9.0 that string.Format cannot format (AB#9755) - is refused
+            // naming the range; the block it took stays unused. The counter is never set back: another request may
+            // have taken the next block meanwhile, so a gap is accepted, a duplicate never.
             var settings = GetValidSettings(counter, reference);
             var firstNumber = ToLong(counter.CurrentValue) - block.Count + 1;
             for (var i = 0; i < block.Count; i++)

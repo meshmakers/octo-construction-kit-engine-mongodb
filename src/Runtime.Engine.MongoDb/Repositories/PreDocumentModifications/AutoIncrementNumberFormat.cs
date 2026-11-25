@@ -41,14 +41,35 @@ public sealed partial class AutoIncrementNumberFormat
     /// <summary>
     ///     Parses <paramref name="format" />. A token format with an unknown <c>{...}</c> placeholder or an unclosed
     ///     brace is refused (<paramref name="error" /> says why), because a mix of tokens and <c>string.Format</c>
-    ///     placeholders has no meaning. A legacy format is not checked, so every format that numbered before still does.
+    ///     placeholders has no meaning. A legacy format is formatted once with a trial number (AB#9755): one that
+    ///     <c>string.Format</c> cannot format (e.g. <c>X-{counter:Dx}</c>, an unclosed brace, a placeholder other than
+    ///     <c>{0}</c>) is refused, because it would fail at every allocation. Whether <c>string.Format</c> accepts a
+    ///     format does not depend on the number, so every format that numbered before still does.
     /// </summary>
     public static bool TryParse(string? format, out AutoIncrementNumberFormat result, out string? error)
     {
         error = null;
         if (!IsTokenFormatString(format))
         {
-            result = new AutoIncrementNumberFormat(string.IsNullOrEmpty(format) ? null : format, null);
+            if (string.IsNullOrEmpty(format))
+            {
+                result = Empty;
+                return true;
+            }
+
+            try
+            {
+                _ = string.Format(CultureInfo.InvariantCulture, format, 1L);
+            }
+            catch (FormatException ex)
+            {
+                error = $"string.Format cannot format it ({ex.Message.TrimEnd('.')}); use {{0}} or {{0:D<n>}} for " +
+                        "the counter, or a token format such as {counter:D5}";
+                result = Empty;
+                return false;
+            }
+
+            result = new AutoIncrementNumberFormat(format, null);
             return true;
         }
 

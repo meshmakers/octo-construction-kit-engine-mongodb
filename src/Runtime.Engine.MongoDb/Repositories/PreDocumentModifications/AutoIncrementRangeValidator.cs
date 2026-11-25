@@ -11,7 +11,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 /// <summary>
 ///     AB#9754: refuses a <c>System/AutoIncrement</c> number range whose configuration is not valid when it is written,
 ///     before anything is stored - above all a fiscal-year range (<c>PeriodKind = FiscalYear</c>) without a known IANA
-///     <c>ReferenceTimeZone</c>, which would otherwise be read in some default zone. The rules are
+///     <c>ReferenceTimeZone</c>, which would otherwise be read in some default zone, or (AB#9755) a legacy
+///     <c>string.Format</c> format that cannot format a number. The rules are
 ///     <see cref="AutoIncrementRangeSettings.TryCreate" />.
 ///     <list type="bullet">
 ///         <item>Insert, replace and bulk import (<see cref="IPreDocumentModification{TDocument}" />): the written

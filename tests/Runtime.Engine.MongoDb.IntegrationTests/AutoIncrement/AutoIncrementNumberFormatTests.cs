@@ -52,6 +52,21 @@ public class AutoIncrementNumberFormatTests
         Assert.Equal("K-0042", parsed.Format(42, null));
     }
 
+    /// <summary>
+    ///     AB#9755: a legacy format that string.Format cannot format is refused when it is parsed, not at the first
+    ///     allocation.
+    /// </summary>
+    [Theory]
+    [InlineData("X-{counter:Dx}")]
+    [InlineData("X-{1}")]
+    [InlineData("X-{0")]
+    [InlineData("X-{0:D4}}")]
+    public void LegacyFormat_ThatStringFormatCannotFormat_IsRefused(string format)
+    {
+        Assert.False(AutoIncrementNumberFormat.TryParse(format, out _, out var error));
+        Assert.Contains("string.Format cannot format it", error);
+    }
+
     [Theory]
     [InlineData("RE-{yyyy}-{0:D4}")]
     [InlineData("RE-{yyyy}-{counter:X5}")]

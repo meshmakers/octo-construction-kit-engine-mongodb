@@ -41,6 +41,7 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
     private const string Reference = "InvoiceNumber";
     private const string LegacyFormat = "{0:D4}";
     private const string FiscalFormat = "RE-{yyyy}-{counter:D5}";
+    private const string BrokenLegacyFormat = "X-{counter:Dx}";
     private const string Vienna = "Europe/Vienna";
     private const string CounterCollection = "RtEntity_SystemAutoIncrement";
 
@@ -246,6 +247,8 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
     [InlineData("startValueZero", "StartValue 0 is below 1")]
     [InlineData("startValueAboveEnd", "StartValue 100001 is above End 100000")]
     [InlineData("endBelowStartValue", "StartValue 50 is above End 10")]
+    [InlineData("legacyFormatThatCannotFormat", "Number range 'InvoiceNumber'")]
+    [InlineData("legacyFormatThatCannotFormat", "Format 'X-{counter:Dx}' is not valid")]
     public async Task PartialUpdate_ThatMakesTheRangeInvalid_IsRefused(string change, string reason)
     {
         await WithTenantAsync("svpartial", async (repository, database) =>
@@ -275,6 +278,9 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
                         break;
                     case "endBelowStartValue":
                         c.End = 10;
+                        break;
+                    case "legacyFormatThatCannotFormat":
+                        c.Format = BrokenLegacyFormat;
                         break;
                 }
             }));
@@ -308,6 +314,56 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
             Assert.Equal(7, stored["currentValue"].ToInt64());
             Assert.Equal(Vienna, stored["referenceTimeZone"].AsString);
             Assert.Equal(FiscalFormat, stored["format"].AsString);
+        });
+    }
+
+    /// <summary>
+    ///     AB#9755: a range configured with a legacy format that string.Format cannot format is refused when it is
+    ///     inserted, not at the first allocation; the error names the range and the format, and nothing is stored.
+    /// </summary>
+    [Fact]
+    public async Task Insert_WithALegacyFormatThatCannotFormat_IsRefused_NamingTheRange()
+    {
+        await WithTenantAsync("svbadfmt", async (repository, database) =>
+        {
+            var exception = await Record.ExceptionAsync(() => InsertCounterAsync(repository, BrokenLegacyFormat));
+
+            var refused = Assert.IsType<AutoIncrementFailedException>(exception);
+            Assert.Contains($"Number range '{Reference}'", refused.Message);
+            Assert.Contains($"Format '{BrokenLegacyFormat}' is not valid", refused.Message);
+            Assert.Equal(0, await database.GetCollection<BsonDocument>(CounterCollection)
+                .CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty,
+                    cancellationToken: TestContext.Current.CancellationToken));
+        });
+    }
+
+    /// <summary>
+    ///     AB#9755: a range whose legacy format string.Format cannot format reached the database without the check (a
+    ///     format stored before System 2.9.0; here a direct write) is refused at allocation with an error that names the
+    ///     range and the format. The counter is never set back (another request
+    ///     may have taken the next block meanwhile): the refused block stays unused, a gap, never a duplicate - once the
+    ///     format is fixed the next number follows the refused block.
+    /// </summary>
+    [Fact]
+    public async Task Allocation_WithAStoredLegacyFormatThatCannotFormat_IsRefused_NamingTheRange_NeverADuplicate()
+    {
+        await WithTenantAsync("svbadalloc", async (repository, database) =>
+        {
+            var counterId = await InsertCounterAsync(repository, LegacyFormat, currentValue: 40);
+            await SetStoredFormatAsync(database, counterId, BrokenLegacyFormat);
+            var modifier = new AutoIncrementModifier(fixture.GetService<ICkCacheService>(),
+                NullLogger<AutoIncrementModifier>.Instance, TimeProvider.System);
+            var dataSource = DataSourceOf(database);
+
+            var exception = await Record.ExceptionAsync(() => NumberWithModifierAsync(modifier, dataSource, 2));
+
+            var refused = Assert.IsType<AutoIncrementFailedException>(exception);
+            Assert.Contains($"Number range '{Reference}'", refused.Message);
+            Assert.Contains($"Format '{BrokenLegacyFormat}' is not valid", refused.Message);
+            Assert.Equal(42, await StoredCurrentValueAsync(database, counterId));
+
+            await SetStoredFormatAsync(database, counterId, LegacyFormat);
+            Assert.Equal(["0043"], await NumberWithModifierAsync(modifier, dataSource, 1));
         });
     }
 
@@ -380,6 +436,13 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
 
     private static int FiscalYearNow() =>
         TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TimeZoneInfo.FindSystemTimeZoneById(Vienna)).Year;
+
+    /// <summary>Writes the format straight into the collection, past the range validator.</summary>
+    private static async Task SetStoredFormatAsync(IMongoDatabase database, OctoObjectId counterId, string format) =>
+        await database.GetCollection<BsonDocument>(CounterCollection).UpdateOneAsync(
+            new BsonDocument("_id", ObjectId.Parse(counterId.ToString())),
+            new BsonDocument("$set", new BsonDocument("attributes.format", format)),
+            cancellationToken: TestContext.Current.CancellationToken);
 
     private static async Task<long> StoredCurrentValueAsync(IMongoDatabase database, OctoObjectId counterId) =>
         (await FindCounterAsync(database, counterId))["attributes"]["currentValue"].ToInt64();
