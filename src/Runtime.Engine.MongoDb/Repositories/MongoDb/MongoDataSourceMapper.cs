@@ -58,7 +58,8 @@ public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<Oct
         List<UpdateDefinition<TEntity>> list = [];
         foreach (var attributeToApply in document.Attributes)
         {
-            var value = attributeToApply.Value;
+            // A generated record subclass is stored as the plain record it is (the boxed $set value would be refused).
+            var value = RtRecordValueNormalizer.ToStorable(attributeToApply.Value);
             if (value is Point p)
             {
                value = GeoJson.Point(GeoJson.Position(p.Coordinates.Longitude, p.Coordinates.Latitude));

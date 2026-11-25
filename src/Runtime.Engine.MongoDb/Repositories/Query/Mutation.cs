@@ -9,6 +9,10 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 
+using MongoDB.Driver;
+
+using DeleteOptions = Meshmakers.Octo.Runtime.Contracts.Repositories.DeleteOptions;
+
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
@@ -30,6 +34,22 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         _deleteOptions = deleteOptions;
     }
 
+    /// <summary>
+    ///     A filter write of a guarded repository selects only the entities the session may write (SyncOriginWriteRules):
+    ///     a plain session skips synced copies, a sync-writer session selects only the copies of its source. The skip is
+    ///     silent - the filter simply does not match them - and costs no extra command.
+    /// </summary>
+    private FilterDefinition<TEntity> WithSyncOriginFilter(IOctoSession session, FilterDefinition<TEntity> filter)
+    {
+        if (_bulkRtMutation is not SyncOriginGuardedBulkRtMutation)
+        {
+            return filter;
+        }
+
+        var originFilter = SyncOriginWriteScope.FilterFor<TEntity>((session as OctoSession)?.SyncWriterSourceTenantId);
+        return originFilter == null ? filter : Builders<TEntity>.Filter.And(filter, originFilter);
+    }
+
     public async Task ReplaceOneAsync(IOctoSession session, TEntity rtEntity)
     {
         var filterDefinitions = CreateFilterDefinitions();
@@ -39,7 +59,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
-        var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
+        var entities = await rtCollection.FindManyAsync(session, WithSyncOriginFilter(session, filterDefinitions));
         if (entities.Count != 1)
         {
             throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
@@ -61,7 +81,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
-        var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
+        var entities = await rtCollection.FindManyAsync(session, WithSyncOriginFilter(session, filterDefinitions));
         if (entities.Count != 1)
         {
             throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
@@ -83,7 +103,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
-        var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
+        var entities = await rtCollection.FindManyAsync(session, WithSyncOriginFilter(session, filterDefinitions));
         if (entities.Count != 1)
         {
             throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
@@ -105,7 +125,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
-        var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
+        var entities = await rtCollection.FindManyAsync(session, WithSyncOriginFilter(session, filterDefinitions));
 
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateDelete(entityToUpdate.ToRtEntityId())).ToList();
@@ -123,7 +143,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
-        var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
+        var entities = await rtCollection.FindManyAsync(session, WithSyncOriginFilter(session, filterDefinitions));
 
         // One copy of the update per target: BulkRtMutation sets the target's rtId on the entity and the
         // secret write step carries stored secrets over into it (AB#5533). With one shared object every

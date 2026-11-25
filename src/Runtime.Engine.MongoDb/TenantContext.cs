@@ -60,6 +60,9 @@ public class TenantContext : ITenantContext
 
     private readonly ILogger<TenantContext> _logger;
     private readonly IBulkRtMutation _bulkRtMutation;
+
+    // Every repository except the maintenance one writes through this funnel (SyncOriginWriteRules).
+    private readonly IBulkRtMutation _syncOriginGuardedBulkRtMutation;
     private readonly ICkCacheService _cacheService;
 
     private readonly ILoggerFactory _loggerFactory;
@@ -93,6 +96,7 @@ public class TenantContext : ITenantContext
         _cacheService = serviceProvider.GetRequiredService<ICkCacheService>();
         _modelLoaderService = serviceProvider.GetRequiredService<IModelLoaderService>();
         _bulkRtMutation = serviceProvider.GetRequiredService<IBulkRtMutation>();
+        _syncOriginGuardedBulkRtMutation = new SyncOriginGuardedBulkRtMutation(_bulkRtMutation);
         var adminRepositoryAccess = serviceProvider.GetRequiredService<IAdminRepositoryAccess>();
         _adminRepositoryClient = adminRepositoryAccess.GetRepositoryClient(databaseName);
     }
@@ -2507,6 +2511,17 @@ public class TenantContext : ITenantContext
         return result;
     }
 
+    /// <summary>
+    ///     The repository of the engine maintenance services (CK model migrations, blueprints, secret maintenance, handed
+    ///     out by <see cref="Blueprints.MongoRuntimeRepositoryProvider" />): the same repository as
+    ///     <see cref="GetTenantRepository()" /> without the write rule of synced master data
+    ///     (<see cref="SyncOriginWriteRules" />), so a migration or uninstall also reaches the copies a sync wrote.
+    /// </summary>
+    internal ITenantRepository GetMaintenanceTenantRepository()
+    {
+        return GetTenantRepository(TenantId, DatabaseName, maintenance: true);
+    }
+
     private IStreamDataRepository? _streamDataRepository;
     private bool _streamDataRepositoryResolved;
 
@@ -3828,13 +3843,13 @@ public class TenantContext : ITenantContext
 
     #region Private methods
 
-    private ITenantRepository GetTenantRepository(string tenantId, string databaseName)
+    private ITenantRepository GetTenantRepository(string tenantId, string databaseName, bool maintenance = false)
     {
         var repositoryDataSource = CreateRepositoryDataSource(databaseName);
 
         var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService,
             repositoryDataSource,
-            _bulkRtMutation,
+            maintenance ? _bulkRtMutation : _syncOriginGuardedBulkRtMutation,
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
             GetRepositoryAuditEventSink(),
@@ -3849,7 +3864,7 @@ public class TenantContext : ITenantContext
 
         var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService,
             repositoryDataSource,
-            _bulkRtMutation,
+            _syncOriginGuardedBulkRtMutation,
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
             GetRepositoryAuditEventSink(),

@@ -65,6 +65,12 @@ public static class Constants
     /// </summary>
     public const string ChangeStreamFullDocumentBeforeChange = "fullDocumentBeforeChange";
 
+    /// <summary>
+    /// Name of the document-key field in a MongoDB change-stream document (<c>ChangeStreamDocument.DocumentKey</c>):
+    /// the <c>_id</c> of the changed document, present for every operation type, also for a delete.
+    /// </summary>
+    public const string ChangeStreamDocumentKey = "documentKey";
+
     public static bool IsSystemAttribute(string f)
     {
         return (string.Compare(f, IdField, StringComparison.InvariantCultureIgnoreCase) == 0 ||
