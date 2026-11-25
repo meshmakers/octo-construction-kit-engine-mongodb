@@ -8,6 +8,18 @@
   that the snapshot holds System.Identity element rows; with the old unescaped pattern it fails. The `S.*` case is
   gone (model names allow only letters, digits, `_` and `.`), and the test class disposes its MongoDB client.
 
+- AB#9770 New: the engine refuses changes to synced master data outside the sync. An entity that carries `RtSyncOrigin`
+  is changed, replaced, deleted or archived, and `RtSyncOrigin` is set or changed, only by a sync-writer session of the
+  source tenant it names (`ITenantRepository.GetSyncWriterSessionAsync`); every other session of every tenant
+  repository - GraphQL and REST callers, pipelines, system sessions - is refused with `RuntimeRepositoryException`,
+  message 144, `code` = `SYNC_OWNED_ENTITY` (`SyncOriginWriteRules`). A sync-writer session in turn never touches an
+  entity without an origin or another source's copy. The rule is folded into the write filters of the guarded funnel, so
+  a write that touches no copy costs no extra command; only a miss reads once to tell a refusal from "not found", and an
+  archive or bulk-mode replace reads once before the write; a filter write does not select copies the session may not
+  touch (silently, without a read). Entities without `RtSyncOrigin` are written exactly as
+  before. Not covered: bulk import, `*ForMigrationAsync`, and the repositories of the engine maintenance services
+  (`MongoRuntimeRepositoryProvider`, now handing out `TenantContext.GetMaintenanceTenantRepository`). Docs:
+  `docs/runtime-write-semantics.md`, "Synced master data". Test: `SyncOriginWriteGuardTests`.
 - AB#9770 Fix: an update whose attribute value is a generated record class (any CK model's `Rt<Name>Record`, also
   inside a record list) is stored as a plain record, like the insert of the same entity. The update path writes each
   attribute as a boxed `$set` value (`MongoDataSourceMapper.ApplyUpdate`), and the registered object serializer allows

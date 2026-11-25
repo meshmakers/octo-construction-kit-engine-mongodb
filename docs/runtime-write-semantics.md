@@ -1,5 +1,5 @@
 ---
-description: "Runtime write behaviour: GridFS reads, write-concern failures, transactions, re-import, RecordArray update, rtVersion, time limits"
+description: "Runtime write behaviour: GridFS reads, write-concern failures, transactions, re-import, RecordArray update, rtVersion, synced master data, time limits"
 applies_to: src/Runtime.Engine.MongoDb/Repositories/**, src/Runtime.Contracts.MongoDb/Repositories/**, src/Runtime.Engine.MongoDb/RuntimeQueries/**
 ---
 
@@ -141,6 +141,64 @@ replace : replaceOne { _id, rtVersion: <n> }  <document with rtVersion = n + 1> 
   success, generous cap, so the test asserts correctness and not timing), repeated 50 times for update and for replace (counter always
   exactly +2, version +2, at least one `RtVersionConflictException` surfaced). The counter is `GuardCount` of the test model's
   `SeedGuardEntity` (the CK round-trip gate compares the whole test model, so no type was added). `ConditionalUpdateTests` (`AttributeNewerThanGuard`) is unchanged.
+
+## Synced master data (`RtSyncOrigin`)
+
+An entity that carries the System attribute `RtSyncOrigin` (record `SyncOrigin`: source tenant, source RtId, sync time) is a
+copy that a cross-tenant master-data sync wrote; the tenant it names owns it. `SyncOriginWriteRules`
+(`Runtime.Contracts.MongoDb`) states the rule, `SyncOriginGuardedBulkRtMutation` enforces it around the `IBulkRtMutation`
+of every tenant repository `TenantContext` hands out (`GetTenantRepository`, `GetTenantRepositoryAsAdmin`, the system
+tenant's), so it holds for every writer and every session, system sessions included:
+
+- **Plain sessions** may not set or change `RtSyncOrigin` (insert, update, replace, record array item update, secret
+  clear; writing `null` on an entity without an origin is a no-op and allowed), and may not update, replace, delete or
+  archive an entity that carries it.
+- **Sync-writer sessions** (`ITenantRepository.GetSyncWriterSessionAsync(securityContext, sourceTenantId)`, extension in
+  `TenantRepositorySyncWriterExtensions`; the session flag is internal and cannot be set from API input) write only the
+  copies of their source: an insert or replace must carry `RtSyncOrigin` naming that source, an update may not write
+  another origin, and an update, replace or delete reaches only entities whose stored origin names that source - never an
+  entity without an origin, never another source's copy. The source tenant id is compared exactly.
+- **Refusal**: `RuntimeRepositoryException` with operation message 144 (the number of the other write refusals of the
+  funnel), parameter `code` = `SYNC_OWNED_ENTITY` (`SyncOriginWriteRules.ErrorCode`, `IsRefusal`), plus `rtId`,
+  `ckTypeId`, `operation`, `sourceTenantId` and `reason`.
+
+**Cost.** The change set is checked without a read (rule 1). The rule on stored entities is folded into the write
+statements: while the guarded funnel applies a change set, `SyncOriginWriteScope` (AsyncLocal) is active and every
+update, replace and delete by id of a runtime entity in `MongoDbDataSourceCollection` adds
+`attributes.rtSyncOrigin: null` (plain) or `attributes.rtSyncOrigin.attributes.sourceTenantId: <source>` (sync writer) to
+its filter. A copy the session may not touch simply does not match; only on the path where a statement matched nothing
+(not found, version conflict, guard skip) does one read `{ _id, origin not allowed }` turn the miss into the refusal. The
+happy path costs no extra command. Two changes are judged before the write with one read: an archive (the engine archives
+the entity's associations before the entity) and a replace in bulk mode (an upsert). A filter write (`UpdateOne`,
+`UpdateMany`, `ReplaceOne`, `DeleteOne`, `DeleteMany` by field filter, `Mutation`) adds the same clause to its selection,
+so it simply does not select a copy the session may not touch - silently and without a read. The scope is set and
+restored in `try`/`finally` inside the funnel call only (AsyncLocal): a concurrent session never sees it, and nothing
+after the call runs with it.
+
+**Not covered** (known limitations):
+
+- the bulk import (`BulkInsertRtEntitiesAsync`: RT import, blueprint seeds, restore) and the `*ForMigrationAsync`
+  methods - an export and import of a tenant keeps its copies with their origin;
+- the repositories `MongoRuntimeRepositoryProvider` hands to the engine maintenance services (CK model migrations, blueprint
+  migrations, blueprint and installation bookkeeping, secret maintenance; `TenantContext.GetMaintenanceTenantRepository`):
+  a migration script of a CK model or blueprint a tenant admin imports can change copies, which the next sync of the source
+  overwrites;
+- an atomic record array item update without regular attributes that targets a copy writes nothing but is reported like
+  an item update that matched nothing (the no-match path keeps its single command);
+- a filter write skips the copies silently instead of refusing (a filter that selects only copies writes nothing, or
+  reports "not exactly one" for the single-entity filter writes);
+- an archive outside a transaction is judged before the write (one read), because the engine archives the associations
+  of the entity first;
+- associations are not refused: a local entity may link to a copy;
+- a copy whose source tenant was detached or removed stays locked: no session but the sync of that source may change it.
+
+Tests (real MongoDB): `SyncOriginWriteGuardTests` - plain sessions (system and caller) refused for update, replace,
+delete and archive of a copy and for an insert or update that sets the origin, nothing written; filter update and filter
+delete skip a copy and write the local entity; the scope ends with the funnel call and concurrent plain and sync-writer
+sessions do not share it; a mixed batch refused as a whole; entities without an origin unaffected; the sync writer updates and deletes its
+own copies, is refused for another source's copy, for an entity without an origin and for an insert without its own
+origin; every repository of the tenant context refuses a system session; the maintenance repository still writes copies.
+The command-count tests of `RecordArrayItemUpdateTests` guard the zero-cost happy path.
 
 ## Validate a CK model without importing it
 

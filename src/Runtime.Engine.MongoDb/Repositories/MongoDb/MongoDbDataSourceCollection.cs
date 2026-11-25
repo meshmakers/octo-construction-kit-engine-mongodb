@@ -516,7 +516,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         foreach (var document in documents)
         {
             var id = _mongoDataSourceMapper.GetId(document);
-            var filterDefinition = Builders<TDocument>.Filter.BuildIdFilter(id);
+            var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
+            var filterDefinition = WriteIdFilter(id);
             var updateDefinition = _mongoDataSourceMapper.ApplyUpdate(document);
 
             if (RequiresNullAttributesRepair(document))
@@ -528,7 +529,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 // the first write heals the entity instead of erroring — with no extra round
                 // trip and inside the ambient transaction.
                 var bulkResult = await _documentCollection.BulkWriteAsync(
-                    ((IOctoSessionInternal)session).SessionHandle,
+                    sessionHandle,
                     new WriteModel<TDocument>[]
                     {
                         CreateNullAttributesRepairModel(id),
@@ -539,14 +540,24 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 // The repair filter is the id filter narrowed by `attributes: null`, so it can
                 // only match when the main update matches too — an aggregate MatchedCount of 0
                 // still means "document not found".
+                if (bulkResult.MatchedCount == 0)
+                {
+                    await ThrowIfSyncOriginRefusedAsync(sessionHandle, id, "Update").ConfigureAwait(false);
+                }
+
                 ThrowIfMatchedCountZero<TDocument>(bulkResult.MatchedCount, id);
             }
             else
             {
-                var result = await _documentCollection.UpdateOneAsync(((IOctoSessionInternal)session).SessionHandle,
+                var result = await _documentCollection.UpdateOneAsync(sessionHandle,
                     filterDefinition,
                     updateDefinition);
                 ThrowIfNotAcknowledged(result.IsAcknowledged);
+                if (result.MatchedCount == 0)
+                {
+                    await ThrowIfSyncOriginRefusedAsync(sessionHandle, id, "Update").ConfigureAwait(false);
+                }
+
                 ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, id);
             }
         }
@@ -603,7 +614,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 repairModel.Filter, repairModel.Update);
         }
 
-        var idFilter = Builders<TDocument>.Filter.BuildIdFilter(id);
+        var idFilter = WriteIdFilter(id);
         var bsonNewValue = BsonValue.Create(guard.NewValue);
         var guardFilter = Builders<TDocument>.Filter.Or(
             Builders<TDocument>.Filter.Not(Builders<TDocument>.Filter.Exists(guard.AttributePath)),
@@ -616,7 +627,14 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             combinedFilter, updateDefinition);
         ThrowIfNotAcknowledged(result.IsAcknowledged);
         // MatchedCount=0 is the intended outcome when the guard rejects a stale write —
-        // do NOT throw. The caller can detect a no-op via the return value.
+        // do NOT throw. The caller can detect a no-op via the return value. A synced copy the session may not touch
+        // is refused, though (SyncOriginWriteRules).
+        if (result.MatchedCount == 0)
+        {
+            await ThrowIfSyncOriginRefusedAsync(((IOctoSessionInternal)session).SessionHandle, id, "Update")
+                .ConfigureAwait(false);
+        }
+
         return result.MatchedCount > 0;
     }
 
@@ -637,7 +655,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 .ConfigureAwait(false);
         }
 
-        var filter = Builders<TDocument>.Filter.And(Builders<TDocument>.Filter.BuildIdFilter(id),
+        var filter = Builders<TDocument>.Filter.And(WriteIdFilter(id),
             CreateRtVersionFilter(expectedRtVersion));
         var updateDefinition = _mongoDataSourceMapper.ApplyUpdate(document);
 
@@ -659,6 +677,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             return false;
         }
 
+        await ThrowIfSyncOriginRefusedAsync(sessionHandle, id, "Update").ConfigureAwait(false);
         await ThrowIfDocumentMissingAsync(sessionHandle, id).ConfigureAwait(false);
         return false;
     }
@@ -679,7 +698,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         // referenced array to be `$type: array`, which a stored `attributes: null` can never satisfy, so the
         // statement either does not match or runs on a document whose `attributes` is an object: the happy path
         // costs exactly one command. The repair belongs to the fallback below.
-        var filter = Builders<TDocument>.Filter.And(Builders<TDocument>.Filter.BuildIdFilter(id),
+        var filter = Builders<TDocument>.Filter.And(WriteIdFilter(id),
             statement.ArraysExistFilter);
         if (requireItemMatch)
         {
@@ -699,12 +718,14 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
         if (requireItemMatch)
         {
+            // No extra read on this path: a synced copy the session may not touch is not written either and is
+            // reported like any item update that matched nothing.
             return false;
         }
 
         // Regular attributes to write but an array is missing (or null) on the stored entity, so no item can match:
         // write the regular attributes alone; a missing entity is an error as for any update.
-        var fallbackFilter = Builders<TDocument>.Filter.BuildIdFilter(id);
+        var fallbackFilter = WriteIdFilter(id);
         var fallbackUpdate = _mongoDataSourceMapper.ApplyUpdate(document);
         if (hasRegularAttributes)
         {
@@ -720,12 +741,22 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 },
                 new BulkWriteOptions { IsOrdered = true });
             ThrowIfNotAcknowledged(bulkResult.IsAcknowledged);
+            if (bulkResult.MatchedCount == 0)
+            {
+                await ThrowIfSyncOriginRefusedAsync(sessionHandle, id, "Update").ConfigureAwait(false);
+            }
+
             ThrowIfMatchedCountZero<TDocument>(bulkResult.MatchedCount, id);
             return true;
         }
 
         var fallback = await _documentCollection.UpdateOneAsync(sessionHandle, fallbackFilter, fallbackUpdate);
         ThrowIfNotAcknowledged(fallback.IsAcknowledged);
+        if (fallback.MatchedCount == 0)
+        {
+            await ThrowIfSyncOriginRefusedAsync(sessionHandle, id, "Update").ConfigureAwait(false);
+        }
+
         ThrowIfMatchedCountZero<TDocument>(fallback.MatchedCount, id);
         return true;
     }
@@ -745,11 +776,17 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         foreach (var document in documents)
         {
             var id = _mongoDataSourceMapper.GetId(document);
-            var filterDefinition = Builders<TDocument>.Filter.BuildIdFilter(id);
-            var result = await _documentCollection.ReplaceOneAsync(((IOctoSessionInternal)session).SessionHandle,
+            var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
+            var filterDefinition = WriteIdFilter(id);
+            var result = await _documentCollection.ReplaceOneAsync(sessionHandle,
                 filterDefinition,
                 document);
             ThrowIfNotAcknowledged(result.IsAcknowledged);
+            if (result.MatchedCount == 0)
+            {
+                await ThrowIfSyncOriginRefusedAsync(sessionHandle, id, "Replace").ConfigureAwait(false);
+            }
+
             ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, id);
         }
     }
@@ -777,7 +814,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         // AB#7769: optimistic concurrency, see UpdateOneIfVersionMatchesAsync. The replacement document carries the
         // new version (set by the caller); a replace does not increment on its own.
         var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
-        var filter = Builders<TDocument>.Filter.And(Builders<TDocument>.Filter.BuildIdFilter(id),
+        var filter = Builders<TDocument>.Filter.And(WriteIdFilter(id),
             CreateRtVersionFilter(expectedRtVersion));
 
         try
@@ -801,6 +838,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             throw CreateWriteException<TDocument>(nameof(ReplaceByIdIfVersionMatchesAsync), ex);
         }
 
+        await ThrowIfSyncOriginRefusedAsync(sessionHandle, id, "Replace").ConfigureAwait(false);
         await ThrowIfDocumentMissingAsync(sessionHandle, id).ConfigureAwait(false);
         return false;
     }
@@ -993,10 +1031,15 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         try
         {
-            var filter = Builders<TDocument>.Filter.BuildIdFilter(id);
-            var deleteResult =
-                await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, filter);
+            var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
+            var filter = WriteIdFilter(id);
+            var deleteResult = await _documentCollection.DeleteOneAsync(sessionHandle, filter);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
+            if (deleteResult.DeletedCount == 0)
+            {
+                await ThrowIfSyncOriginRefusedAsync(sessionHandle, id, "Delete").ConfigureAwait(false);
+            }
+
             ThrowIfMatchedCountZero(deleteResult.DeletedCount, id);
         }
         catch (MongoException e)
@@ -1412,6 +1455,27 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         // 112 = WriteConflict
         return ex is MongoCommandException { Code: 112 } or MongoWriteException { WriteError.Code: 112 };
+    }
+
+    /// <summary>
+    ///     The id filter of a runtime-entity write, narrowed by the sync-origin write filter while the guarded write
+    ///     funnel applies a change set (<see cref="SyncOriginWriteScope" />); exactly the id filter otherwise.
+    /// </summary>
+    private static FilterDefinition<TDocument> WriteIdFilter(TKey id)
+    {
+        var idFilter = Builders<TDocument>.Filter.BuildIdFilter(id);
+        var originFilter = SyncOriginWriteScope.WriteFilter<TDocument>();
+        return originFilter == null ? idFilter : Builders<TDocument>.Filter.And(idFilter, originFilter);
+    }
+
+    /// <summary>
+    ///     After a write by id matched nothing: refuses a synced copy the session may not touch (one read, only on this
+    ///     path and only within the guarded funnel); otherwise the caller reports its usual outcome.
+    /// </summary>
+    private Task ThrowIfSyncOriginRefusedAsync(IClientSessionHandle sessionHandle, TKey id, string operation)
+    {
+        return SyncOriginWriteScope.ThrowIfRefusedAsync(_documentCollection, sessionHandle,
+            Builders<TDocument>.Filter.BuildIdFilter(id), operation);
     }
 
     /// <summary>

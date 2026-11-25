@@ -46,7 +46,7 @@ internal class TenantRepository(
     RuntimeQueryTimeLimitSettings? runtimeQueryTimeLimit = null)
     : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation,
         dataPermissionResolver, auditEventSink, logger), ITenantRepository,
-        ISecureSessionFactory
+        ISecureSessionFactory, ISyncWriterSessionFactory
 {
     private readonly ILogger? _importLookupLogger = logger;
 
@@ -195,6 +195,28 @@ internal class TenantRepository(
     public async Task<IOctoSession> GetSessionAsync(RtSecurityContext securityContext)
     {
         return await mongoDbRepositoryDataSource.GetSessionAsync(securityContext);
+    }
+
+    /// <inheritdoc />
+    public async Task<IOctoSession> GetSyncWriterSessionAsync(RtSecurityContext securityContext,
+        string sourceTenantId)
+    {
+        ArgumentNullException.ThrowIfNull(securityContext);
+        if (string.IsNullOrWhiteSpace(sourceTenantId))
+        {
+            throw new ArgumentException("A sync-writer session needs the id of its source tenant.",
+                nameof(sourceTenantId));
+        }
+
+        var session = await mongoDbRepositoryDataSource.GetSessionAsync(securityContext);
+        if (session is not OctoSession octoSession)
+        {
+            session.Dispose();
+            throw new NotSupportedException("The data source cannot open a sync-writer session.");
+        }
+
+        octoSession.MarkAsSyncWriter(sourceTenantId.Trim());
+        return session;
     }
 
     public IOctoSession GetSession()
