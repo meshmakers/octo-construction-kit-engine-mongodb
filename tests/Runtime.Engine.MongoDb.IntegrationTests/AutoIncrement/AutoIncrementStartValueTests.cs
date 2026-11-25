@@ -522,6 +522,44 @@ public class AutoIncrementStartValueTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
+    ///     Kassandra round 3, race outside a transaction: the validator read CurrentValue 7 and accepted StartValue 8,
+    ///     but a legacy allocation took number 8 before the switch was written. The rule is checked again at
+    ///     allocation against the stored counter (8, StartValue 8), so the fiscal year hands out no number instead of
+    ///     issuing 26-0008 a second time; once the floor is above the counter, numbering starts there.
+    /// </summary>
+    [Fact]
+    public async Task SwitchedRange_WhoseCounterMovedBeforeTheSwitch_IssuesNoNumberTwice()
+    {
+        await WithTenantAsync("svswitchrace", async (repository, database) =>
+        {
+            var counterId = await InsertCounterAsync(repository, "26-{0:D4}", currentValue: 7);
+            await UpdateCounterAsync(repository, counterId, c =>
+            {
+                c.PeriodKind = RtAutoIncrementPeriodKindsEnum.FiscalYear;
+                c.ReferenceTimeZone = Vienna;
+                c.Format = "{yy}-{counter:D4}";
+                c.StartValue = 8;
+            });
+            // The legacy allocation that raced the switch: the counter reached 8 (26-0008 was issued).
+            await database.GetCollection<BsonDocument>(CounterCollection).UpdateOneAsync(
+                new BsonDocument("_id", ObjectId.Parse(counterId.ToString())),
+                new BsonDocument("$set", new BsonDocument("attributes.currentValue", 8L)),
+                cancellationToken: TestContext.Current.CancellationToken);
+            var modifier = new AutoIncrementModifier(fixture.GetService<ICkCacheService>(),
+                NullLogger<AutoIncrementModifier>.Instance,
+                new FixedClock(DateTimeOffset.Parse("2026-05-04T10:00:00+02:00")));
+
+            var refused = await Record.ExceptionAsync(() =>
+                NumberWithModifierAsync(modifier, DataSourceOf(database), 1));
+
+            Assert.Contains("numbered without fiscal-year periods up to CurrentValue 8",
+                Assert.IsType<AutoIncrementFailedException>(refused).Message);
+            await UpdateCounterAsync(repository, counterId, c => c.StartValue = 9);
+            Assert.Equal(["26-0009"], await NumberWithModifierAsync(modifier, DataSourceOf(database), 1));
+        });
+    }
+
+    /// <summary>
     ///     AB#6209 follow-up: a legacy format that does not show the counter (no {0}, e.g. 'INV') would give every
     ///     document the same text. It is refused when it is configured - insert, replace that changes the format,
     ///     partial update of the format - naming the range.
