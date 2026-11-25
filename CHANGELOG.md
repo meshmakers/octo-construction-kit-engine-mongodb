@@ -14,9 +14,12 @@
   repository - GraphQL and REST callers, pipelines, system sessions - is refused with `RuntimeRepositoryException`,
   message 144, `code` = `SYNC_OWNED_ENTITY` (`SyncOriginWriteRules`). A sync-writer session in turn never touches an
   entity without an origin or another source's copy. The rule is folded into the write filters of the guarded funnel, so
-  a write that touches no copy costs no extra command; only a miss reads once to tell a refusal from "not found", and an
-  archive or bulk-mode replace reads once before the write; a filter write does not select copies the session may not
-  touch (silently, without a read). Entities without `RtSyncOrigin` are written exactly as
+  an update or delete that touches no copy costs no extra command; only a miss reads once to tell a refusal from "not
+  found". An archive, every replace, an update that writes a linked binary and a bulk-mode insert (an upsert on the id)
+  read once per type before anything is written, so a refusal deletes or uploads no GridFS bytes, also without a
+  transaction. Member paths of the origin (`RtSyncOrigin.<member>`, any case) are refused like the origin; the
+  `attributes: null` repair statement carries the same write filter as its update. A filter write does not select copies
+  the session may not touch (silently, without a read). Entities without `RtSyncOrigin` are written exactly as
   before. Not covered: bulk import, `*ForMigrationAsync`, and the repositories of the engine maintenance services
   (`MongoRuntimeRepositoryProvider`, now handing out `TenantContext.GetMaintenanceTenantRepository`). Docs:
   `docs/runtime-write-semantics.md`, "Synced master data". Test: `SyncOriginWriteGuardTests`.
@@ -25,7 +28,8 @@
   attribute as a boxed `$set` value (`MongoDataSourceMapper.ApplyUpdate`), and the registered object serializer allows
   only the runtime contract types, so such an update failed with "Type … is not configured as a type that is allowed to
   be serialized". `RtRecordValueNormalizer` copies the value to `RtRecord` / `List<RtRecord>` first; values without a
-  generated record are passed through unchanged. Test: `TypedRecordUpdateTests`.
+  generated record are passed through unchanged; the member values of a record array item update go through the same
+  step. Tests: `TypedRecordUpdateTests`, `RecordArrayItemUpdateTests`.
 - AB#9770 New: opt-in delete events for runtime-entity watches. `WatchStreamFilter.IncludeDeleteEvents` (default
   `false`) keeps every existing subscription exactly as it was: before, a delete never passed the watch (its change
   event has no full document, and the watch matched on `fullDocument.ckTypeId`), and without the opt-in it still does

@@ -152,6 +152,15 @@ internal static class SyncOriginRefusals
     public static bool IsOriginName(string? name) =>
         string.Equals(name, SyncOriginWriteRules.AttributeName, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    ///     A dotted path into the origin (<c>RtSyncOrigin.SourceTenantId</c>, any case): the update statement writes it
+    ///     as <c>attributes.rtSyncOrigin.…</c>, so it changes the origin like the attribute itself.
+    /// </summary>
+    public static bool IsOriginMemberPath(string? name) =>
+        name != null && name.StartsWith(SyncOriginWriteRules.AttributeName + ".", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsOriginNameOrMemberPath(string? name) => IsOriginName(name) || IsOriginMemberPath(name);
+
     public static bool HasOrigin(IReadOnlyDictionary<string, object?> attributes) =>
         attributes.Any(a => IsOriginName(a.Key) && a.Value != null);
 

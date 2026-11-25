@@ -157,7 +157,12 @@ tenant's), so it holds for every writer and every session, system sessions inclu
   `TenantRepositorySyncWriterExtensions`; the session flag is internal and cannot be set from API input) write only the
   copies of their source: an insert or replace must carry `RtSyncOrigin` naming that source, an update may not write
   another origin, and an update, replace or delete reaches only entities whose stored origin names that source - never an
-  entity without an origin, never another source's copy. The source tenant id is compared exactly.
+  entity without an origin, never another source's copy. The source tenant id is compared exactly. The engine takes the
+  source tenant from its in-process caller as given: the caller (the mesh adapter's master-data sync path) is responsible
+  for passing the tenant its own pipeline syncs from, never a value from pipeline input or API data.
+- **Member paths** of the origin count as the origin: an attribute key, record array item attribute or secret clear named
+  `RtSyncOrigin.<member>` (any case; the update statement writes it as `attributes.rtSyncOrigin.<member>`) is refused for
+  every session, the sync writer's own copies included.
 - **Refusal**: `RuntimeRepositoryException` with operation message 144 (the number of the other write refusals of the
   funnel), parameter `code` = `SYNC_OWNED_ENTITY` (`SyncOriginWriteRules.ErrorCode`, `IsRefusal`), plus `rtId`,
   `ckTypeId`, `operation`, `sourceTenantId` and `reason`.
@@ -168,8 +173,16 @@ update, replace and delete by id of a runtime entity in `MongoDbDataSourceCollec
 `attributes.rtSyncOrigin: null` (plain) or `attributes.rtSyncOrigin.attributes.sourceTenantId: <source>` (sync writer) to
 its filter. A copy the session may not touch simply does not match; only on the path where a statement matched nothing
 (not found, version conflict, guard skip) does one read `{ _id, origin not allowed }` turn the miss into the refusal. The
-happy path costs no extra command. Two changes are judged before the write with one read: an archive (the engine archives
-the entity's associations before the entity) and a replace in bulk mode (an upsert). A filter write (`UpdateOne`,
+happy path of an update or delete costs no extra command. The changes with a side effect before their write statement,
+or without an id filter, are judged before anything is written, with one read per type: an archive (the engine archives
+the entity's associations before the entity), every replace (the engine deletes the entity's linked binaries and uploads
+the new ones before the replace statement), an update that writes a `BinaryLinked` attribute (the bytes are uploaded or
+replaced before the update statement) and an insert in bulk mode (`UseBulkMode` with `BulkInsertStrategy` `Upsert` or
+`InsertOnly`: an upsert on `_id`, which would overwrite a stored entity; judged like a replace of that id, so an upsert
+over an entity the session may write still works). **Without a transaction** this is what keeps a refusal free of side
+effects: GridFS deletes and replaces happen at once outside a transaction (inside one they wait for the commit), so a
+refusal after them would leave a copy without its bytes. The `attributes: null` repair statement (AB#5148) carries the
+same write filter as the update it heals, so it neither heals nor counts a document the session may not write. A filter write (`UpdateOne`,
 `UpdateMany`, `ReplaceOne`, `DeleteOne`, `DeleteMany` by field filter, `Mutation`) adds the same clause to its selection,
 so it simply does not select a copy the session may not touch - silently and without a read. The scope is set and
 restored in `try`/`finally` inside the funnel call only (AsyncLocal): a concurrent session never sees it, and nothing
@@ -187,8 +200,9 @@ after the call runs with it.
   an item update that matched nothing (the no-match path keeps its single command);
 - a filter write skips the copies silently instead of refusing (a filter that selects only copies writes nothing, or
   reports "not exactly one" for the single-entity filter writes);
-- an archive outside a transaction is judged before the write (one read), because the engine archives the associations
-  of the entity first;
+- an archive, a replace, an update of a linked binary and a bulk-mode insert cost one read per type before the write
+  (see Cost); a refusal of any other change comes from the write statement itself, which is atomic per entity, so a
+  change set without a transaction can be refused after earlier entities of the same set were written;
 - associations are not refused: a local entity may link to a copy;
 - a copy whose source tenant was detached or removed stays locked: no session but the sync of that source may change it.
 
@@ -197,7 +211,11 @@ delete and archive of a copy and for an insert or update that sets the origin, n
 delete skip a copy and write the local entity; the scope ends with the funnel call and concurrent plain and sync-writer
 sessions do not share it; a mixed batch refused as a whole; entities without an origin unaffected; the sync writer updates and deletes its
 own copies, is refused for another source's copy, for an entity without an origin and for an insert without its own
-origin; every repository of the tenant context refuses a system session; the maintenance repository still writes copies.
+origin; every repository of the tenant context refuses a system session; the maintenance repository still writes copies;
+a bulk-mode insert (upsert and insert-only) over a copy is refused for a plain session and over another source's copy for
+the sync writer, and still upserts an entity the session owns; without a transaction a refused replace or update with a
+linked binary of a copy leaves the copy's bytes and binary id; a sync writer's update of a local entity with a stored
+`attributes: null` is refused and not repaired, a plain session still repairs it; origin member paths are refused.
 The command-count tests of `RecordArrayItemUpdateTests` guard the zero-cost happy path.
 
 ## Validate a CK model without importing it

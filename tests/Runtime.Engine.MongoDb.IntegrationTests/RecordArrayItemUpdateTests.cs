@@ -5,6 +5,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
@@ -12,7 +13,10 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Microsoft.Extensions.Options;
 
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+
+using TestCkModel.Generated.Test.v1;
 
 using Xunit;
 
@@ -447,6 +451,30 @@ public class RecordArrayItemUpdateTests(ImportTestCkModelFixture fixture)
 
         Assert.Contains(expectedInMessage, exception.ToString());
         Assert.Equal(before, await FindRawEntityAsync(rtId));
+    }
+
+    [Fact]
+    public void ItemStatement_WritesAGeneratedRecordMemberValue_AsAPlainRecord()
+    {
+        // The validator admits scalar members only; the statement still stores a record value the way an attribute
+        // update does (RtRecordValueNormalizer), so the object serializer never sees a generated record class.
+        _ = fixture.GetSystemContext();
+        var update = new RtRecordArrayItemUpdate("Points", "ExternalId", "A", new Dictionary<string, object?>
+        {
+            ["Label"] = new RtContactNameRecord { FirstName = "Jane", LastName = "Roe" },
+            ["CurrentValue"] = 1.5
+        });
+
+        var statement = RecordArrayItemUpdateStatement<RtEntity>.Create([update]);
+        var rendered = Builders<RtEntity>.Update.Combine(statement.Sets).Render(new RenderArgs<RtEntity>(
+            BsonSerializer.LookupSerializer<RtEntity>(), BsonSerializer.SerializerRegistry)).AsBsonDocument;
+
+        var set = rendered["$set"].AsBsonDocument;
+        var label = set["attributes.points.$[i0].attributes.label"];
+        Assert.True(label.IsBsonDocument, label.ToString());
+        Assert.DoesNotContain(nameof(RtContactNameRecord), label.ToJson());
+        Assert.Contains("Jane", label.ToJson());
+        Assert.Equal(1.5, set["attributes.points.$[i0].attributes.currentValue"].AsDouble);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────

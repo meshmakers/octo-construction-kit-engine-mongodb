@@ -64,8 +64,11 @@ internal sealed class RecordArrayItemUpdateStatement<TDocument>
 
             foreach (var (member, value) in itemUpdate.MemberUpdates)
             {
+                // The value is boxed as object like an attribute update, so a generated record class is written as a
+                // plain record (RtRecordValueNormalizer); the validator admits scalar members only today.
                 sets.Add(Builders<TDocument>.Update.Set(
-                    $"{arrayPath}.$[{identifier}].{Constants.AttributesName}.{member.ToCamelCase()}", value));
+                    $"{arrayPath}.$[{identifier}].{Constants.AttributesName}.{member.ToCamelCase()}",
+                    RtRecordValueNormalizer.ToStorable(value)));
             }
         }
 

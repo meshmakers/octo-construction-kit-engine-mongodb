@@ -12,9 +12,21 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.Repositories;
+
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+
+using MongoDB.Bson;
+using MongoDB.Driver;
+
+using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+
+using DeleteOptions = Meshmakers.Octo.Runtime.Contracts.Repositories.DeleteOptions;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -482,5 +494,271 @@ public class SyncOriginWriteGuardTests(ImportTestCkModelFixture fixture)
         }
 
         Assert.Null(await ReadAsync(repository, copy));
+    }
+
+    // ---- changes judged before the write: bulk-mode insert, linked binaries --------------------------------------
+
+    private async Task ApplyGuardedAsync(IOctoSession session, ITenantRepository repository,
+        BulkRtMutationOptions options, params IEntityUpdateInfo<RtEntity>[] updates)
+    {
+        // The repository API has no bulk-mode option; the guarded funnel is called the way TenantContext wires it.
+        var guarded = new SyncOriginGuardedBulkRtMutation(fixture.GetService<IBulkRtMutation>());
+        session.StartTransaction();
+        await guarded.ApplyChangesAsync(session, ((TenantRepository)repository).DataSource,
+            fixture.GetService<ICkCacheService>(), updates, [], options, new OperationResult());
+        await session.CommitTransactionAsync();
+    }
+
+    [Theory]
+    [InlineData(BulkInsertStrategies.Upsert)]
+    [InlineData(BulkInsertStrategies.InsertOnly)]
+    public async Task PlainSession_BulkModeInsertOverACopy_IsRefused_AndTheCopyStays(BulkInsertStrategies strategy)
+    {
+        var repository = await CleanRepositoryAsync();
+        var copy = await InsertCopyAsync(repository, GroupTenant);
+
+        using var session = await repository.GetSessionAsync(Caller);
+        var ex = await Assert.ThrowsAsync<RuntimeRepositoryException>(() => ApplyGuardedAsync(session, repository,
+            new BulkRtMutationOptions { UseBulkMode = true, BulkInsertStrategy = strategy },
+            EntityUpdateInfo<RtEntity>.CreateInsert(Entity(copy, "overwritten"))));
+
+        AssertRefused(ex, copy);
+        var stored = (await ReadAsync(repository, copy))!;
+        Assert.Equal("copy", stored.GetAttributeStringValueOrDefault("GuardText"));
+        Assert.NotNull(stored.GetAttributeValueOrDefault(SyncOriginWriteRules.AttributeName));
+    }
+
+    [Fact]
+    public async Task SyncWriter_BulkModeInsertOverAnotherSourcesCopy_IsRefused()
+    {
+        var repository = await CleanRepositoryAsync();
+        var foreign = await InsertCopyAsync(repository, OtherGroupTenant);
+
+        using var session = await repository.GetSyncWriterSessionAsync(Caller, GroupTenant);
+        var ex = await Assert.ThrowsAsync<RuntimeRepositoryException>(() => ApplyGuardedAsync(session, repository,
+            new BulkRtMutationOptions { UseBulkMode = true, BulkInsertStrategy = BulkInsertStrategies.Upsert },
+            EntityUpdateInfo<RtEntity>.CreateInsert(Entity(foreign, "taken over", Origin(GroupTenant, foreign)))));
+
+        AssertRefused(ex, foreign);
+        Assert.Equal("copy", (await ReadAsync(repository, foreign))!.GetAttributeStringValueOrDefault("GuardText"));
+    }
+
+    [Fact]
+    public async Task BulkModeInsert_OverAnEntityTheSessionOwns_StillUpserts()
+    {
+        var repository = await CleanRepositoryAsync();
+        var local = await InsertLocalAsync(repository);
+        var copy = await InsertCopyAsync(repository, GroupTenant);
+        var options = new BulkRtMutationOptions { UseBulkMode = true, BulkInsertStrategy = BulkInsertStrategies.Upsert };
+
+        using (var session = await repository.GetSessionAsync(Caller))
+        {
+            await ApplyGuardedAsync(session, repository, options,
+                EntityUpdateInfo<RtEntity>.CreateInsert(Entity(local, "upserted")));
+        }
+
+        using (var session = await repository.GetSyncWriterSessionAsync(Caller, GroupTenant))
+        {
+            await ApplyGuardedAsync(session, repository, options,
+                EntityUpdateInfo<RtEntity>.CreateInsert(Entity(copy, "synced", Origin(GroupTenant, copy))));
+        }
+
+        Assert.Equal("upserted", (await ReadAsync(repository, local))!.GetAttributeStringValueOrDefault("GuardText"));
+        Assert.Equal("synced", (await ReadAsync(repository, copy))!.GetAttributeStringValueOrDefault("GuardText"));
+    }
+
+    private static readonly RtCkId<CkTypeId> BinaryType = new("Test/BinaryEntity");
+
+    private static EntityBinaryInfo Binary(string fileName) => new()
+    {
+        Filename = fileName,
+        ContentType = "application/octet-stream",
+        Stream = File.OpenRead("testData/largeBinaries/" + fileName)
+    };
+
+    /// <summary>A copy of a <c>BinaryEntity</c> with a linked binary, written by the sync of <paramref name="sourceTenantId" />.</summary>
+    private static async Task<(OctoObjectId RtId, OctoObjectId BinaryId)> InsertBinaryCopyAsync(
+        ITenantRepository repository, string sourceTenantId)
+    {
+        var rtId = OctoObjectId.GenerateNewId();
+        var entity = new RtEntity(BinaryType, rtId, new Dictionary<string, object?>
+        {
+            { "Binary", Binary("Customers.xlsx") },
+            { "DataCount", 5 },
+            { SyncOriginWriteRules.AttributeName, Origin(sourceTenantId, rtId) }
+        });
+        using (var session = await repository.GetSyncWriterSessionAsync(Caller, sourceTenantId))
+        {
+            await WriteAsync(session, repository, EntityUpdateInfo<RtEntity>.CreateInsert(entity));
+        }
+
+        using var readSession = await repository.GetSessionAsync();
+        var stored = await repository.GetRtEntityByRtIdAsync<RtBinaryEntity>(readSession, rtId);
+        return (rtId, stored!.Binary!.BinaryId!.Value);
+    }
+
+    private static async Task<long?> BinarySizeAsync(ITenantRepository repository, OctoObjectId binaryId)
+    {
+        using var session = await repository.GetSessionAsync();
+        try
+        {
+            using var handler = await repository.DownloadLargeBinaryAsync(session, binaryId);
+            using var bytes = new MemoryStream();
+            await handler.Stream.CopyToAsync(bytes);
+            return bytes.Length;
+        }
+        catch (EntityNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    [Theory]
+    [InlineData(EntityModOptions.Replace, false)]
+    [InlineData(EntityModOptions.Update, false)]
+    [InlineData(EntityModOptions.Update, true)]
+    public async Task PlainSession_WithoutATransaction_ARefusedBinaryWriteOfACopy_LeavesItsBytes(
+        EntityModOptions modOption, bool referencesTheStoredBinary)
+    {
+        var repository = await CleanRepositoryAsync();
+        var (copy, binaryId) = await InsertBinaryCopyAsync(repository, GroupTenant);
+        var sizeBefore = await BinarySizeAsync(repository, binaryId);
+        Assert.NotNull(sizeBefore);
+
+        var binary = Binary("Products.pdf");
+        if (referencesTheStoredBinary)
+        {
+            binary.BinaryId = binaryId;
+        }
+
+        var change = new RtEntity(BinaryType, copy,
+            new Dictionary<string, object?> { { "Binary", binary }, { "DataCount", 7 } });
+        var entityId = new RtEntityId(BinaryType, copy);
+        var update = modOption == EntityModOptions.Replace
+            ? EntityUpdateInfo<RtEntity>.CreateReplace(entityId, change)
+            : EntityUpdateInfo<RtEntity>.CreateUpdate(entityId, change);
+
+        // No transaction: a linked binary is deleted or replaced at once, so the refusal has to come before it.
+        using (var session = await repository.GetSessionAsync(Caller))
+        {
+            var ex = await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+                repository.ApplyChangesAsync(session, new IEntityUpdateInfo<RtEntity>[] { update },
+                    new OperationResult()));
+            AssertRefused(ex, copy);
+        }
+
+        Assert.Equal(sizeBefore, await BinarySizeAsync(repository, binaryId));
+        using var readSession = await repository.GetSessionAsync();
+        var stored = await repository.GetRtEntityByRtIdAsync<RtBinaryEntity>(readSession, copy);
+        Assert.Equal(binaryId, stored!.Binary!.BinaryId);
+    }
+
+    // ---- legacy `attributes: null` and member paths of the origin ------------------------------------------------
+
+    [Fact]
+    public async Task SyncWriter_UpdateOfALocalEntityWithStoredNullAttributes_IsRefused_AndNotRepaired()
+    {
+        var repository = await CleanRepositoryAsync();
+        var local = await InsertLocalAsync(repository);
+        var collection = await RawCollectionAsync(local);
+        var id = new BsonDocument("_id", new ObjectId(local.ToString()));
+        await collection.UpdateOneAsync(id, new BsonDocument("$set", new BsonDocument("attributes", BsonNull.Value)),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        using (var session = await repository.GetSyncWriterSessionAsync(Caller, GroupTenant))
+        {
+            var ex = await Assert.ThrowsAsync<RuntimeRepositoryException>(() => WriteAsync(session, repository,
+                EntityUpdateInfo<RtEntity>.CreateUpdate(new RtEntityId(EntityType, local),
+                    Entity(local, "claimed", Origin(GroupTenant, local)))));
+            AssertRefused(ex, local);
+        }
+
+        var raw = await collection.Find(id).FirstAsync(TestContext.Current.CancellationToken);
+        Assert.True(raw["attributes"].IsBsonNull);
+    }
+
+    [Fact]
+    public async Task PlainSession_UpdateOfALocalEntityWithStoredNullAttributes_IsStillRepaired()
+    {
+        var repository = await CleanRepositoryAsync();
+        var local = await InsertLocalAsync(repository);
+        var collection = await RawCollectionAsync(local);
+        var id = new BsonDocument("_id", new ObjectId(local.ToString()));
+        await collection.UpdateOneAsync(id, new BsonDocument("$set", new BsonDocument("attributes", BsonNull.Value)),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        using (var session = await repository.GetSessionAsync(Caller))
+        {
+            await WriteAsync(session, repository,
+                EntityUpdateInfo<RtEntity>.CreateUpdate(new RtEntityId(EntityType, local), Entity(local, "healed")));
+        }
+
+        Assert.Equal("healed", (await ReadAsync(repository, local))!.GetAttributeStringValueOrDefault("GuardText"));
+    }
+
+    [Theory]
+    [InlineData("RtSyncOrigin.SourceTenantId")]
+    [InlineData("rtSyncOrigin.attributes.sourceTenantId")]
+    [InlineData("RTSYNCORIGIN.SourceRtId")]
+    public async Task CallerSession_UpdateOfAnOriginMemberPath_IsRefused(string key)
+    {
+        var repository = await CleanRepositoryAsync();
+        var local = await InsertLocalAsync(repository);
+
+        using var session = await repository.GetSessionAsync(Caller);
+        var ex = await Assert.ThrowsAsync<RuntimeRepositoryException>(() => WriteAsync(session, repository,
+            EntityUpdateInfo<RtEntity>.CreateUpdate(new RtEntityId(EntityType, local),
+                new RtEntity(EntityType, local, new Dictionary<string, object?> { { key, GroupTenant } }))));
+
+        AssertRefused(ex, local);
+        var raw = await (await RawCollectionAsync(local))
+            .Find(new BsonDocument("_id", new ObjectId(local.ToString())))
+            .FirstAsync(TestContext.Current.CancellationToken);
+        Assert.False(raw["attributes"].AsBsonDocument.Contains("rtSyncOrigin"));
+    }
+
+    [Fact]
+    public async Task SyncWriter_UpdateOfAnOriginMemberPathOfItsOwnCopy_IsRefused()
+    {
+        var repository = await CleanRepositoryAsync();
+        var copy = await InsertCopyAsync(repository, GroupTenant);
+
+        using var session = await repository.GetSyncWriterSessionAsync(Caller, GroupTenant);
+        var ex = await Assert.ThrowsAsync<RuntimeRepositoryException>(() => WriteAsync(session, repository,
+            EntityUpdateInfo<RtEntity>.CreateUpdate(new RtEntityId(EntityType, copy),
+                new RtEntity(EntityType, copy,
+                    new Dictionary<string, object?> { { "rtsyncorigin.sourceTenantId", OtherGroupTenant } }))));
+
+        AssertRefused(ex, copy);
+    }
+
+    private async Task<IMongoCollection<BsonDocument>> RawCollectionAsync(OctoObjectId rtId)
+    {
+        var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
+        var urlBuilder = new MongoUrlBuilder
+        {
+            Server = MongoServerAddress.Parse(config.DatabaseHost),
+            Username = config.AdminUser,
+            Password = config.AdminUserPassword,
+            AuthenticationSource = config.AuthenticationDatabaseName,
+            DatabaseName = config.AuthenticationDatabaseName,
+            DirectConnection = config.UseDirectConnection
+        };
+        var db = new MongoClient(urlBuilder.ToMongoUrl()).GetDatabase(config.SystemDatabaseName);
+        var id = new BsonDocument("_id", new ObjectId(rtId.ToString()));
+        using var cursor = await db.ListCollectionsAsync(new ListCollectionsOptions
+        {
+            Filter = new BsonDocument("name", new BsonDocument("$regex", "^RtEntity_"))
+        });
+        foreach (var info in await cursor.ToListAsync())
+        {
+            var collection = db.GetCollection<BsonDocument>(info["name"].AsString);
+            if (await collection.CountDocumentsAsync(id) > 0)
+            {
+                return collection;
+            }
+        }
+
+        throw new InvalidOperationException($"No collection holds entity {rtId}.");
     }
 }

@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 
 using FluentAssertions;
@@ -26,11 +27,18 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 ///     matched on the pre-image when the collection captures one (exact for derived types sharing the collection), on
 ///     the document key only for a watch on the whole collection, and refused otherwise.
 /// </summary>
+/// <remarks>
+///     The change stream cursor opens in the background after the watch call returns. Every test therefore waits for a
+///     probe change of its own to arrive before it makes the changes under test (<see cref="EventLog{T}.ProbeAsync" />),
+///     and a change stream delivers in commit order: once an event of a later change has arrived, an event the stream
+///     would have delivered for an earlier change has arrived too. A negative assertion is made after such a later
+///     event, never after a fixed wait.
+/// </remarks>
 [Collection(ImportTestCkModelCollection.Name)]
 public class WatchRtEntitiesDeleteEventTests(ImportTestCkModelFixture fixture)
 {
-    private static readonly TimeSpan CursorWarmup = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan EventWaitTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan EventWaitTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ProbeRetryInterval = TimeSpan.FromMilliseconds(250);
 
     private ITenantRepository Repository => fixture.GetSystemContext().GetTenantRepository();
 
@@ -53,36 +61,107 @@ public class WatchRtEntitiesDeleteEventTests(ImportTestCkModelFixture fixture)
         await session.CommitTransactionAsync();
     }
 
-    /// <summary>All events that arrive within <paramref name="window" />.</summary>
-    private static async Task<IList<IUpdateInfo<T>>> CollectAsync<T>(IUpdateStream<T> stream, TimeSpan window)
+    private async Task UpdateNameAsync<T>(T entity, string name) where T : RtEntity, new()
     {
-        try
+        var rtEntityId = entity.ToRtEntityId();
+        using var session = await Repository.GetSessionAsync();
+        session.StartTransaction();
+        await Repository.ApplyChangesAsync(session,
+        [
+            EntityUpdateInfo<RtEntity>.CreateUpdate(rtEntityId,
+                new RtEntity(rtEntityId.CkTypeId, entity.RtId, new Dictionary<string, object?> { ["Name"] = name }))
+        ], new OperationResult());
+        await session.CommitTransactionAsync();
+    }
+
+    /// <summary>
+    ///     Every event of a watch from the moment it is created: one subscription for the whole test (the stream stops
+    ///     when an event finds no subscriber), and each wait sees all events so far.
+    /// </summary>
+    private sealed class EventLog<T> : IDisposable where T : class, new()
+    {
+        private readonly ReplaySubject<IUpdateInfo<T>> _events = new();
+        private readonly HashSet<OctoObjectId> _probeIds = [];
+        private readonly IDisposable _subscription;
+
+        public EventLog(IUpdateStream<T> stream)
         {
-            return await stream.GetUpdates().Take(window).ToList().ToTask();
+            _subscription = stream.GetUpdates().Subscribe(_events);
         }
-        catch (TimeoutException)
+
+        /// <summary>Every event so far, probe events included.</summary>
+        public IReadOnlyList<IUpdateInfo<T>> AllEvents
         {
-            return [];
+            get
+            {
+                // A ReplaySubject replays synchronously on subscribe.
+                var all = new List<IUpdateInfo<T>>();
+                using (_events.Subscribe(all.Add))
+                {
+                }
+
+                return all;
+            }
+        }
+
+        /// <summary>The events so far, without the probe events.</summary>
+        public IReadOnlyList<IUpdateInfo<T>> Events =>
+            AllEvents.Where(e => e.DocumentRtId == null || !_probeIds.Contains(e.DocumentRtId.Value)).ToList();
+
+        public async Task<IUpdateInfo<T>> WaitForAsync(Func<IUpdateInfo<T>, bool> predicate, TimeSpan timeout)
+        {
+            return await _events.Where(predicate).FirstAsync().Timeout(timeout).ToTask();
+        }
+
+        /// <summary>
+        ///     Makes probe changes until the stream delivered the event of one: from then on the cursor is open. Each
+        ///     probe is a change of its own (<paramref name="probe" /> returns its RtId); probe events are left out of
+        ///     <see cref="Events" />.
+        /// </summary>
+        public async Task ProbeAsync(Func<Task<OctoObjectId>> probe, UpdateTypes probeEvent)
+        {
+            var deadline = DateTime.UtcNow + EventWaitTimeout;
+            while (true)
+            {
+                var rtId = await probe();
+                _probeIds.Add(rtId);
+                try
+                {
+                    await WaitForAsync(e => e.UpdateType == probeEvent && e.DocumentRtId == rtId, ProbeRetryInterval);
+                    return;
+                }
+                catch (TimeoutException) when (DateTime.UtcNow < deadline)
+                {
+                    // The cursor was not open yet when this probe was written; the next probe tells.
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            _subscription.Dispose();
+            _events.Dispose();
         }
     }
 
-    private static async Task<IUpdateInfo<T>?> FirstDeleteAsync<T>(IUpdateStream<T> stream, TimeSpan timeout)
-    {
-        try
+    private Func<Task<OctoObjectId>> InsertProbe<T>(Action<T>? set = null) where T : RtEntity, new() =>
+        async () => (await InsertAsync(set)).RtId;
+
+    private Func<Task<OctoObjectId>> InsertAndDeleteProbe<T>(Action<T>? set = null) where T : RtEntity, new() =>
+        async () =>
         {
-            return await stream.GetUpdates().Where(u => u.UpdateType == UpdateTypes.Delete).FirstAsync()
-                .Timeout(timeout).ToTask();
-        }
-        catch (TimeoutException)
-        {
-            return null;
-        }
-    }
+            var probe = await InsertAsync(set);
+            await DeleteAsync(probe);
+            return probe.RtId;
+        };
 
     // ---- without the opt-in: exactly today's events ----------------------------------------------------------
 
+    // Each set of update types includes Insert, so an inserted probe shows that the cursor is open and, inserted after
+    // the deletes, that the deletes went by. Delete alone takes the same path (no opt-in -> no delete branch) but would
+    // deliver no event at all to wait for.
     [Theory]
-    [InlineData(UpdateTypes.Delete)]
+    [InlineData(UpdateTypes.Insert | UpdateTypes.Delete)]
     [InlineData(UpdateTypes.Insert | UpdateTypes.Update | UpdateTypes.Replace | UpdateTypes.Delete)]
     [InlineData(UpdateTypes.Undefined)]
     public async Task WithoutTheOptIn_ADelete_DeliversNoEvent_WhateverTheUpdateTypesSay(UpdateTypes updateTypes)
@@ -90,19 +169,23 @@ public class WatchRtEntitiesDeleteEventTests(ImportTestCkModelFixture fixture)
         var ct = TestContext.Current.CancellationToken;
         var withPreImage = await InsertAsync<RtWatchTarget>();
         var withoutPreImage = await InsertAsync<RtWatchTargetNoPreImage>();
-        using var preImageStream = await Repository.WatchRtEntitiesAsync<RtWatchTarget>(
-            new WatchStreamFilter { UpdateTypes = updateTypes }, ct);
-        using var keyStream = await Repository.WatchRtEntitiesAsync<RtWatchTargetNoPreImage>(
-            new WatchStreamFilter { UpdateTypes = updateTypes }, ct);
-        await Task.Delay(CursorWarmup, ct);
-        var firstDelete0 = FirstDeleteAsync(preImageStream, EventWaitTimeout);
-        var firstDelete1 = FirstDeleteAsync(keyStream, EventWaitTimeout);
+        using var preImageLog = new EventLog<RtWatchTarget>(await Repository.WatchRtEntitiesAsync<RtWatchTarget>(
+            new WatchStreamFilter { UpdateTypes = updateTypes }, ct));
+        using var keyLog = new EventLog<RtWatchTargetNoPreImage>(
+            await Repository.WatchRtEntitiesAsync<RtWatchTargetNoPreImage>(
+                new WatchStreamFilter { UpdateTypes = updateTypes }, ct));
+        await preImageLog.ProbeAsync(InsertProbe<RtWatchTarget>(), UpdateTypes.Insert);
+        await keyLog.ProbeAsync(InsertProbe<RtWatchTargetNoPreImage>(), UpdateTypes.Insert);
 
         await DeleteAsync(withPreImage);
         await DeleteAsync(withoutPreImage);
+        var lastPreImage = await InsertAsync<RtWatchTarget>();
+        var lastKey = await InsertAsync<RtWatchTargetNoPreImage>();
+        await preImageLog.WaitForAsync(e => e.DocumentRtId == lastPreImage.RtId, EventWaitTimeout);
+        await keyLog.WaitForAsync(e => e.DocumentRtId == lastKey.RtId, EventWaitTimeout);
 
-        (await firstDelete0).Should().BeNull();
-        (await firstDelete1).Should().BeNull();
+        preImageLog.Events.Should().NotContain(e => e.UpdateType == UpdateTypes.Delete);
+        keyLog.Events.Should().NotContain(e => e.UpdateType == UpdateTypes.Delete);
     }
 
     // ---- document key: a watch on the whole collection -------------------------------------------------------
@@ -112,16 +195,15 @@ public class WatchRtEntitiesDeleteEventTests(ImportTestCkModelFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         var entity = await InsertAsync<RtWatchTargetNoPreImage>(e => e.Name = "to delete");
-        using var stream = await Repository.WatchRtEntitiesAsync<RtWatchTargetNoPreImage>(
-            new WatchStreamFilter { UpdateTypes = UpdateTypes.Delete, IncludeDeleteEvents = true }, ct);
-        await Task.Delay(CursorWarmup, ct);
-        var firstDelete0 = FirstDeleteAsync(stream, EventWaitTimeout);
+        using var log = new EventLog<RtWatchTargetNoPreImage>(
+            await Repository.WatchRtEntitiesAsync<RtWatchTargetNoPreImage>(
+                new WatchStreamFilter { UpdateTypes = UpdateTypes.Delete, IncludeDeleteEvents = true }, ct));
+        await log.ProbeAsync(InsertAndDeleteProbe<RtWatchTargetNoPreImage>(), UpdateTypes.Delete);
 
         await DeleteAsync(entity);
 
-        var evt = await firstDelete0;
-        evt.Should().NotBeNull();
-        evt!.DocumentRtId.Should().Be(entity.RtId);
+        var evt = await log.WaitForAsync(e => e.DocumentRtId == entity.RtId, EventWaitTimeout);
+        evt.UpdateType.Should().Be(UpdateTypes.Delete);
         evt.Document.Should().BeNull();
     }
 
@@ -131,40 +213,50 @@ public class WatchRtEntitiesDeleteEventTests(ImportTestCkModelFixture fixture)
         var ct = TestContext.Current.CancellationToken;
         var watched = await InsertAsync<RtWatchTargetNoPreImage>();
         var other = await InsertAsync<RtWatchTargetNoPreImage>();
-        using var stream = await Repository.WatchRtEntitiesAsync<RtWatchTargetNoPreImage>(
-            new WatchStreamFilter
-            {
-                UpdateTypes = UpdateTypes.Delete, IncludeDeleteEvents = true, RtId = watched.RtId
-            }, ct);
-        await Task.Delay(CursorWarmup, ct);
-        // Subscribed before the changes: the stream replays only its latest event to a late subscriber.
-        var collecting = CollectAsync(stream, TimeSpan.FromSeconds(3));
+        // Update events of the watched entity are the probe: no other entity passes the RtId filter.
+        using var log = new EventLog<RtWatchTargetNoPreImage>(
+            await Repository.WatchRtEntitiesAsync<RtWatchTargetNoPreImage>(
+                new WatchStreamFilter
+                {
+                    UpdateTypes = UpdateTypes.Update | UpdateTypes.Delete,
+                    IncludeDeleteEvents = true,
+                    RtId = watched.RtId
+                }, ct));
+        var probes = 0;
+        await log.ProbeAsync(async () =>
+        {
+            await UpdateNameAsync(watched, $"probe-{probes++}");
+            return watched.RtId;
+        }, UpdateTypes.Update);
 
         await DeleteAsync(other);
         await DeleteAsync(watched);
+        await log.WaitForAsync(e => e.UpdateType == UpdateTypes.Delete && e.DocumentRtId == watched.RtId,
+            EventWaitTimeout);
 
-        var events = await collecting;
-        events.Select(e => e.DocumentRtId).Should().Equal(watched.RtId);
+        // The probe shares the watched RtId, so read the deletes from every event.
+        log.AllEvents.Where(e => e.UpdateType == UpdateTypes.Delete).Select(e => e.DocumentRtId)
+            .Should().Equal(watched.RtId);
     }
 
     [Fact]
     public async Task OptIn_KeepsTheOtherEventsAsBefore_AndTheyCarryTheirRtIdToo()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var stream = await Repository.WatchRtEntitiesAsync<RtWatchTargetNoPreImage>(
-            new WatchStreamFilter
-            {
-                UpdateTypes = UpdateTypes.Insert | UpdateTypes.Delete, IncludeDeleteEvents = true
-            }, ct);
-        await Task.Delay(CursorWarmup, ct);
-        // Subscribed before the changes: the stream replays only its latest event to a late subscriber.
-        var collecting = CollectAsync(stream, TimeSpan.FromSeconds(3));
+        using var log = new EventLog<RtWatchTargetNoPreImage>(
+            await Repository.WatchRtEntitiesAsync<RtWatchTargetNoPreImage>(
+                new WatchStreamFilter
+                {
+                    UpdateTypes = UpdateTypes.Insert | UpdateTypes.Delete, IncludeDeleteEvents = true
+                }, ct));
+        await log.ProbeAsync(InsertProbe<RtWatchTargetNoPreImage>(), UpdateTypes.Insert);
 
         var entity = await InsertAsync<RtWatchTargetNoPreImage>(e => e.Name = "new");
         await DeleteAsync(entity);
+        await log.WaitForAsync(e => e.UpdateType == UpdateTypes.Delete && e.DocumentRtId == entity.RtId,
+            EventWaitTimeout);
 
-        var events = (await collecting)
-            .Where(e => e.DocumentRtId == entity.RtId).ToList();
+        var events = log.Events.Where(e => e.DocumentRtId == entity.RtId).ToList();
         events.Select(e => e.UpdateType).Should().Equal(UpdateTypes.Insert, UpdateTypes.Delete);
         events[0].Document!.RtId.Should().Be(entity.RtId);
     }
@@ -225,17 +317,15 @@ public class WatchRtEntitiesDeleteEventTests(ImportTestCkModelFixture fixture)
         var ct = TestContext.Current.CancellationToken;
         var baseEntity = await InsertAsync<RtWatchTarget>();
         var derived = await InsertAsync<RtWatchTargetDerived>(e => e.Name = "derived");
-        using var stream = await Repository.WatchRtEntitiesAsync<RtWatchTargetDerived>(
-            new WatchStreamFilter { UpdateTypes = UpdateTypes.Delete, IncludeDeleteEvents = true }, ct);
-        await Task.Delay(CursorWarmup, ct);
-        // Subscribed before the changes: the stream replays only its latest event to a late subscriber.
-        var collecting = CollectAsync(stream, TimeSpan.FromSeconds(3));
+        using var log = new EventLog<RtWatchTargetDerived>(await Repository.WatchRtEntitiesAsync<RtWatchTargetDerived>(
+            new WatchStreamFilter { UpdateTypes = UpdateTypes.Delete, IncludeDeleteEvents = true }, ct));
+        await log.ProbeAsync(InsertAndDeleteProbe<RtWatchTargetDerived>(), UpdateTypes.Delete);
 
         await DeleteAsync(baseEntity);
         await DeleteAsync(derived);
+        await log.WaitForAsync(e => e.DocumentRtId == derived.RtId, EventWaitTimeout);
 
-        var events = await collecting;
-        var evt = events.Should().ContainSingle().Which;
+        var evt = log.Events.Should().ContainSingle().Which;
         evt.DocumentRtId.Should().Be(derived.RtId);
         evt.DocumentBeforeChange!.RtId.Should().Be(derived.RtId);
     }
@@ -246,22 +336,20 @@ public class WatchRtEntitiesDeleteEventTests(ImportTestCkModelFixture fixture)
         var ct = TestContext.Current.CancellationToken;
         var active = await InsertAsync<RtWatchTarget>(e => e.Status = "active");
         var inactive = await InsertAsync<RtWatchTarget>(e => e.Status = "inactive");
-        using var stream = await Repository.WatchRtEntitiesAsync<RtWatchTarget>(
+        using var log = new EventLog<RtWatchTarget>(await Repository.WatchRtEntitiesAsync<RtWatchTarget>(
             new WatchStreamFilter
             {
                 UpdateTypes = UpdateTypes.Delete,
                 IncludeDeleteEvents = true,
                 FieldFilterCriteria = FieldFilterCriteria.Create()
                     .Field(nameof(RtWatchTarget.Status), FieldFilterOperator.Equals, "active")
-            }, ct);
-        await Task.Delay(CursorWarmup, ct);
-        // Subscribed before the changes: the stream replays only its latest event to a late subscriber.
-        var collecting = CollectAsync(stream, TimeSpan.FromSeconds(3));
+            }, ct));
+        await log.ProbeAsync(InsertAndDeleteProbe<RtWatchTarget>(e => e.Status = "active"), UpdateTypes.Delete);
 
         await DeleteAsync(inactive);
         await DeleteAsync(active);
+        await log.WaitForAsync(e => e.DocumentRtId == active.RtId, EventWaitTimeout);
 
-        var events = await collecting;
-        events.Select(e => e.DocumentRtId).Should().Equal(active.RtId);
+        log.Events.Select(e => e.DocumentRtId).Should().Equal(active.RtId);
     }
 }

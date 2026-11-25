@@ -578,12 +578,14 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     ///     document for the given id. Raw BSON definitions on purpose: the typed field renderer
     ///     would resolve the `attributes` member through
     ///     <see cref="Serialization.RtAttributeDictionarySerializer" />, which never produces a
-    ///     BSON null/empty-document pair for a filter value.
+    ///     BSON null/empty-document pair for a filter value. The id filter is the write filter of the main statement
+    ///     (<see cref="WriteIdFilter" />): the repair matches only an entity the main statement may write, so a refused
+    ///     copy or entity is neither repaired nor counted in an aggregate MatchedCount.
     /// </summary>
     private static UpdateOneModel<TDocument> CreateNullAttributesRepairModel(TKey id)
     {
         var repairFilter = Builders<TDocument>.Filter.And(
-            Builders<TDocument>.Filter.BuildIdFilter(id),
+            WriteIdFilter(id),
             new BsonDocument(Constants.AttributesName, BsonNull.Value));
         var repairUpdate = new BsonDocumentUpdateDefinition<TDocument>(
             new BsonDocument("$set", new BsonDocument(Constants.AttributesName, new BsonDocument())));
