@@ -1,0 +1,27 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+- System-[2.0,3.0)
+entities:
+# Copy of the two auto-increment counters of the EnergyCommunity.Base blueprint seed
+# (energy-community, src/blueprints/EnergyCommunity.Base/seed-data/configurations/energy-community.yaml,
+# lines 59-77 at commit 662a954), unchanged: same rtIds, End 9999, the document counter with
+# the legacy format '{0:D4}', the customer counter without a format. AB#9756.
+- rtId: 68480f3ef579d8c26f35ad47
+  ckTypeId: System/AutoIncrement-1
+  rtWellKnownName: BillingDocumentDocumentNumber
+  attributes:
+  - id: System/AutoIncrement.End-1
+    value: 9999
+  - id: System/AutoIncrement.Format-1
+    value: '{0:D4}'
+  - id: System/AutoIncrement.CurrentValue-1
+    value: 0
+
+- rtId: 686ad5878ae68659b20571d0
+  ckTypeId: System/AutoIncrement-1
+  rtWellKnownName: CustomerNumber
+  attributes:
+  - id: System/AutoIncrement.End-1
+    value: 9999
+  - id: System/AutoIncrement.CurrentValue-1
+    value: 0

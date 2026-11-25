@@ -173,9 +173,14 @@ public static class RuntimeEngineBuilderExtensions
             return new SlowQueriesBuffer(cfg.SlowQueryBufferSize, explainCache);
         });
 
-        // Add pre-document modification services
+        // Add pre-document modification services. The range validator runs first (AB#9754): a number range that is
+        // not valid is refused before anything is numbered or written in the batch.
+        builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementRangeValidator>();
         builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementModifier>();
         builder.Services.AddTransient<IPreDocumentModification<RtEntity>, DisplayNameModifier>();
+
+        // AB#9755: partial updates of a number range are checked by the same rules before anything is written.
+        builder.Services.AddTransient<IPreDocumentUpdateValidation<RtEntity>, AutoIncrementRangeValidator>();
 
         // Register MongoDB-specific CK model migration support by default
         // This enables automatic migration detection when CK models are updated
