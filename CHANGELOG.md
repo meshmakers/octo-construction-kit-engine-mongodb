@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- AB#9702 Test: the regression test of the escaped element pattern
+  (`ServiceManagedImportRefusalTests.OrdinaryModelWhoseNameIsAPatternForSystemIdentity_LeavesTheSystemIdentityRowsAlone`)
+  asserts that both versions of `Sy.tem.Identity` are installed - the second import runs `DeletePreviousVersion` - and
+  that the snapshot holds System.Identity element rows; with the old unescaped pattern it fails. The `S.*` case is
+  gone (model names allow only letters, digits, `_` and `.`), and the test class disposes its MongoDB client.
+
 - AB#8875 Fix: a large raw or time-range archive write no longer runs its 1,000-row statements one after another.
   `CrateDatabaseClient.InsertGroupedAsync` splits the rows of a statement shape into lanes by row key and runs the lanes at
   the same time (`InsertStatementLanes`), so two statements in flight never carry the same key and the rows of one key are
@@ -44,8 +50,8 @@
   version; a damaged model of the same version or a too new one needs a manual database repair. Non-System models
   keep the explicit downgrade with WARN. The element delete of an import (`DeletePreviousVersion`,
   `PreserveExtensibleEnumValues`) escapes the model name in its pattern (`ModelElementsPattern`): before, a caller
-  import of an ordinary model named `Sy.tem.Identity` or `.*` deleted the element rows of System.Identity or of every
-  model. New public predicate `ServiceManagedCkModels.IsServiceManaged` (single source;
+  import of an ordinary model named `Sy.tem.Identity` (`.` is the only regex metacharacter a model name may hold)
+  deleted the element rows of System.Identity. New public predicate `ServiceManagedCkModels.IsServiceManaged` (single source;
   the tenant upgrade guard uses it). No `ITenantContext` member changed. Tests in other repositories that installed a
   System model through the caller overload must load it into a test catalog and import it by id (consumer PRs merge
   first).

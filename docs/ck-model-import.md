@@ -256,8 +256,8 @@ lacks the installed `Available` version (next bullet but one).
   overload (embedded/startup import, blueprint provider, `ClearCache` / `ReRunTenantSetup`), which is unchanged; it only
   brings in a missing or older version (a damaged same-version or a too new System needs a manual database repair).
   The element delete of every import selects rows by `ModelElementsPattern(name)` = `^<escaped name>-[0-9]`: an
-  unescaped name (`Sy.tem.Identity`, `.*`) of an ordinary caller model used to match and delete the element rows of
-  System models. Engine
+  unescaped name (`Sy.tem.Identity`; `.` is the only regex metacharacter a model name may hold, AB#9702) of an ordinary
+  caller model used to match and delete the element rows of System models. Engine
   tests that must put a tenant on a specific System version use the internal seam
   `TenantContext.ImportServiceManagedCompiledCkModelForTestsAsync` (`CkModelImportGuardTests.InstallAsServiceAsync`); tests
   in other repositories load the model into a test catalog and import it by id. Tests:

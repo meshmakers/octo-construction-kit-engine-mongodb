@@ -28,7 +28,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.CkModelImportG
 ///     service's embedded import does), whose types carry the <c>writeAccess</c> channel of engine message 144.
 /// </summary>
 [Collection(CkModelImportGuardCollection.Name)]
-public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture)
+public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture) : IDisposable
 {
     private const string IdentityName = "System.Identity";
     private static readonly CkModelId InstalledIdentity = new(IdentityName, "3.8.0");
@@ -118,23 +118,25 @@ public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
-    ///     An ordinary model whose name is a pattern for a System model (<c>Sy.tem.Identity</c>, <c>S.*</c>) passes the
-    ///     name refusal, but its import must not touch the element rows of System.Identity: the element delete of an
-    ///     import selects rows by the escaped model name.
+    ///     An ordinary model whose name is a pattern for System.Identity (<c>Sy.tem.Identity</c>: the engine allows letters,
+    ///     digits, <c>_</c> and <c>.</c> in names, and <c>.</c> is the regex metacharacter among them) passes the name
+    ///     refusal and imports, but neither its first import nor the import of its next version - which deletes the rows
+    ///     of the previous version - touches the element rows of System.Identity: the element delete selects rows by the
+    ///     escaped model name.
     /// </summary>
-    [Theory]
-    [InlineData("Sy.tem.Identity")]
-    [InlineData("S.*")]
-    public async Task OrdinaryModelWhoseNameIsAPatternForSystemIdentity_LeavesTheSystemIdentityRowsAlone(string name)
+    [Fact]
+    public async Task OrdinaryModelWhoseNameIsAPatternForSystemIdentity_LeavesTheSystemIdentityRowsAlone()
     {
         await WithIdentityTenantAsync("refregex", async (tenant, tenantId) =>
         {
+            const string name = "Sy.tem.Identity";
             var before = await SnapshotAsync(tenantId, IdentityName);
-            Assert.NotEmpty(before);
+            Assert.Contains($"{InstalledIdentity.FullName}/User", before, StringComparison.Ordinal);
 
-            // Whether the odd name imports or fails later does not matter here; the System.Identity rows must not change.
-            await Record.ExceptionAsync(() => tenant.ImportCkModelAsync(SmallModel(new CkModelId(name, new CkVersion(1, 0, 0)))));
-            await Record.ExceptionAsync(() => tenant.ImportCkModelAsync(SmallModel(new CkModelId(name, new CkVersion(1, 1, 0)))));
+            await tenant.ImportCkModelAsync(SmallModel(new CkModelId(name, new CkVersion(1, 0, 0))));
+            Assert.Contains($"{name}-1.0.0", await ModelIdsAsync(tenantId));
+            await tenant.ImportCkModelAsync(SmallModel(new CkModelId(name, new CkVersion(1, 1, 0))));
+            Assert.Contains($"{name}-1.1.0", await ModelIdsAsync(tenantId));
 
             Assert.Equal(before, await SnapshotAsync(tenantId, IdentityName));
             await AssertGenericUserWriteRefusedAsync(tenant);
@@ -331,6 +333,12 @@ public class ServiceManagedImportRefusalTests(CkModelImportGuardFixture fixture)
     }
 
     private MongoClient? _client;
+
+    public void Dispose()
+    {
+        _client?.Dispose();
+        GC.SuppressFinalize(this);
+    }
 
     private MongoClient CreateClient()
     {

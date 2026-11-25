@@ -1586,8 +1586,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     /// <summary>
     ///     The MongoDB pattern that selects the element rows of every version of the model <paramref name="modelName" />
     ///     (their <c>ckModelId</c> is <c>Name-Version</c>). The name is escaped: it can come from a caller's compiled model,
-    ///     and an unescaped <c>Sy.tem.Identity</c> or <c>.*</c> matched the rows of other models - a caller import of an
-    ///     ordinary model then deleted the element rows of a service-managed one (AB#9325). The version must start with a
+    ///     and an unescaped <c>Sy.tem.Identity</c> (<c>.</c> is the only regex metacharacter a model name may hold) matched
+    ///     the rows of System.Identity - a caller import of an ordinary model then deleted the element rows of a
+    ///     service-managed one (AB#9325). The version must start with a
     ///     digit, so the name <c>Foo</c> never selects a model named <c>Foo-Bar</c>.
     /// </summary>
     internal static string ModelElementsPattern(string modelName) => $"^{Regex.Escape(modelName)}-[0-9]";
