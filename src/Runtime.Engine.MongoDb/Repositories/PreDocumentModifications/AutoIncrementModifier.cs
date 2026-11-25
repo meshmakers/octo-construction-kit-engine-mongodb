@@ -71,6 +71,8 @@ public class AutoIncrementModifier(
     private const string StartValueField = "attributes.startValue";
     private const string PeriodKindField = "attributes.periodKind";
     private const string PeriodsField = "attributes.periods";
+    private const string RtVersionField = "rtVersion";
+    private const string RtChangedDateTimeField = "rtChangedDateTime";
     private const string PeriodFiscalYearMember = "attributes.fiscalYear";
     private const string PeriodCurrentValueMember = "attributes.currentValue";
     private const string PeriodIdentifier = "p";
@@ -234,6 +236,17 @@ public class AutoIncrementModifier(
                 ToLong(stored.CurrentValue), ToLong(stored.End), block.Count);
         }
 
+        // A fiscal-year number is the formatted text with the year; a plain (Int) attribute would get the bare period
+        // counter, which repeats every fiscal year. Refused before anything is allocated, so no gap either.
+        var plainAttribute = block.FirstOrDefault(r => r.Attribute.ValueType != AttributeValueTypesDto.String);
+        if (plainAttribute != null)
+        {
+            throw AutoIncrementFailedException.InvalidNumberRange(stored.RtId, reference,
+                $"PeriodKind FiscalYear numbers only String attributes; attribute '{plainAttribute.Attribute.AttributeName}' " +
+                $"of '{plainAttribute.CkTypeId}' is {plainAttribute.Attribute.ValueType}, and its numbers would repeat " +
+                "every fiscal year.");
+        }
+
         // One statement per fiscal year of the batch; the requests of a year keep their batch order.
         foreach (var yearRequests in block.GroupBy(r => storedSettings.FiscalYearOf(r.CreatedAt)))
         {
@@ -301,12 +314,28 @@ public class AutoIncrementModifier(
             new BsonDocument("$expr", new BsonDocument("$lte", new BsonArray { next, "$" + EndField })));
         var update = Builders<RtAutoIncrement>.Update.Pipeline(new BsonDocument[]
         {
-            new("$set", new BsonDocument(CurrentValueField, next))
+            new("$set", WithVersionBump(new BsonDocument(CurrentValueField, next)))
         });
         var options = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
 
         return ExecuteAsync<RtAutoIncrement?>(session, reference, count, async sessionHandle =>
             await mongoCollection.FindOneAndUpdateAsync(sessionHandle, filter, update, options));
+    }
+
+    /// <summary>
+    ///     Adds to the <c>$set</c> stage of an allocation statement what every engine update writes: <c>rtVersion</c>
+    ///     + 1 and <c>rtChangedDateTime</c>. Without the version bump a client that read the counter and writes it back
+    ///     with an expected <c>rtVersion</c> (outside a transaction) would pass the version check after numbers were
+    ///     taken and set the counter back, so those numbers would be issued again.
+    /// </summary>
+    private static BsonDocument WithVersionBump(BsonDocument set)
+    {
+        set.Add(RtVersionField, new BsonDocument("$add", new BsonArray
+        {
+            new BsonDocument("$ifNull", new BsonArray { "$" + RtVersionField, 0L }), 1L
+        }));
+        set.Add(RtChangedDateTimeField, "$$NOW");
+        return set;
     }
 
     /// <summary>
@@ -377,7 +406,7 @@ public class AutoIncrementModifier(
             })));
         var increment = Builders<RtAutoIncrement>.Update.Pipeline(new BsonDocument[]
         {
-            new("$set", new BsonDocument(PeriodsField, new BsonDocument("$map", new BsonDocument
+            new("$set", WithVersionBump(new BsonDocument(PeriodsField, new BsonDocument("$map", new BsonDocument
             {
                 { "input", "$" + PeriodsField },
                 { "as", PeriodIdentifier },
@@ -397,7 +426,7 @@ public class AutoIncrementModifier(
                         $"$${PeriodIdentifier}"
                     })
                 }
-            })))
+            }))))
         });
         var incrementOptions = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
 
@@ -410,11 +439,11 @@ public class AutoIncrementModifier(
         var newPeriod = NewPeriodDocument(fiscalYear, lastNumberOfTheBlock);
         var create = Builders<RtAutoIncrement>.Update.Pipeline(new BsonDocument[]
         {
-            new("$set", new BsonDocument(PeriodsField, new BsonDocument("$concatArrays", new BsonArray
+            new("$set", WithVersionBump(new BsonDocument(PeriodsField, new BsonDocument("$concatArrays", new BsonArray
             {
                 new BsonDocument("$ifNull", new BsonArray { "$" + PeriodsField, new BsonArray() }),
                 new BsonArray { new BsonDocument("$literal", newPeriod) }
-            })))
+            }))))
         });
         var createOptions = new FindOneAndUpdateOptions<RtAutoIncrement> { ReturnDocument = ReturnDocument.After };
 

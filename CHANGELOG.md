@@ -21,6 +21,17 @@
   precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
   conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#8675 Fix: number ranges refuse configurations that would issue a number twice. A token format without
+  `{counter}` (e.g. `RE-{yyyy}`) is refused, it would give every document of a period the same number. A
+  `PeriodKind = FiscalYear` range needs a token format with `{yyyy}` or `{yy}`: without a format, with a legacy
+  `string.Format` format or with a token format without the year, its counter restarts every fiscal year and the numbers
+  would repeat, so the range is refused with `InvalidNumberRange` (when it is configured and before any allocation);
+  ranges without periods are unchanged. A FiscalYear range numbers only String attributes; an Int attribute is refused
+  before anything is allocated. Every allocation statement now also bumps `rtVersion` and sets `rtChangedDateTime` like
+  any engine update, so a stale copy of the counter written back with an expected `rtVersion` (outside a transaction)
+  is refused instead of setting the counter back. Tests: `AutoIncrementNumberFormatTests`,
+  `AutoIncrementFiscalYearTests` (`FiscalYearRange_ForAnIntAttribute_HandsOutNoNumber`,
+  `Allocation_BumpsTheCounterVersion`, configuration refusals).
 - AB#9755 New: a number range continues from its `StartValue` (System 2.9.0, design note D5). Every allocation takes
   its block from `max(counter, StartValue - 1) + 1` on, with and without fiscal-year periods: a range with start value
   1235 continues an external range that ended at 1234, and a start value set below a counter already in use is ignored,

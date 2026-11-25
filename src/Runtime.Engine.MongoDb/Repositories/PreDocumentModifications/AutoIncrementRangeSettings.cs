@@ -16,7 +16,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 ///         unknown zone is an error, never a silent UTC default.</item>
 ///         <item><c>FiscalYearStartMonth</c> is 1-12 (absent: 1, fiscal year = calendar year).</item>
 ///         <item>A token format must parse; <c>{yyyy}</c> / <c>{yy}</c> need <c>PeriodKind = FiscalYear</c>, because a
-///         range without periods has no fiscal year to show.</item>
+///         range without periods has no fiscal year to show. The other way round, <c>PeriodKind = FiscalYear</c>
+///         needs a token format with <c>{yyyy}</c> or <c>{yy}</c> (no format and a legacy format are refused): its
+///         counter restarts every fiscal year, so a number without the year would repeat. A token format needs
+///         <c>{counter}</c>.</item>
 ///         <item><c>StartValue</c> (AB#9755, D5) is at least 1 and not above <c>End</c>. It is a floor, never a reset: a
 ///         start value below a counter already in use is valid and ignored by the allocation, so it is not refused.</item>
 ///         <item>A legacy format and a range without the new attributes are taken as they are: they number as before.</item>
@@ -147,6 +150,16 @@ public sealed class AutoIncrementRangeSettings
         {
             error = $"Format '{formatText}' shows the fiscal year ({{yyyy}} or {{yy}}), which needs PeriodKind " +
                     "FiscalYear.";
+            return false;
+        }
+
+        // The counter restarts every fiscal year, so a number that does not show the year repeats every year:
+        // a duplicate (AB#8675). A FiscalYear range therefore needs a token format with {yyyy} or {yy}.
+        if (hasPeriods && !format.UsesFiscalYear)
+        {
+            var shown = string.IsNullOrEmpty(formatText) ? "no Format" : $"Format '{formatText}'";
+            error = $"PeriodKind FiscalYear needs a Format that shows the fiscal year ({{yyyy}} or {{yy}}, e.g. " +
+                    $"RE-{{yyyy}}-{{counter:D5}}); with {shown} the numbers would repeat every fiscal year.";
             return false;
         }
 

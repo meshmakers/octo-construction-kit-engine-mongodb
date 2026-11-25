@@ -41,7 +41,8 @@ public sealed partial class AutoIncrementNumberFormat
     /// <summary>
     ///     Parses <paramref name="format" />. A token format with an unknown <c>{...}</c> placeholder or an unclosed
     ///     brace is refused (<paramref name="error" /> says why), because a mix of tokens and <c>string.Format</c>
-    ///     placeholders has no meaning. A legacy format is formatted once with a trial number (AB#9755): one that
+    ///     placeholders has no meaning; so is a token format without <c>{counter}</c>, because every number would be
+    ///     the same text. A legacy format is formatted once with a trial number (AB#9755): one that
     ///     <c>string.Format</c> cannot format (e.g. <c>X-{counter:Dx}</c>, an unclosed brace, a placeholder other than
     ///     <c>{0}</c>) is refused, because it would fail at every allocation. Whether <c>string.Format</c> accepts a
     ///     format does not depend on the number, so every format that numbered before still does.
@@ -124,6 +125,15 @@ public sealed partial class AutoIncrementNumberFormat
         if (literal.Length > 0)
         {
             parts.Add(new Part(PartKind.Literal, literal.ToString(), 0));
+        }
+
+        // Without the counter every number of a period would be the same text, i.e. a duplicate.
+        if (parts.All(p => p.Kind != PartKind.Counter))
+        {
+            error = "a token format needs the counter ({counter} or {counter:D<n>}); without it every number " +
+                    "would be the same";
+            result = Empty;
+            return false;
         }
 
         result = new AutoIncrementNumberFormat(null, parts);

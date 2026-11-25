@@ -289,9 +289,16 @@ public class AutoIncrementModifierTests(CkModelImportGuardFixture fixture)
             var stage = Assert.Single(findAndModify["command"]["update"].AsBsonArray).AsBsonDocument;
             var set = Assert.Single(stage.Elements);
             Assert.Equal("$set", set.Name);
-            var assignment = Assert.Single(set.Value.AsBsonDocument.Elements);
-            Assert.Equal("attributes.currentValue", assignment.Name);
-            var add = assignment.Value["$add"].AsBsonArray;
+            // The same statement bumps rtVersion and sets rtChangedDateTime like every engine update (AB#8675), and
+            // writes nothing else.
+            var assignments = set.Value.AsBsonDocument;
+            Assert.Equal(new[] { "attributes.currentValue", "rtVersion", "rtChangedDateTime" },
+                assignments.Names.ToArray());
+            var versionAdd = assignments["rtVersion"]["$add"].AsBsonArray;
+            Assert.Equal(new BsonDocument("$ifNull", new BsonArray { "$rtVersion", 0L }), versionAdd[0]);
+            Assert.Equal(new BsonInt64(1), versionAdd[1]);
+            Assert.Equal("$$NOW", assignments["rtChangedDateTime"].AsString);
+            var add = assignments["attributes.currentValue"]["$add"].AsBsonArray;
             Assert.Equal(2, add.Count);
             Assert.True(add[0].AsBsonDocument.Contains("$max"), add.ToJson());
             Assert.Equal(new BsonInt64(5), add[1]);

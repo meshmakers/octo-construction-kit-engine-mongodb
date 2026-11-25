@@ -123,6 +123,32 @@ public class AutoIncrementNumberFormatTests
         Assert.Contains("FiscalYearStartMonth", error);
     }
 
+    [Theory]
+    [InlineData("RE-{yyyy}")]
+    [InlineData("{yy}")]
+    [InlineData("RE-{yyyy}-{yy}")]
+    public void TokenFormat_WithoutTheCounter_IsRefused(string format)
+    {
+        Assert.False(AutoIncrementNumberFormat.TryParse(format, out _, out var error));
+        Assert.Contains("needs the counter", error);
+    }
+
+    /// <summary>
+    ///     AB#8675: the counter of a FiscalYear range restarts every year, so a number that does not show the year
+    ///     would repeat: no format, a legacy format and a token format without {yyyy}/{yy} are refused.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("{0:D4}")]
+    [InlineData("INV-{0}")]
+    [InlineData("RE-{counter:D5}")]
+    public void FiscalYearRange_WhoseFormatDoesNotShowTheYear_IsRefused(string? format)
+    {
+        Assert.False(AutoIncrementRangeSettings.TryCreate(
+            Counter(periodKind: 1, zone: "Europe/Vienna", format: format), out _, out var error));
+        Assert.Contains("needs a Format that shows the fiscal year", error);
+    }
+
     [Fact]
     public void YearToken_WithoutFiscalYearPeriods_IsRefused()
     {
@@ -152,6 +178,8 @@ public class AutoIncrementNumberFormatTests
     private static AutoIncrementRangeSettings Settings(int? periodKind = null, string? zone = null,
         int? startMonth = null, string? format = null, int? startValue = null)
     {
+        // A FiscalYear range needs a format that shows the year.
+        format ??= periodKind == 1 ? "RE-{yyyy}-{counter:D5}" : null;
         Assert.True(AutoIncrementRangeSettings.TryCreate(Counter(periodKind, zone, startMonth, format, startValue),
             out var settings, out var error), error);
         return settings;

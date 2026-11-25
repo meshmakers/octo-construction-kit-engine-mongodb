@@ -42,6 +42,7 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
     private static readonly RtCkId<CkTypeId> InvoiceTypeId = new("FiscalYearTest/Invoice");
     private static readonly RtCkId<CkTypeId> CreditNoteTypeId = new("FiscalYearTest/CreditNote");
     private static readonly RtCkId<CkTypeId> LegacyDocTypeId = new("FiscalYearTest/LegacyDoc");
+    private static readonly RtCkId<CkTypeId> IntDocTypeId = new("FiscalYearTest/IntDoc");
 
     /// <summary>
     ///     AC 1: fiscal year = calendar year, format <c>RE-{yyyy}-{counter:D5}</c>: documents of 31 December 2026 get
@@ -368,6 +369,9 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
     [InlineData("RE-{yyyy}-{counter:D5}", null, "PeriodKind FiscalYear")]
     [InlineData("RE-{yyyy}-{0:D4}", 1, "unknown token")]
     [InlineData("RE-{counter:D5}", 13, "FiscalYearStartMonth")]
+    [InlineData("RE-{yyyy}", 1, "needs the counter")]
+    [InlineData("RE-{counter:D5}", 1, "needs a Format that shows the fiscal year")]
+    [InlineData("{0:D4}", 1, "needs a Format that shows the fiscal year")]
     public async Task ConfiguringAnInvalidRange_IsRefused(string format, int? periodKindOrMonth, string reason)
     {
         await WithTenantAsync("fyrules", async (dataSource, database) =>
@@ -411,6 +415,57 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
             Assert.Null(invoice.GetAttributeValueOrDefault(NumberAttribute));
             var counter = (await FindDocumentAsync(database, counterId))["attributes"].AsBsonDocument;
             Assert.False(counter.Contains("periods"));
+        });
+    }
+
+    /// <summary>
+    ///     AB#8675: the counter of a FiscalYear range restarts every year, so an Int attribute numbered from it would
+    ///     get the same numbers again each year. It is refused before anything is allocated: no number, no period.
+    /// </summary>
+    [Fact]
+    public async Task FiscalYearRange_ForAnIntAttribute_HandsOutNoNumber()
+    {
+        await WithTenantAsync("fyint", async (dataSource, database) =>
+        {
+            var counterId = await InsertCounterAsync(dataSource, "IntNumber", InvoiceFormat);
+            var document = new RtEntity(IntDocTypeId, OctoObjectId.GenerateNewId(),
+                new Dictionary<string, object?> { { "Title", "int" } });
+
+            var exception = await Record.ExceptionAsync(() =>
+                RunAsync(NewModifier(new FakeClock(At("2026-06-01T12:00:00+02:00"))), dataSource, document));
+
+            Assert.IsType<AutoIncrementFailedException>(exception);
+            Assert.Contains("numbers only String attributes", exception.Message);
+            Assert.Null(document.GetAttributeValueOrDefault(NumberAttribute));
+            var counter = (await FindDocumentAsync(database, counterId))["attributes"].AsBsonDocument;
+            Assert.False(counter.Contains("periods"));
+        });
+    }
+
+    /// <summary>
+    ///     Every allocation statement bumps <c>rtVersion</c> and sets <c>rtChangedDateTime</c> like any engine update,
+    ///     so a stale copy of the counter written back with an expected <c>rtVersion</c> is refused instead of setting
+    ///     the counter back (which would hand the same numbers out again). Covers adding a period and incrementing it.
+    /// </summary>
+    [Fact]
+    public async Task Allocation_BumpsTheCounterVersion()
+    {
+        await WithTenantAsync("fyversion", async (dataSource, database) =>
+        {
+            var counterId = await InsertCounterAsync(dataSource, "InvoiceNumber", InvoiceFormat);
+            var before = await FindDocumentAsync(database, counterId);
+            var modifier = NewModifier(new FakeClock(At("2026-06-01T12:00:00+02:00")));
+
+            await RunAsync(modifier, dataSource, Invoice());
+            var afterCreate = await FindDocumentAsync(database, counterId);
+            await RunAsync(modifier, dataSource, Invoice());
+            var afterIncrement = await FindDocumentAsync(database, counterId);
+
+            var version = before.GetValue("rtVersion", 0).ToInt64();
+            Assert.Equal(version + 1, afterCreate["rtVersion"].ToInt64());
+            Assert.Equal(version + 2, afterIncrement["rtVersion"].ToInt64());
+            Assert.True(afterIncrement["rtChangedDateTime"].ToUniversalTime() >=
+                        afterCreate["rtChangedDateTime"].ToUniversalTime());
         });
     }
 
@@ -621,12 +676,16 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
         return new MongoClient(urlBuilder.ToMongoUrl()).GetDatabase(tenantId.ToLowerInvariant());
     }
 
-    /// <summary>Invoice, CreditNote and LegacyDoc, each with a String <c>Number</c> from its own counter.</summary>
+    /// <summary>
+    ///     Invoice, CreditNote and LegacyDoc, each with a String <c>Number</c> from its own counter, and IntDoc with an
+    ///     Int <c>Number</c>.
+    /// </summary>
     private static CkCompiledModelRoot DocumentModel(CkModelId system)
     {
         var id = new CkModelId("FiscalYearTest-1.0.0");
 
-        CkCompiledTypeDto DocumentType(string typeName, string reference) => new()
+        CkCompiledTypeDto DocumentType(string typeName, string reference,
+            string numberAttributeId = "DocumentNumber-1") => new()
         {
             TypeId = new CkTypeId($"{typeName}-1"), IsCollectionRoot = true,
             DerivedFromCkTypeId = new CkId<CkTypeId>(system, new CkTypeId("Entity-1")),
@@ -639,7 +698,7 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
                 },
                 new CkTypeAttributeDto
                 {
-                    CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("DocumentNumber-1")),
+                    CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId(numberAttributeId)),
                     AttributeName = NumberAttribute, IsOptional = true, AutoIncrementReference = reference
                 }
             ]
@@ -654,13 +713,16 @@ public class AutoIncrementFiscalYearTests(CkModelImportGuardFixture fixture)
             [
                 new CkAttributeDto { AttributeId = new CkAttributeId("Title-1"), ValueType = AttributeValueTypesDto.String },
                 new CkAttributeDto
-                    { AttributeId = new CkAttributeId("DocumentNumber-1"), ValueType = AttributeValueTypesDto.String }
+                    { AttributeId = new CkAttributeId("DocumentNumber-1"), ValueType = AttributeValueTypesDto.String },
+                new CkAttributeDto
+                    { AttributeId = new CkAttributeId("IntNumber-1"), ValueType = AttributeValueTypesDto.Int }
             ],
             Types =
             [
                 DocumentType("Invoice", "InvoiceNumber"),
                 DocumentType("CreditNote", "CreditNoteNumber"),
-                DocumentType("LegacyDoc", "LegacyNumber")
+                DocumentType("LegacyDoc", "LegacyNumber"),
+                DocumentType("IntDoc", "IntNumber", "IntNumber-1")
             ]
         };
     }
