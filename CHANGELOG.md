@@ -18,12 +18,18 @@
   `ReverseNavigationOptions.EdgeThreshold` edges is answered by the capped, index-only edge count and runs no target
   probe, with or without a sort order. Behaviour change: the `totalCount` of a dense origin without a field filter is
   the edge count and may include archived or missing targets (before, without a sort order it was the exact count);
-  with a field filter it stays exact. Every other paging (`take` null or above 0) is unchanged. Code: `MultipleOriginDirectAssociationsRtQuery`
+  with a field filter it stays exact. With a geospatial filter `take: 0` keeps the item path for one item and drops the
+  targets, so its count always equals the item query's total (that path does not apply the geospatial filter yet, Bug
+  AB#9869). Every other paging (`take` null or above 0) is unchanged. Code: `MultipleOriginDirectAssociationsRtQuery`
   (`CreateCountOnlyAssociationStages`), `TenantRepository.CreateRtAssociationTargetsQueryAsync` (internal: the query
   construction of `GetRtAssociationTargetsAsync`, so tests can render the pipeline). Tests:
   `NestedAssociationCountOnlyTests` (pipeline assertion; parity with the item query for six option shapes, zero, `Any`;
-  archived targets; dense origins with and without a field filter; a batch of dense and sparse origins),
-  `NestedAssociationCountOnlyLargeAttributeTests` (twenty targets of 1 MB each). CK compatibility: no CK model, API or
+  archived targets; a geospatial filter on the item path; dense origins with and without a field filter, one well above
+  the threshold; a batch of dense and sparse origins), `NestedAssociationCountOnlyDataPermissionTests` (a caller with a
+  restricted data permission, sparse and dense origin), `NestedAssociationCountOnlyLargeAttributeTests` (twenty targets
+  of 1 MB each). The tests that lower the static `ReverseNavigationOptions.EdgeThreshold` (also
+  `MultipleOriginDirectAssociationsRtQueryTests`) run in the new collection `ReverseNavigationThreshold` with
+  `DisableParallelization`, so no test of a parallel collection runs while the threshold is lowered. CK compatibility: no CK model, API or
   contract change.
 - AB#9702 Test: the regression test of the escaped element pattern
   (`ServiceManagedImportRefusalTests.OrdinaryModelWhoseNameIsAPatternForSystemIdentity_LeavesTheSystemIdentityRowsAlone`)

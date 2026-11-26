@@ -325,14 +325,21 @@ document (`CreateCountOnlyAssociationStages`):
   the unpaged item query with the same options (one per edge whose target exists and passes the filters). A sorted page
   (`take` above 0) without a field filter reports the number of non-archived edges instead, which also counts edges
   whose target is archived or missing, so it can be higher than the count.
-- **Dense origins** (AB#4369): when the targets carry no security, id, field or geospatial filter, each origin is first
+- **Dense origins**: when the targets carry no security, id, field or geospatial filter, each origin is first
   counted on the edge index, capped at `ReverseNavigationOptions.EdgeThreshold` + 1. An origin above the threshold is
   answered with its edge count (role and target types, on the index alone, like the dense path of a sorted page) and
   gets no target probe; only the other origins run the sub-pipeline above. So the `totalCount` of a dense origin without
   a field filter is the edge count and may include archived or missing targets; with a field filter (or a security or
   id filter) it stays exact. This holds with and without a sort order.
+- **Geospatial filters**: `take: 0` with a `NearGeospatialFilter` does not use the sub-pipeline above, which has no
+  `$geoNear` stage. It runs the item pipeline for one item and drops the targets (the earlier form of the count), so
+  its count is always the `totalCount` the item query reports for the same filter. The item pipeline of a nested direct
+  association does not apply the geospatial filter yet (a known bug, see `CHANGELOG.md`).
 
 Every other `take` keeps the item pipelines (edge-driven, optimized sorted and dense-origin paths). Tests:
-`NestedAssociationCountOnlyTests` (stage assertion, parity with the item query, archived targets, dense origins with and
-without a field filter, a batch of dense and sparse origins), `NestedAssociationCountOnlyLargeAttributeTests`
-(targets that together exceed the document limit).
+`NestedAssociationCountOnlyTests` (stage assertion, parity with the item query, archived targets, a geospatial filter on
+the item path, dense origins with and without a field filter, a batch of dense and sparse origins),
+`NestedAssociationCountOnlyDataPermissionTests` (a caller with a restricted data permission, sparse and dense origin),
+`NestedAssociationCountOnlyLargeAttributeTests` (targets that together exceed the document limit). The tests that change
+the static `ReverseNavigationOptions.EdgeThreshold` run in the collection `ReverseNavigationThreshold`
+(`DisableParallelization`), so no test of a parallel collection sees a lowered threshold.

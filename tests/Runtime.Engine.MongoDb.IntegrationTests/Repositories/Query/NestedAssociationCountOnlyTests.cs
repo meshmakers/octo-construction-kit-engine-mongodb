@@ -1,6 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
@@ -20,9 +21,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Q
 ///     The count-only form of a nested association connection (take 0 - <c>first: 0</c>, and a selection of
 ///     <c>totalCount</c> alone, which the asset repository maps to take 0) counts on the server: its sub-pipeline
 ///     loads no target document, materialises no array of targets or target ids per origin, and returns the same
-///     total as the item query.
+///     total as the item query. Runs in <see cref="ReverseNavigationThresholdCollection" />: the dense-origin tests
+///     lower the static <c>ReverseNavigationOptions.EdgeThreshold</c>, which no test of a parallel collection may see.
 /// </summary>
-[Collection(SampleRtModelDataCollection.Name)]
+[Collection(ReverseNavigationThresholdCollection.Name)]
 public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
 {
     private static readonly OctoObjectId SalzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
@@ -129,6 +131,37 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
         Assert.NotEmpty(Assert.Single(result).Value.Items);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(3)]
+    public async Task ExecuteQuery_TakeZero_WithAGeospatialFilter_KeepsTheItemPath(int? skip)
+    {
+        // The count-only pipeline has no $geoNear stage, so take 0 with a geospatial filter runs the item path for
+        // one item and drops the targets: its count is always the total the item query reports for the same filter.
+        // (Test/TestPosition is the only test type with a geo attribute; Salzburg has no edge to one, so both totals
+        // are 0. That the item path itself ignores the filter is a known bug.)
+        var repository = (TenantRepository)fixture.GetSystemContext().GetTenantRepository();
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        var options = RtEntityQueryOptions.Create().NearGeospatialFilter("GeoPosition",
+            new Point(new Position(47.8, 13.0)), null, 10_000);
+        var observed = new List<IReadOnlyList<BsonDocument>>();
+        var query = await repository.CreateRtAssociationTargetsQueryAsync<RtEntity>(session, [SalzburgRtId],
+            TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, GraphDirections.Inbound, null,
+            [TestCkIds.RtCkTestPositionTypeId], options);
+        query.CountOnlyPipelineObserver = observed.Add;
+
+        var countOnly = Assert.Single(await query.ExecuteQuery(session, skip, 0)).Value;
+        var unpaged = Assert.Single(await query.ExecuteQuery(session, null, null)).Value;
+
+        await session.CommitTransactionAsync();
+
+        Assert.Empty(observed);
+        Assert.Equal(unpaged.TotalCount, countOnly.TotalCount);
+        Assert.Empty(countOnly.Items);
+    }
+
     [Fact]
     public async Task CountOnly_OriginWithoutMatchingTargets_CountsZero()
     {
@@ -190,13 +223,17 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CountOnly_OfADenseOriginWithoutTargetFilter_IsTheIndexEdgeCount_WithoutTargetProbes(bool sorted)
+    [InlineData(false, false, 4)]
+    [InlineData(true, false, 4)]
+    [InlineData(false, true, 6)]
+    public async Task CountOnly_OfADenseOriginWithoutTargetFilter_IsTheIndexEdgeCount_WithoutTargetProbes(bool sorted,
+        bool salzburg, int expectedEdgeCount)
     {
         // A dense origin (more edges than the threshold) without a target filter is counted on the edge index
-        // alone (AB#4369): no per-edge target probe runs, and the count is the number of edges - for Tirol four,
-        // although two of its districts are archived.
+        // alone: no per-edge target probe runs, and the count is the number of edges - for Tirol four,
+        // although two of its districts are archived. Salzburg has six edges, well above threshold + 1: the count
+        // is the full edge count, not the capped routing probe (4).
+        var originRtId = salzburg ? SalzburgRtId : TirolRtId;
         var repository = (TenantRepository)fixture.GetSystemContext().GetTenantRepository();
         using var session = await repository.GetSessionAsync();
         session.StartTransaction();
@@ -206,7 +243,7 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
         try
         {
             var observed = new List<IReadOnlyList<BsonDocument>>();
-            var query = await repository.CreateRtAssociationTargetsQueryAsync<RtEntity>(session, [TirolRtId],
+            var query = await repository.CreateRtAssociationTargetsQueryAsync<RtEntity>(session, [originRtId],
                 TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, GraphDirections.Inbound,
                 null, [TestCkIds.RtCkDistrictTypeId], sorted ? Options("Sorted") : Options("Plain"));
             query.CountOnlyPipelineObserver = observed.Add;
@@ -216,10 +253,10 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
             await session.CommitTransactionAsync();
 
             Assert.Empty(observed);
-            var tirol = Assert.Single(result);
-            Assert.Equal(TirolRtId, tirol.Key.RtId);
-            Assert.Equal(4, tirol.Value.TotalCount);
-            Assert.Empty(tirol.Value.Items);
+            var origin = Assert.Single(result);
+            Assert.Equal(originRtId, origin.Key.RtId);
+            Assert.Equal(expectedEdgeCount, origin.Value.TotalCount);
+            Assert.Empty(origin.Value.Items);
         }
         finally
         {

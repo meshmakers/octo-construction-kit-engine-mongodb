@@ -10,6 +10,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 using MongoDB.Bson;
+using MongoDB.Driver;
 
 using TestCkModel.Generated.Test.v1;
 
@@ -75,7 +76,9 @@ public class NestedAssociationCountOnlyLargeAttributeTests(ImportTestCkModelFixt
 
             using var session = await repository.GetSessionAsync();
 
-            await Assert.ThrowsAnyAsync<Exception>(() =>
+            // The server refuses the aggregation (the per-origin target array exceeds the document limit); the
+            // driver's command exception reaches the caller untranslated. Any other failure fails this test.
+            await Assert.ThrowsAsync<MongoCommandException>(() =>
                 CountriesOfAsync(repository, session, continentRtId, null, null));
         }
         finally

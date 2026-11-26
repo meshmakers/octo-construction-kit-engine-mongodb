@@ -162,6 +162,15 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         // a count that loads no target document; skip and sort do not change a total count.
         if (take == 0)
         {
+            // With a geospatial filter the count follows the item path instead, so that it always reports the
+            // total the item query reports for the same filter: the count-only pipeline has no $geoNear stage.
+            // Mongo rejects "$limit: 0" and "$slice: [array, skip, 0]", so that path runs for one item (the total
+            // is computed before the limit) and the targets are dropped.
+            if (_geospatialFilters.Count > 0)
+            {
+                return await ExecuteQueryCore(session, skip, 1, dropTargets: true);
+            }
+
             return await ExecuteCountOnlyAsync(session);
         }
 
@@ -320,10 +329,10 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     {
         var (_, innerLocalFieldCkIdName, connectToFieldName) = GetDirectionFieldNames();
 
-        // Dense origins (AB#4369): without a security, id, field or geospatial filter on the targets, an origin
+        // Dense origins: without a security, id, field or geospatial filter on the targets, an origin
         // with more than EdgeThreshold edges is answered by the capped, index-only edge count - the same total the
-        // sorted item path reports for it - instead of one target probe per edge (650k random reads for the
-        // execution origin of AB#4369). The edge count includes edges whose target is archived or missing; that
+        // sorted item path reports for it - instead of one target probe per edge (650k random reads for a large
+        // execution origin). The edge count includes edges whose target is archived or missing; that
         // approximation is the documented one of dense origins. With a target filter every origin is counted
         // exactly by the pipeline below.
         var countOrigins = _rtIds.ToList();
@@ -413,7 +422,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     }
 
     private async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteQueryCore(IOctoSession session, int? skip,
-        int? take)
+        int? take, bool dropTargets = false)
     {
         // Field names for the association lookup
         var (innerLocalFieldRtIdName, innerLocalFieldCkIdName, connectToFieldName) = GetDirectionFieldNames();
@@ -814,6 +823,11 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
         foreach (var multipleResult in result)
         {
+            if (dropTargets)
+            {
+                multipleResult.Targets = [];
+            }
+
             var targetEntities = FinalizeResults(multipleResult.Targets);
             multipleResult.AggregationResult = targetEntities.Item1;
             multipleResult.FieldAggregationResults = targetEntities.Item2;
