@@ -306,3 +306,40 @@ as 300 items of which only 35 were distinct. Rules:
   attribute, Unique and UniqueNotDeleted sort attributes, compound unique, unique index with a further predicate, failed
   build of a slot under its alternate name), `TiebreakIndexShapeTests` (unit), `PagedQueryTiebreakTests`
   (also the `$geoNear` page).
+
+## Counting the targets of an association navigation
+
+`MultipleOriginDirectAssociationsRtQuery` answers `take: 0` (GraphQL `children(first: 0) { totalCount }`, and every
+nested selection of `totalCount` alone, which the asset repository maps to `take: 0`) with a count that loads no target
+document (`CreateCountOnlyAssociationStages`):
+
+- The origins join the association collection on the indexed `originRtId` / `targetRtId` field; the sub-pipeline matches
+  the role, the target types and (unless archived entities are included) non-archived edges.
+- Per target collection one `$lookup` probes the target by `_id` (`localField` → `_id`, index-backed). The archived
+  filter and the security, id and field filters run inside the probe, which ends with `$project: { _id: 1 }`: at most one
+  id per edge, never a target document.
+- `$unwind` and `$count` close the sub-pipeline, so each origin receives one count document instead of an array of
+  targets or ids; an origin without a matching edge counts 0. A large association therefore cannot reach the 16 MB
+  document limit or the memory limit of a pipeline stage through this path.
+- No sort, no paging and no `$setWindowFields`: a total does not depend on them. The count equals the `totalCount` of
+  the unpaged item query with the same options (one per edge whose target exists and passes the filters). A sorted page
+  (`take` above 0) without a field filter reports the number of non-archived edges instead, which also counts edges
+  whose target is archived or missing, so it can be higher than the count.
+- **Dense origins**: when the targets carry no security, id, field or geospatial filter, each origin is first
+  counted on the edge index, capped at `ReverseNavigationOptions.EdgeThreshold` + 1. An origin above the threshold is
+  answered with its edge count (role and target types, on the index alone, like the dense path of a sorted page) and
+  gets no target probe; only the other origins run the sub-pipeline above. So the `totalCount` of a dense origin without
+  a field filter is the edge count and may include archived or missing targets; with a field filter (or a security or
+  id filter) it stays exact. This holds with and without a sort order.
+- **Geospatial filters**: `take: 0` with a `NearGeospatialFilter` does not use the sub-pipeline above, which has no
+  `$geoNear` stage. It runs the item pipeline for one item and drops the targets (the earlier form of the count), so
+  its count is always the `totalCount` the item query reports for the same filter. The item pipeline of a nested direct
+  association does not apply the geospatial filter yet (a known bug, see `CHANGELOG.md`).
+
+Every other `take` keeps the item pipelines (edge-driven, optimized sorted and dense-origin paths). Tests:
+`NestedAssociationCountOnlyTests` (stage assertion, parity with the item query, archived targets, a geospatial filter on
+the item path, dense origins with and without a field filter, a batch of dense and sparse origins),
+`NestedAssociationCountOnlyDataPermissionTests` (a caller with a restricted data permission, sparse and dense origin),
+`NestedAssociationCountOnlyLargeAttributeTests` (targets that together exceed the document limit). The tests that change
+the static `ReverseNavigationOptions.EdgeThreshold` run in the collection `ReverseNavigationThreshold`
+(`DisableParallelization`), so no test of a parallel collection sees a lowered threshold.

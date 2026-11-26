@@ -15,8 +15,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Q
 /// <summary>
 /// Tests for <see cref="MultipleOriginDirectAssociationsRtQuery{TTargetEntity}"/>
 /// focusing on correct totalCount calculation when pagination ($limit) is used.
+/// Runs in <see cref="ReverseNavigationThresholdCollection"/>: several tests lower the static
+/// <c>ReverseNavigationOptions.EdgeThreshold</c>, which no test of a parallel collection may see.
 /// </summary>
-[Collection(SampleRtModelDataCollection.Name)]
+[Collection(ReverseNavigationThresholdCollection.Name)]
 public class MultipleOriginDirectAssociationsRtQueryTests
 {
     private readonly SampleRtModelDataFixture _fixture;

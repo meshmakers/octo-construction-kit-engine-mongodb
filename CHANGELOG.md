@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- AB#9750 Fix: the count-only form of a nested association query (`GetRtAssociationTargetsAsync` with `take: 0`, the
+  form of `children(first: 0) { totalCount }` and, with the asset repository of the same change, of every nested
+  selection of `totalCount` alone) counts on the server and loads no target document. Before, it ran the item pipeline
+  for one item: every target document went through a per-edge `$lookup` and an unbounded `$setWindowFields`, so a large
+  association (many or big targets) could run out of memory like the top-level count of AB#8895. The new sub-pipeline
+  matches the edges, probes each target by `_id` in its collection with the archived and field filters inside the probe
+  and keeps only `_id`, then ends with `$count`: each origin receives one count document, never an array of targets or
+  target ids. The count equals the total of the unpaged item query (one per edge whose target exists and passes the
+  filters). Skip and sort do not change it and are ignored. Behaviour change of `take: 0` with a sort order: before, it
+  took the sorted paths and reported their total - without a field filter the number of non-archived edges, including
+  edges whose target is archived or missing (also the edge count of a dense origin, AB#4369); now it reports the exact
+  count, which can be lower. A sorted page (`take` above 0) without a field filter still reports the edge count.
+  Dense origins (AB#4369): without a security, id, field or geospatial filter on the targets, an origin with more than
+  `ReverseNavigationOptions.EdgeThreshold` edges is answered by the capped, index-only edge count and runs no target
+  probe, with or without a sort order. Behaviour change: the `totalCount` of a dense origin without a field filter is
+  the edge count and may include archived or missing targets (before, without a sort order it was the exact count);
+  with a field filter it stays exact. With a geospatial filter `take: 0` keeps the item path for one item and drops the
+  targets, so its count always equals the item query's total (that path does not apply the geospatial filter yet, Bug
+  AB#9869). Every other paging (`take` null or above 0) is unchanged. Code: `MultipleOriginDirectAssociationsRtQuery`
+  (`CreateCountOnlyAssociationStages`), `TenantRepository.CreateRtAssociationTargetsQueryAsync` (internal: the query
+  construction of `GetRtAssociationTargetsAsync`, so tests can render the pipeline). Tests:
+  `NestedAssociationCountOnlyTests` (pipeline assertion; parity with the item query for six option shapes, zero, `Any`;
+  archived targets; a geospatial filter on the item path; dense origins with and without a field filter, one well above
+  the threshold; a batch of dense and sparse origins), `NestedAssociationCountOnlyDataPermissionTests` (a caller with a
+  restricted data permission, sparse and dense origin), `NestedAssociationCountOnlyLargeAttributeTests` (twenty targets
+  of 1 MB each). The tests that lower the static `ReverseNavigationOptions.EdgeThreshold` (also
+  `MultipleOriginDirectAssociationsRtQueryTests`) run in the new collection `ReverseNavigationThreshold` with
+  `DisableParallelization`, so no test of a parallel collection runs while the threshold is lowered. CK compatibility: no CK model, API or
+  contract change.
 - AB#9702 Test: the regression test of the escaped element pattern
   (`ServiceManagedImportRefusalTests.OrdinaryModelWhoseNameIsAPatternForSystemIdentity_LeavesTheSystemIdentityRowsAlone`)
   asserts that both versions of `Sy.tem.Identity` are installed - the second import runs `DeletePreviousVersion` - and
