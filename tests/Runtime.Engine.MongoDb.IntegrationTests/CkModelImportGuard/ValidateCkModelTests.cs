@@ -79,7 +79,8 @@ public class ValidateCkModelTests(CkModelImportGuardFixture fixture)
         await WithTenantAsync("valsys", async (tenant, _) =>
         {
             var model = await ClassicTestV1Async();
-            var type = Assert.Single(model.Types!.Where(t => t.DerivedFromCkTypeId != null).Take(1));
+            var type = model.Types!.FirstOrDefault(t => t.DerivedFromCkTypeId != null);
+            Assert.True(type != null, "the test model needs a derived type to point at another System version");
             var referenced = new CkModelId("System-0.0.1");
             type.DerivedFromCkTypeId = new CkId<CkTypeId>(referenced, type.DerivedFromCkTypeId!.ElementId);
 
@@ -95,7 +96,10 @@ public class ValidateCkModelTests(CkModelImportGuardFixture fixture)
 
             // The import refuses the same model with the same text (shared check, unchanged import behaviour).
             var ex = await Assert.ThrowsAnyAsync<Exception>(() => tenant.ImportCkModelAsync(model));
-            Assert.Contains(message.MessageText, ex.ToString());
+            var validation = FindModelValidationException(ex);
+            Assert.True(validation != null,
+                $"the import must refuse with ModelValidationException, got {ex.GetType().Name}: {ex.Message}");
+            Assert.Equal(message.MessageText, validation.Message);
         });
     }
 
@@ -117,7 +121,10 @@ public class ValidateCkModelTests(CkModelImportGuardFixture fixture)
 
             // The import refuses the same model with the same text (shared check, unchanged import behaviour).
             var ex = await Assert.ThrowsAnyAsync<Exception>(() => tenant.ImportCkModelAsync(model));
-            Assert.Contains(message.MessageText, ex.ToString());
+            var validation = FindModelValidationException(ex);
+            Assert.True(validation != null,
+                $"the import must refuse with ModelValidationException, got {ex.GetType().Name}: {ex.Message}");
+            Assert.Equal(message.MessageText, validation.Message);
         });
     }
 
@@ -207,5 +214,19 @@ public class ValidateCkModelTests(CkModelImportGuardFixture fixture)
         {
             await ThrowawayTenant.DropAsync(systemContext, tenantId);
         }
+    }
+
+    /// <summary>The import's ModelValidationException, also when a caller layer wraps it.</summary>
+    private static ModelValidationException? FindModelValidationException(Exception? ex)
+    {
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current is ModelValidationException validation)
+            {
+                return validation;
+            }
+        }
+
+        return null;
     }
 }
