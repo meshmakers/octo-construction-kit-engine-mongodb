@@ -15,8 +15,10 @@
   and the guard runs as `Warn`. Reads, results, paging and errors are unchanged in every mode.
   `ISystemContext.InvalidateTenantResolveImportGuards` (lease end on a pooled adapter, tenant update/delete) also drops
   the guard's unknown-caller throttle of the tenant, its only tenant-keyed state. A `take` of `int.MaxValue` is
-  always unbounded, whatever `MaxTake` is. The tenant context's own registry and configuration lookups run suppressed
-  (`RuntimeReadScope.Suppress()`), so a cross-tenant node is reported for its own read. Docs:
+  always unbounded, whatever `MaxTake` is, unless a key list of at most `MaxTake` ids bounds it (reads by id). The
+  registry reads (`GetAllTenantsAsync`, `GetChildTenantsAsync`, `GetDirectChildTenantsAsync`, the tenant lookups) and
+  the tenant configuration reads run suppressed (`RuntimeReadScope.Suppress()`), so a cross-tenant node - also one
+  whose cross-tenant guard reads the registry first - is reported for its own read. Docs:
   `docs/runtime-read-guard.md`.
 
 - AB#9750 Fix: the count-only form of a nested association query (`GetRtAssociationTargetsAsync` with `take: 0`, the

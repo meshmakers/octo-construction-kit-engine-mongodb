@@ -2234,9 +2234,8 @@ public class TenantContext : ITenantContext
             .FieldEquals(nameof(RtTenant.ParentTenantId), TenantId)
             .FieldEquals(nameof(RtTenant.ParentTenantId), null);
 
-        var result =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions, skip,
-                take);
+        var result = await ReadRegistryAsync(() =>
+            tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions, skip, take));
         return new ResultSet<OctoTenant>(
             result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName, d.ParentTenantId)),
             result.TotalCount, null, null);
@@ -2257,8 +2256,8 @@ public class TenantContext : ITenantContext
         // null-or-equals disjunction has to include the legacy records.
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
-        var result =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, RtEntityQueryOptions.Create());
+        var result = await ReadRegistryAsync(() =>
+            tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, RtEntityQueryOptions.Create()));
         var directChildren = result.Items
             .Where(d => d.ParentTenantId == null ||
                         string.Equals(d.ParentTenantId, TenantId, StringComparison.OrdinalIgnoreCase))
@@ -3333,8 +3332,8 @@ public class TenantContext : ITenantContext
         var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenantConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
-        var resultSet =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(adminSession, queryOptions);
+        var resultSet = await ReadRegistryAsync(() =>
+            tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(adminSession, queryOptions));
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null)
         {
@@ -3927,7 +3926,7 @@ public class TenantContext : ITenantContext
     ///     be reported as that node's unbounded read nor use up its one report per execution (AB#9824). Only these
     ///     lookups are suppressed, never a node's own read.
     /// </summary>
-    private static async Task<TResult> ReadRegistryAsync<TResult>(Func<Task<TResult>> lookup)
+    private protected static async Task<TResult> ReadRegistryAsync<TResult>(Func<Task<TResult>> lookup)
     {
         using (RuntimeReadScope.Suppress())
         {

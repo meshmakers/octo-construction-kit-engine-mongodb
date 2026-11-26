@@ -106,4 +106,40 @@ public sealed class RuntimeReadGuardWiringTests(RuntimeReadGuardWiringFixture fi
         Assert.Equal(before + 1, UnboundedWarnings(type.ToString()));
         Assert.Equal(tenantWarningsBefore, UnboundedWarnings("System/Tenant"));
     }
+
+    [Fact]
+    public async Task RegistryEnumerationInsideANode_ColdCache_DoesNotHideTheNodesOwnUnboundedRead()
+    {
+        // The mesh adapter's cross-tenant guard (TenantRegistryReader) reads the whole registry inside the node
+        // whenever its 30-second cache is cold, before the node's own read. Those registry reads and the tenant
+        // configuration read take no `take` by design; none of them may use up the node's one report.
+        var systemContext = (SystemContext)fixture.GetSystemContext();
+        var repository = (TenantRepository)systemContext.GetTenantRepository();
+        var type = TestCkIds.RtCkContinentTypeId;
+        var before = UnboundedWarnings(type.ToString());
+        var allBefore = AllUnboundedWarnings();
+
+        using var execution = RuntimeReadScope.BeginExecution(new RuntimeReadExecution(systemContext.TenantId,
+            "pipeline-2", null, "flow-2", Guid.NewGuid().ToString()));
+        using (RuntimeReadScope.BeginNode("GetRtEntitiesByType@1", "PipelineExecution/GetRtEntitiesByType@1"))
+        {
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await systemContext.GetAllTenantsAsync(adminSession);
+                await systemContext.GetChildTenantsAsync(adminSession);
+                await systemContext.GetDirectChildTenantsAsync(adminSession);
+                await systemContext.SetConfigurationAsync(adminSession, "ab9824-read-guard-wiring", "value");
+            }
+
+            using var session = await repository.GetSessionAsync();
+            await repository.GetRtEntitiesByTypeAsync(session, type, RtEntityQueryOptions.Create());
+        }
+
+        Assert.Equal(before + 1, UnboundedWarnings(type.ToString()));
+        Assert.Equal(allBefore + 1, AllUnboundedWarnings());
+    }
+
+    private int AllUnboundedWarnings() => fixture.Logs.Entries.Count(e =>
+        e.Level == LogLevel.Warning && e.Category == typeof(RuntimeReadGuard).FullName &&
+        e.Message.StartsWith("Unbounded runtime-entity read", StringComparison.Ordinal));
 }

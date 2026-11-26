@@ -54,9 +54,11 @@ There is no mode that caps or refuses. A `Mode` that names neither value (for ex
 cannot be bound, is logged once per value as a warning (event 41002, `RuntimeReadGuard.InvalidConfiguration`, naming
 the invalid and the valid values) and the guard runs as `Warn` - with the configured `MaxTake` for an invalid `Mode`,
 with the default limit for a section that cannot be bound; a misconfiguration never turns the guard off silently. A
-`take` of `int.MaxValue` always counts as unbounded, whatever `MaxTake` is. Engine-internal lookups (the tenant
-registry and tenant configuration lookups of the tenant context, the data-policy table load) run suppressed and are
-never attributed to a node. The mesh adapter chart sets the section from `runtimeReadGuard.mode` / `runtimeReadGuard.maxTake`.
+`take` of `int.MaxValue` always counts as unbounded, whatever `MaxTake` is - unless a key list of at most `MaxTake` ids
+bounds it (reads by id). Engine-internal lookups run suppressed and are never attributed to a node: the registry reads
+`ISystemContext.GetAllTenantsAsync`, `GetChildTenantsAsync` and `GetDirectChildTenantsAsync`, the tenant lookups
+behind `TryGetChildTenantAsync` and the platform-wide tenant lookup, the tenant configuration reads
+(`GetConfigurationAsync`, the read in `SetConfigurationAsync`) and the data-policy table load. The mesh adapter chart sets the section from `runtimeReadGuard.mode` / `runtimeReadGuard.maxTake`.
 
 ## Warning and metric
 

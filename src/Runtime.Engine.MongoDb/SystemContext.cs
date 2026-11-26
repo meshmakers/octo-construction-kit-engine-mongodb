@@ -358,8 +358,10 @@ public class SystemContext : TenantContext, ISystemContext
         // so this returns every tenant of the installation regardless of its logical parent. This is
         // the enumeration for installation-wide concerns (token cleanup, CORS, health checks,
         // observability); GetChildTenantsAsync returns direct children only (AB#5025).
-        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession,
-            RtEntityQueryOptions.Create(), skip, take);
+        // Engine-internal registry read, suppressed: the mesh adapter's cross-tenant guard reads the registry inside
+        // the node, and that read must not take the node's one report for its own read (AB#9824).
+        var result = await ReadRegistryAsync(() => tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession,
+            RtEntityQueryOptions.Create(), skip, take));
         // Carry the logical parent (AB#5311): the registry rows are stamped with it, and a consumer
         // walking the hierarchy from this enumeration (identity's scoped tenant discovery) otherwise
         // sees every tenant as a direct child of the system tenant.
