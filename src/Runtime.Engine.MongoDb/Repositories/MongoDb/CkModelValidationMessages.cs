@@ -10,18 +10,11 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 /// </summary>
 internal static class CkModelValidationMessages
 {
-    /// <summary>
-    ///     Number of the tenant validation refusals of AB#8492 that have no number in the engine message catalog. The
-    ///     parameter <c>reason</c> tells them apart: <see cref="ReasonSystemReferenceMismatch" />,
-    ///     <see cref="ReasonDependencyResolution" />.
-    /// </summary>
-    public const int TenantValidationNumber = 8492;
+    /// <summary>Number of CkModelSystemReferenceMismatch in the construction kit engine message catalog.</summary>
+    public const int SystemReferenceMismatchNumber = 145;
 
-    /// <summary>The model was compiled against another system model version than the installed one.</summary>
-    public const string ReasonSystemReferenceMismatch = "system-reference-mismatch";
-
-    /// <summary>The resolver refused the model against the installed models (e.g. a dependency the tenant does not have).</summary>
-    public const string ReasonDependencyResolution = "dependency-resolution";
+    /// <summary>Number of CkModelDependencyNotResolvable in the construction kit engine message catalog.</summary>
+    public const int DependencyNotResolvableNumber = 146;
 
     /// <summary>Number of CkLanguageNotSupported in the construction kit engine message catalog.</summary>
     public const int CkLanguageNotSupportedNumber = 91;
@@ -56,23 +49,26 @@ internal static class CkModelValidationMessages
 
     public static OperationMessage SystemReferenceMismatch(CkModelId modelId, CkModelId referencedModelId,
         string installedModelName, object installedVersion) =>
-        new(MessageLevel.Error, null, TenantValidationNumber,
+        new(MessageLevel.Error, null, SystemReferenceMismatchNumber,
             $"Model '{modelId}' was compiled against '{referencedModelId.FullName}' " +
             $"but '{installedModelName}-{installedVersion}' is installed. " +
             $"The model needs to be recompiled against the current system version.",
             new Dictionary<string, string>
             {
-                ["reason"] = ReasonSystemReferenceMismatch,
                 ["modelId"] = modelId.ToString(),
                 ["referencedModelId"] = referencedModelId.FullName,
                 ["installedModelId"] = $"{installedModelName}-{installedVersion}"
             });
 
+    /// <summary>
+    ///     The resolver refused the model against the installed models (e.g. a dependency the tenant does not have). The
+    ///     text is the resolver's own; it names the dependency.
+    /// </summary>
     public static OperationMessage DependencyResolutionRefused(CkModelId modelId, string reasonText) =>
-        new(MessageLevel.Error, null, TenantValidationNumber, reasonText,
+        new(MessageLevel.Error, null, DependencyNotResolvableNumber, reasonText,
             new Dictionary<string, string>
             {
-                ["reason"] = ReasonDependencyResolution,
-                ["modelId"] = modelId.ToString()
+                ["modelId"] = modelId.ToString(),
+                ["detail"] = reasonText
             });
 }

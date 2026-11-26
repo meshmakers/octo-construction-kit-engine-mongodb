@@ -62,11 +62,44 @@ public class ValidateCkModelTests(CkModelImportGuardFixture fixture)
             // The resolver reports the unknown model as its own message and refuses the dependency set; both are errors.
             Assert.All(result.Messages.Where(m => m.MessageText.Contains("NotInstalledAnywhere")),
                 m => Assert.True(m.MessageLevel is MessageLevel.Error or MessageLevel.FatalError, m.ToString()));
-            var refusal = Assert.Single(result.Messages, m => m.MessageNumber == 8492);
-            Assert.Equal("dependency-resolution", refusal.Parameters["reason"]);
+            // A catalog number (CkModelDependencyNotResolvable), never a work item id plus a reason.
+            var refusal = Assert.Single(result.Messages, m => m.MessageNumber == 146);
+            Assert.False(refusal.Parameters.ContainsKey("reason"));
+            Assert.Equal(model.ModelId.ToString(), refusal.Parameters["modelId"]);
+            Assert.Contains("NotInstalledAnywhere", refusal.Parameters["detail"]);
             Assert.Contains("NotInstalledAnywhere", refusal.MessageText);
             Assert.False(await tenant.IsCkModelExistingAsync(TestV1ModelId));
             Assert.Equal(before, await SnapshotAsync(tenantId));
+        });
+    }
+
+    [Fact]
+    public async Task ASystemReferenceToAnotherVersion_IsMessage145_WithTheImportsText()
+    {
+        await WithTenantAsync("valsys", async (tenant, _) =>
+        {
+            var model = await ClassicTestV1Async();
+            var type = model.Types!.FirstOrDefault(t => t.DerivedFromCkTypeId != null);
+            Assert.True(type != null, "the test model needs a derived type to point at another System version");
+            var referenced = new CkModelId("System-0.0.1");
+            type.DerivedFromCkTypeId = new CkId<CkTypeId>(referenced, type.DerivedFromCkTypeId!.ElementId);
+
+            var result = await tenant.ValidateCkModelAsync(model);
+
+            // CkModelSystemReferenceMismatch from the engine catalog, without the old reason parameter.
+            var message = Assert.Single(result.Messages, m => m.MessageNumber == 145);
+            Assert.Equal(MessageLevel.Error, message.MessageLevel);
+            Assert.False(message.Parameters.ContainsKey("reason"));
+            Assert.Equal(TestV1ModelId.ToString(), message.Parameters["modelId"]);
+            Assert.Equal(referenced.FullName, message.Parameters["referencedModelId"]);
+            Assert.StartsWith("System-", message.Parameters["installedModelId"]);
+
+            // The import refuses the same model with the same text (shared check, unchanged import behaviour).
+            var ex = await Assert.ThrowsAnyAsync<Exception>(() => tenant.ImportCkModelAsync(model));
+            var validation = FindModelValidationException(ex);
+            Assert.True(validation != null,
+                $"the import must refuse with ModelValidationException, got {ex.GetType().Name}: {ex.Message}");
+            Assert.Equal(message.MessageText, validation.Message);
         });
     }
 
@@ -88,7 +121,10 @@ public class ValidateCkModelTests(CkModelImportGuardFixture fixture)
 
             // The import refuses the same model with the same text (shared check, unchanged import behaviour).
             var ex = await Assert.ThrowsAnyAsync<Exception>(() => tenant.ImportCkModelAsync(model));
-            Assert.Contains(message.MessageText, ex.ToString());
+            var validation = FindModelValidationException(ex);
+            Assert.True(validation != null,
+                $"the import must refuse with ModelValidationException, got {ex.GetType().Name}: {ex.Message}");
+            Assert.Equal(message.MessageText, validation.Message);
         });
     }
 
@@ -178,5 +214,19 @@ public class ValidateCkModelTests(CkModelImportGuardFixture fixture)
         {
             await ThrowawayTenant.DropAsync(systemContext, tenantId);
         }
+    }
+
+    /// <summary>The import's ModelValidationException, also when a caller layer wraps it.</summary>
+    private static ModelValidationException? FindModelValidationException(Exception? ex)
+    {
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current is ModelValidationException validation)
+            {
+                return validation;
+            }
+        }
+
+        return null;
     }
 }

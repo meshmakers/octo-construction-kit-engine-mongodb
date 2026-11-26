@@ -7,6 +7,10 @@
   asserts that both versions of `Sy.tem.Identity` are installed - the second import runs `DeletePreviousVersion` - and
   that the snapshot holds System.Identity element rows; with the old unescaped pattern it fails. The `S.*` case is
   gone (model names allow only letters, digits, `_` and `.`), and the test class disposes its MongoDB client.
+- AB#8502 Fix: CK model validation refusals carry engine catalog numbers. `ValidateCkModelAsync` reports a system
+  reference mismatch as message 145 (`CkModelSystemReferenceMismatch`: `modelId`, `referencedModelId`,
+  `installedModelId`) and a refused dependency set as message 146 (`CkModelDependencyNotResolvable`: `modelId`,
+  `detail`) instead of 8492 with a `reason` parameter. The import's `ModelValidationException` texts are unchanged.
 
 - AB#9770 New: the engine refuses changes to synced master data outside the sync. An entity that carries `RtSyncOrigin`
   is changed, replaced, deleted or archived, and `RtSyncOrigin` is set or changed, only by a sync-writer session of the

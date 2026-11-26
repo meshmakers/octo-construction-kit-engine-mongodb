@@ -514,9 +514,9 @@ public interface ITenantContext
     /// <summary>
     ///     Validates a compiled CK model against the models installed in this tenant <b>without importing it</b>
     ///     (AB#8492): the checks the import runs before it writes - CK language (message 91), <c>minEngineVersion</c>
-    ///     (message 126), system model references (message 8492, <c>reason</c> <c>system-reference-mismatch</c>) - and the
+    ///     (message 126), system model references (message 145, CkModelSystemReferenceMismatch) - and the
     ///     resolution of the model's dependencies and elements against the installed models (a refused dependency is message
-    ///     8492 with <c>reason</c> <c>dependency-resolution</c>). Strictly read-only: no import lock, no tenant write, no notification,
+    ///     146, CkModelDependencyNotResolvable; every number is from the engine message catalog). Strictly read-only: no import lock, no tenant write, no notification,
     ///     no job, no cache change. A missing or unsatisfiable dependency is reported as an error message, not thrown.
     ///     The caller checks <see cref="OperationResult.HasErrors" />; an empty result means the import would pass these
     ///     checks (the tenant upgrade guard, <see cref="EvaluateExplicitCkImportAsync" />, is a separate question).
