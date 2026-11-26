@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- AB#9824 New: runtime read guard - unbounded runtime-entity reads become visible, no behaviour change. A host that
+  calls `AddRuntimeReadGuard()` (the mesh adapter; not the asset repository, whose API has its own guard, so nothing is
+  counted twice) gets one warning (event 41001 `RuntimeReadGuard.UnboundedRead`, "Unbounded runtime-entity read") per
+  pipeline execution and node and one count of `octo.engine.runtime_read.unbounded` (labels tenant, ck_type,
+  node_type, mode; meter `Meshmakers.Octo.MongoDb`; a new series is exported as 0 first, so the first hit is countable)
+  for every read by type, by id above the limit, by type with navigation, of association targets, indirect association
+  targets and deep graphs without `take` or with a `take` above `RuntimeReadGuard:MaxTake` (default 1000,
+  `int.MaxValue` included). The caller (pipeline, data flow, node type and path) comes from `RuntimeReadScope`
+  (octo-construction-kit-engine); reads outside a pipeline are reported with caller `unknown`, at most once per tenant,
+  CK type and hour. `RuntimeReadGuard:Mode` is `Off` or `Warn` (default); an invalid value is logged once (event 41002)
+  and the guard runs as `Warn`. Reads, results, paging and errors are unchanged in every mode. Docs:
+  `docs/runtime-read-guard.md`.
+
 - AB#9750 Fix: the count-only form of a nested association query (`GetRtAssociationTargetsAsync` with `take: 0`, the
   form of `children(first: 0) { totalCount }` and, with the asset repository of the same change, of every nested
   selection of `totalCount` alone) counts on the server and loads no target document. Before, it ran the item pipeline

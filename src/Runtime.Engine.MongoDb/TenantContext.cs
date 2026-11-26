@@ -3854,7 +3854,8 @@ public class TenantContext : ITenantContext
             _serviceProvider.GetService<IDataPermissionResolver>(),
             GetRepositoryAuditEventSink(),
             _loggerFactory.CreateLogger<TenantRepository>(),
-            _serviceProvider.GetService<RuntimeQueryTimeLimitSettings>());
+            _serviceProvider.GetService<RuntimeQueryTimeLimitSettings>(),
+            _serviceProvider.GetService<RuntimeReadGuard>());
         return tenantRepository;
     }
 
@@ -3869,7 +3870,8 @@ public class TenantContext : ITenantContext
             _serviceProvider.GetService<IDataPermissionResolver>(),
             GetRepositoryAuditEventSink(),
             _loggerFactory.CreateLogger<TenantRepository>(),
-            _serviceProvider.GetService<RuntimeQueryTimeLimitSettings>());
+            _serviceProvider.GetService<RuntimeQueryTimeLimitSettings>(),
+            _serviceProvider.GetService<RuntimeReadGuard>());
         return tenantRepository;
     }
 

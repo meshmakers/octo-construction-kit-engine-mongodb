@@ -43,7 +43,8 @@ internal class TenantRepository(
     IDataPermissionResolver? dataPermissionResolver = null,
     IAuditEventSink? auditEventSink = null,
     ILogger? logger = null,
-    RuntimeQueryTimeLimitSettings? runtimeQueryTimeLimit = null)
+    RuntimeQueryTimeLimitSettings? runtimeQueryTimeLimit = null,
+    RuntimeReadGuard? runtimeReadGuard = null)
     : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation,
         dataPermissionResolver, auditEventSink, logger), ITenantRepository,
         ISecureSessionFactory, ISyncWriterSessionFactory
@@ -61,6 +62,53 @@ internal class TenantRepository(
     ///     Null in production; set by tests (AB#8897) to prove which limit reached the MongoDB options.
     /// </summary>
     internal Action<string, TimeSpan?>? RuntimeQueryMaxTimeObserver { get; set; }
+
+    /// <summary>
+    ///     The host's runtime read guard (AB#9824), or null when the host did not opt in (<c>AddRuntimeReadGuard</c>):
+    ///     unbounded reads are then neither logged nor counted. Settable for tests. The guard only observes; it never
+    ///     changes a read.
+    /// </summary>
+    internal RuntimeReadGuard? ReadGuard { get; set; } = runtimeReadGuard;
+
+    /// <summary>Reports a single-origin read to the <see cref="ReadGuard" /> (AB#9824) and returns its result unchanged.</summary>
+    private IResultSet<TDocument> ObserveRead<TDocument>(IResultSet<TDocument> result, string readKind,
+        RtCkId<CkTypeId> ckTypeId, int? take, int? keyCount)
+    {
+        var guard = ReadGuard;
+        if (guard != null && guard.IsCandidate(take, keyCount))
+        {
+            guard.Observe(TenantId, readKind, ckTypeId.ToString(), take, keyCount, CountItems(result.Items));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    ///     Reports a multiple-origin read (entities summed over the origins) to the <see cref="ReadGuard" /> (AB#9824)
+    ///     and returns its result unchanged.
+    /// </summary>
+    private IMultipleOriginResultSet<TDocument> ObserveMultipleOriginRead<TDocument>(
+        IMultipleOriginResultSet<TDocument> result, string readKind, string ckTypeId, int? take, int? keyCount)
+    {
+        var guard = ReadGuard;
+        if (guard != null && guard.IsCandidate(take, keyCount))
+        {
+            long? returned = 0;
+            foreach (var resultSet in result.Values)
+            {
+                var count = CountItems(resultSet.Items);
+                returned = count == null || returned == null ? null : returned + count;
+            }
+
+            guard.Observe(TenantId, readKind, ckTypeId, take, keyCount, returned);
+        }
+
+        return result;
+    }
+
+    /// <summary>The number of items without enumerating them (a lazy sequence is never run twice), or null.</summary>
+    private static long? CountItems<TDocument>(IEnumerable<TDocument> items) =>
+        items.TryGetNonEnumeratedCount(out var count) ? count : null;
 
     /// <summary>
     ///     The time limiter of a runtime query on <paramref name="ckTypeId" /> (AB#8897), or null when neither the host
@@ -772,9 +820,11 @@ internal class TenantRepository(
         }
 
         // Inbound / Outbound follow a single directed lookup (unchanged behaviour).
+        var associationCkTypeId = targetCkTypeIdList.Count > 0 ? targetCkTypeIdList[0].ToString() : "unknown";
         if (graphDirection != GraphDirections.Any)
         {
-            return await RunAsync(graphDirection);
+            return ObserveMultipleOriginRead(await RunAsync(graphDirection), RuntimeReadKinds.AssociationTargets,
+                associationCkTypeId, take, targetRtIds?.Count);
         }
 
         // Any = Inbound | Outbound. Associations are stored directed (originRtId -> targetRtId), so a
@@ -785,7 +835,8 @@ internal class TenantRepository(
         // is reachable on both ends of the same role.
         var inboundResult = await RunAsync(GraphDirections.Inbound);
         var outboundResult = await RunAsync(GraphDirections.Outbound);
-        return MergeAssociationResultSets(inboundResult, outboundResult);
+        return ObserveMultipleOriginRead(MergeAssociationResultSets(inboundResult, outboundResult),
+            RuntimeReadKinds.AssociationTargets, associationCkTypeId, take, targetRtIds?.Count);
     }
 
     private static IMultipleOriginResultSet<TTargetEntity> MergeAssociationResultSets<TTargetEntity>(
@@ -893,7 +944,8 @@ internal class TenantRepository(
         hierarchicalRtQuery.SetSecurityPreFilter(
             DataSecurityFilterRenderer.Build<TTargetEntity>(await CreateSecurityFilterAsync(session, targetTypeGraph)));
 
-        return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
+        return ObserveMultipleOriginRead(await hierarchicalRtQuery.ExecuteQuery(session, skip, take),
+            RuntimeReadKinds.IndirectAssociationTargets, targetCkTypeId.ToString(), take, rtIds?.Count);
     }
 
     public async Task<IMultipleOriginResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session,
@@ -924,7 +976,8 @@ internal class TenantRepository(
         hierarchicalRtQuery.SetSecurityPreFilter(
             DataSecurityFilterRenderer.Build<RtEntity>(await CreateSecurityFilterAsync(session, targetTypeGraph)));
 
-        return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
+        return ObserveMultipleOriginRead(await hierarchicalRtQuery.ExecuteQuery(session, skip, take),
+            RuntimeReadKinds.IndirectAssociationTargets, targetCkTypeId.ToString(), take, targetRtIds?.Count);
     }
 
     public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session,
@@ -952,11 +1005,13 @@ internal class TenantRepository(
 
         if (!enforce)
         {
-            return await hierarchicalDeepRtGraphQuery.ExecuteQuery(session, skip, take);
+            return ObserveRead(await hierarchicalDeepRtGraphQuery.ExecuteQuery(session, skip, take),
+                RuntimeReadKinds.DeepGraph, originCkTypeId, take, null);
         }
 
         var unpaged = await hierarchicalDeepRtGraphQuery.ExecuteQuery(session);
-        return await PruneDeepGraphAsync(session, securityFilter!, unpaged.Items, skip, take);
+        return ObserveRead(await PruneDeepGraphAsync(session, securityFilter!, unpaged.Items, skip, take),
+            RuntimeReadKinds.DeepGraph, originCkTypeId, take, null);
     }
 
     public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session,
@@ -980,12 +1035,14 @@ internal class TenantRepository(
 
         if (securityFilter is not { HasEnforcement: true })
         {
-            return await directedQuery.ExecuteQuery(session, skip, take);
+            return ObserveRead(await directedQuery.ExecuteQuery(session, skip, take), RuntimeReadKinds.DeepGraph,
+                originCkTypeId, take, null);
         }
 
         // AB#6734: prune first, page afterwards (see the parameterless overload).
         var unpaged = await directedQuery.ExecuteQuery(session);
-        return await PruneDeepGraphAsync(session, securityFilter, unpaged.Items, skip, take);
+        return ObserveRead(await PruneDeepGraphAsync(session, securityFilter, unpaged.Items, skip, take),
+            RuntimeReadKinds.DeepGraph, originCkTypeId, take, null);
     }
 
     /// <summary>
@@ -1090,7 +1147,8 @@ internal class TenantRepository(
         int? take = null)
     {
         var query = await CreateRtEntitiesByTypeQueryAsync<TEntity>(session, ckTypeId, queryOptions);
-        return await query.ExecuteQuery(session, skip, take);
+        return ObserveRead(await query.ExecuteQuery(session, skip, take), RuntimeReadKinds.ByType, ckTypeId, take,
+            null);
     }
 
     /// <inheritdoc />
@@ -1101,7 +1159,8 @@ internal class TenantRepository(
         ArgumentNullException.ThrowIfNull(queryOptions);
 
         var query = await CreateRtEntitiesByTypeQueryAsync<RtEntity>(session, ckTypeId, queryOptions);
-        return await query.ExecuteQuery(session, skip, take, includeTotalCount);
+        return ObserveRead(await query.ExecuteQuery(session, skip, take, includeTotalCount), RuntimeReadKinds.ByType,
+            ckTypeId, take, null);
     }
 
     /// <inheritdoc />
@@ -1203,7 +1262,8 @@ internal class TenantRepository(
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
         query.TimeLimiter = CreateRuntimeQueryTimeLimiter(ckTypeId.ToString());
 
-        return await query.ExecuteQuery(session, skip, take);
+        return ObserveRead(await query.ExecuteQuery(session, skip, take), RuntimeReadKinds.ById, ckTypeId, take,
+            rtIds.Count);
     }
 
     /// <inheritdoc />
@@ -1297,10 +1357,12 @@ internal class TenantRepository(
                 .Take(take ?? int.MaxValue)
                 .ToList();
 
-            return await query.ExecuteEnrichmentForIds(session, pageIds, cached.Value.TotalCount);
+            return ObserveRead(await query.ExecuteEnrichmentForIds(session, pageIds, cached.Value.TotalCount),
+                RuntimeReadKinds.GraphByType, ckTypeId, take, null);
         }
 
-        return await query.ExecuteQuery(session, skip, take, includeTotalCount);
+        return ObserveRead(await query.ExecuteQuery(session, skip, take, includeTotalCount),
+            RuntimeReadKinds.GraphByType, ckTypeId, take, null);
     }
 
     public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByIdAsync(IOctoSession session,
@@ -1332,7 +1394,8 @@ internal class TenantRepository(
         query.AddNavigationProperties(roleIdDirectionPairs);
         query.TimeLimiter = CreateRuntimeQueryTimeLimiter(ckTypeId.ToString());
 
-        return await query.ExecuteQuery(session, skip, take);
+        return ObserveRead(await query.ExecuteQuery(session, skip, take), RuntimeReadKinds.GraphById, ckTypeId, take,
+            rtIds.Count);
     }
 
     #endregion Data query

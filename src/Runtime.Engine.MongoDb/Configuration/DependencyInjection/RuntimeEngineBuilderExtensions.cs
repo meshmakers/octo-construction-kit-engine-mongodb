@@ -352,4 +352,31 @@ public static class RuntimeEngineBuilderExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// Makes unbounded runtime-entity reads of this host visible (AB#9824): every read by type, by id (above the
+    /// limit), by type with navigation, of association targets and of deep graphs without <c>take</c> or with a
+    /// <c>take</c> above <see cref="RuntimeReadGuardOptions.MaxTake" /> (default 1000, <c>int.MaxValue</c> included)
+    /// logs one warning (event id 41001, <c>RuntimeReadGuard.UnboundedRead</c>) per pipeline execution and node and
+    /// counts <c>octo.engine.runtime_read.unbounded</c>. The caller comes from
+    /// <see cref="Meshmakers.Octo.Runtime.Contracts.Repositories.RuntimeReadScope" />; reads outside a pipeline are
+    /// reported with caller <c>unknown</c>, at most once per tenant, CK type and hour. The guard never caps, refuses
+    /// or changes a read.
+    /// </summary>
+    /// <remarks>
+    /// Opt-in per host; the mesh adapter calls it for its pipeline nodes. The asset repository does not: its GraphQL
+    /// API has its own runtime query guard, so a read is never counted twice. Bind the options from your
+    /// configuration, e.g. the <c>RuntimeReadGuard</c> section (<see cref="RuntimeReadGuardOptions.SectionName" />:
+    /// <c>Mode</c> <c>Off</c> | <c>Warn</c>, <c>MaxTake</c>); unbound they keep the defaults (<c>Warn</c>, 1000).
+    /// The counter is exported on the meter of <c>AddObservability()</c>.
+    /// </remarks>
+    public static IRuntimeEngineBuilder AddRuntimeReadGuard(this IRuntimeEngineBuilder builder)
+    {
+        builder.Services.AddOptions<RuntimeReadGuardOptions>();
+        builder.Services.AddMetrics();
+        builder.Services.TryAddSingleton<RuntimeReadGuardMetrics>();
+        builder.Services.TryAddSingleton<RuntimeReadGuard>();
+
+        return builder;
+    }
 }
