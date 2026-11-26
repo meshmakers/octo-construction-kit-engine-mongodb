@@ -3,6 +3,7 @@ using FluentAssertions;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.RangeRetention;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
@@ -68,8 +69,13 @@ public class BlueprintCkDependencyRangeIntegrationTests(BlueprintServiceFixture 
             var result = await fixture.GetBlueprintService().ApplyBlueprintAsync(tenantId, CkRangeBp, force: true, ct);
 
             result.IsSuccess.Should().BeFalse();
+            // The install path also reports the blueprint draft validator's warnings for the same model (161, 163:
+            // the test models are in no catalog); only one error names the refused model.
             var message = result.OperationResult.Messages.Should()
-                .ContainSingle(m => m.MessageText.Contains(offender)).Which.MessageText;
+                .ContainSingle(m => m.MessageLevel == MessageLevel.Error && m.MessageText.Contains(offender))
+                .Which.MessageText;
+            result.OperationResult.Messages.Where(m => m.MessageLevel != MessageLevel.Error)
+                .Should().OnlyContain(m => m.MessageNumber == 161 || m.MessageNumber == 163);
             message.Should().Contain(expectedRange).And.Contain(expectedInstalled).And.Contain("nothing was installed");
 
             var versions = await fixture.GetRuntimeRepositoryProvider().GetSchemaVersionsAsync(tenantId, ct);
