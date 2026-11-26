@@ -29,6 +29,9 @@ internal sealed class RuntimeReadGuard
 
     private const string Unknown = "unknown";
 
+    private const string ReportedOnceHint = "Reported once per execution and node; the read was not changed. Give " +
+                                            "the node a take (and page) or a filter that bounds it.";
+
     private readonly Func<RuntimeReadGuardOptions> _options;
     private readonly RuntimeReadGuardMetrics _metrics;
     private readonly ILogger _logger;
@@ -175,16 +178,31 @@ internal sealed class RuntimeReadGuard
             }
 
             var execution = caller?.Execution;
-            _logger.LogWarning(RuntimeReadGuardEvents.UnboundedRead,
-                "Unbounded runtime-entity read ({ReadKind}) on CK type {CkTypeId} in tenant {TenantId}: take {Take}, " +
-                "{ReturnedCount} entities returned, limit {MaxTake}; node {NodeType} at {NodePath}, pipeline " +
-                "{PipelineId} ({PipelineName}), data flow {DataFlowId}, execution {ExecutionId}. Reported once per " +
-                "execution and node; the read was not changed. Give the node a take (and page) or a filter that " +
-                "bounds it.",
-                readKind, ckTypeId, tenantId, FormatTake(take), (object?)returnedCount ?? Unknown, maxTake,
-                caller?.NodeType ?? Unknown, caller?.NodePath ?? Unknown,
-                execution?.PipelineId ?? Unknown, execution?.PipelineName ?? Unknown,
-                execution?.DataFlowId ?? Unknown, execution?.ExecutionId ?? Unknown);
+            if (execution?.PipelineName is { } pipelineName)
+            {
+                _logger.LogWarning(RuntimeReadGuardEvents.UnboundedRead,
+                    "Unbounded runtime-entity read ({ReadKind}) on CK type {CkTypeId} in tenant {TenantId}: take " +
+                    "{Take}, {ReturnedCount} entities returned, limit {MaxTake}; node {NodeType} at {NodePath}, " +
+                    "pipeline {PipelineId} ({PipelineName}), data flow {DataFlowId}, execution {ExecutionId}. " +
+                    ReportedOnceHint,
+                    readKind, ckTypeId, tenantId, FormatTake(take), (object?)returnedCount ?? Unknown, maxTake,
+                    caller?.NodeType ?? Unknown, caller?.NodePath ?? Unknown,
+                    execution.PipelineId ?? Unknown, pipelineName,
+                    execution.DataFlowId ?? Unknown, execution.ExecutionId ?? Unknown);
+            }
+            else
+            {
+                // The pipeline name is optional (the mesh adapter's pipeline contract carries only the ids), so the
+                // message and the structured properties leave it out instead of logging a placeholder.
+                _logger.LogWarning(RuntimeReadGuardEvents.UnboundedRead,
+                    "Unbounded runtime-entity read ({ReadKind}) on CK type {CkTypeId} in tenant {TenantId}: take " +
+                    "{Take}, {ReturnedCount} entities returned, limit {MaxTake}; node {NodeType} at {NodePath}, " +
+                    "pipeline {PipelineId}, data flow {DataFlowId}, execution {ExecutionId}. " + ReportedOnceHint,
+                    readKind, ckTypeId, tenantId, FormatTake(take), (object?)returnedCount ?? Unknown, maxTake,
+                    caller?.NodeType ?? Unknown, caller?.NodePath ?? Unknown,
+                    execution?.PipelineId ?? Unknown,
+                    execution?.DataFlowId ?? Unknown, execution?.ExecutionId ?? Unknown);
+            }
 
             _metrics.RecordUnbounded(tenantId, ckTypeId, caller?.NodeType, "warn");
         }

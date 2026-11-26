@@ -60,7 +60,8 @@ the guard off silently. The mesh adapter chart sets the section from `runtimeRea
 - Log: warning, event id 41001 (`RuntimeReadGuard.UnboundedRead`), message starting with
   `Unbounded runtime-entity read`, with the structured fields `ReadKind`, `CkTypeId`, `TenantId`, `Take` (`null`,
   the number or `int.MaxValue`), `ReturnedCount` (`unknown` when the result cannot be counted without enumerating it),
-  `MaxTake`, `NodeType`, `NodePath`, `PipelineId`, `PipelineName`, `DataFlowId`, `ExecutionId`.
+  `MaxTake`, `NodeType`, `NodePath`, `PipelineId`, `PipelineName` (only when the host knows it; the mesh adapter
+  passes only the ids), `DataFlowId`, `ExecutionId`.
 - Metric: counter `octo.engine.runtime_read.unbounded` (Prometheus `octo_engine_runtime_read_unbounded_total`) on the
   meter `Meshmakers.Octo.MongoDb`, labels `tenant`, `ck_type`, `node_type` (`unknown` outside a node) and `mode`. It is
   observable: a new series is exported as 0 at the first collection after its first hit and with its value from the

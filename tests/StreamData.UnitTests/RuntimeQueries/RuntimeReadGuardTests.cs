@@ -73,8 +73,26 @@ public sealed class RuntimeReadGuardTests : IDisposable
         Assert.Equal(Tenant, warning.State["TenantId"]);
         Assert.Equal("null", warning.State["Take"]);
         Assert.Equal(1234L, warning.State["ReturnedCount"]);
+        // No pipeline name known: neither a property nor a placeholder.
+        Assert.False(warning.State.ContainsKey("PipelineName"));
 
         Assert.Equal(1, CollectCount(Tenant, CkType, "GetRtEntitiesByType@1"));
+    }
+
+    [Fact]
+    public void Observe_WithPipelineName_LogsTheName()
+    {
+        using var execution = RuntimeReadScope.BeginExecution(
+            new RuntimeReadExecution(Tenant, "pipeline-1", "Import meters", "flow-1", "exec-1"));
+        using (RuntimeReadScope.BeginNode("GetRtEntitiesByType@1", "PipelineExecution/GetRtEntitiesByType@1"))
+        {
+            _guard.Observe(Tenant, "ByType", CkType, null, null, 7);
+        }
+
+        var warning = Assert.Single(_logger.Warnings);
+        Assert.Equal("Import meters", warning.State["PipelineName"]);
+        Assert.Equal("pipeline-1", warning.State["PipelineId"]);
+        Assert.Equal("flow-1", warning.State["DataFlowId"]);
     }
 
     [Fact]
@@ -219,6 +237,27 @@ public sealed class RuntimeReadGuardTests : IDisposable
         _guard.Observe(Tenant, "ByType", CkType, null, null, 5);
 
         Assert.Empty(_logger.Warnings);
+    }
+
+    [Fact]
+    public void Observe_SuppressedInternalReadInsideNode_DoesNotHideTheNodesOwnRead()
+    {
+        // The engine's data-policy table load runs suppressed inside the node (DataPermissionResolver); the node's
+        // own unbounded read afterwards is the one reported, with its own CK type.
+        using var execution = RuntimeReadScope.BeginExecution(new RuntimeReadExecution(Tenant, "p", null, "f", "e"));
+        using var node = RuntimeReadScope.BeginNode("GetRtEntitiesByType@1", "PipelineExecution/GetRtEntitiesByType@1");
+        using (RuntimeReadScope.Suppress())
+        {
+            _guard.Observe(Tenant, "ByType", "System.Identity/DataPolicy", null, null, 3);
+        }
+
+        _guard.Observe(Tenant, "ByType", CkType, null, null, 5);
+
+        var warning = Assert.Single(_logger.Warnings);
+        Assert.Equal(CkType, warning.State["CkTypeId"]);
+        Assert.Equal("GetRtEntitiesByType@1", warning.State["NodeType"]);
+        Assert.Equal(1, CollectCount(Tenant, CkType, "GetRtEntitiesByType@1"));
+        Assert.Equal(0, CollectCount(Tenant, "System.Identity/DataPolicy", "GetRtEntitiesByType@1"));
     }
 
     [Fact]
