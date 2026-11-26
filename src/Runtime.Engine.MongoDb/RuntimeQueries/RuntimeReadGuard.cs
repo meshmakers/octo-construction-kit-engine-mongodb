@@ -122,7 +122,7 @@ internal sealed class RuntimeReadGuard
     /// <param name="maxTake">The limit.</param>
     internal static bool IsUnbounded(int? take, int? keyCount, int maxTake)
     {
-        if (take is >= 0 && take.Value <= maxTake)
+        if (take is >= 0 and < int.MaxValue && take.Value <= maxTake)
         {
             return false;
         }

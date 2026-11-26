@@ -49,6 +49,14 @@ public sealed class RuntimeReadGuardTests : IDisposable
     }
 
     [Fact]
+    public void IsUnbounded_TakeIntMaxValue_StaysUnbounded_EvenWithMaxTakeIntMaxValue()
+    {
+        // AC1: int.MaxValue is "take on paper only"; raising MaxTake to int.MaxValue must not hide such a read.
+        Assert.True(RuntimeReadGuard.IsUnbounded(int.MaxValue, null, int.MaxValue));
+        Assert.False(RuntimeReadGuard.IsUnbounded(int.MaxValue - 1, null, int.MaxValue));
+    }
+
+    [Fact]
     public void Observe_InsideNode_WarnsOncePerExecutionAndNode_AndCountsOnce()
     {
         using var execution = RuntimeReadScope.BeginExecution(

@@ -14,7 +14,9 @@
   CK type and hour. `RuntimeReadGuard:Mode` is `Off` or `Warn` (default); an invalid value is logged once (event 41002)
   and the guard runs as `Warn`. Reads, results, paging and errors are unchanged in every mode.
   `ISystemContext.InvalidateTenantResolveImportGuards` (lease end on a pooled adapter, tenant update/delete) also drops
-  the guard's unknown-caller throttle of the tenant, its only tenant-keyed state. Docs:
+  the guard's unknown-caller throttle of the tenant, its only tenant-keyed state. A `take` of `int.MaxValue` is
+  always unbounded, whatever `MaxTake` is. The tenant context's own registry and configuration lookups run suppressed
+  (`RuntimeReadScope.Suppress()`), so a cross-tenant node is reported for its own read. Docs:
   `docs/runtime-read-guard.md`.
 
 - AB#9750 Fix: the count-only form of a nested association query (`GetRtAssociationTargetsAsync` with `take: 0`, the

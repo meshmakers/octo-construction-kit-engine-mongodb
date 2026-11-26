@@ -3915,9 +3915,24 @@ public class TenantContext : ITenantContext
         var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
+        var resultSet = await ReadRegistryAsync(() =>
+            tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions));
         return FirstAndWarnOnDuplicates(resultSet, $"tenant id '{tenantId.NormalizeString()}'",
             $"the registry of tenant '{TenantId}'");
+    }
+
+    /// <summary>
+    ///     Runs an engine-internal registry or configuration lookup (filtered by an id, no take) outside the runtime
+    ///     read guard's attribution: such a lookup runs inside a node when a node reads another tenant, and must not
+    ///     be reported as that node's unbounded read nor use up its one report per execution (AB#9824). Only these
+    ///     lookups are suppressed, never a node's own read.
+    /// </summary>
+    private static async Task<TResult> ReadRegistryAsync<TResult>(Func<Task<TResult>> lookup)
+    {
+        using (RuntimeReadScope.Suppress())
+        {
+            return await lookup().ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -3941,7 +3956,8 @@ public class TenantContext : ITenantContext
         var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
-        var resultSet = await systemTenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
+        var resultSet = await ReadRegistryAsync(() =>
+            systemTenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions));
         return FirstAndWarnOnDuplicates(resultSet, $"tenant id '{tenantId.NormalizeString()}'",
             "the system tenant registry");
     }
@@ -3958,7 +3974,8 @@ public class TenantContext : ITenantContext
         var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenant.DatabaseName), FieldFilterOperator.Equals, normalizedDatabaseName);
 
-        var resultSet = await systemTenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
+        var resultSet = await ReadRegistryAsync(() =>
+            systemTenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions));
         return FirstAndWarnOnDuplicates(resultSet, $"database name '{normalizedDatabaseName}'",
             "the system tenant registry");
     }
@@ -4006,8 +4023,8 @@ public class TenantContext : ITenantContext
         var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenantConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
-        var resultSet =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(systemSession, queryOptions);
+        var resultSet = await ReadRegistryAsync(() =>
+            tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(systemSession, queryOptions));
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null || configuration.ConfigurationValue == null)
         {

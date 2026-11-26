@@ -52,8 +52,11 @@ Section `RuntimeReadGuard` of the host:
 
 There is no mode that caps or refuses. A `Mode` that names neither value (for example `Enforce`), or a section that
 cannot be bound, is logged once per value as a warning (event 41002, `RuntimeReadGuard.InvalidConfiguration`, naming
-the invalid and the valid values) and the guard runs as `Warn` with the default limit - a misconfiguration never turns
-the guard off silently. The mesh adapter chart sets the section from `runtimeReadGuard.mode` / `runtimeReadGuard.maxTake`.
+the invalid and the valid values) and the guard runs as `Warn` - with the configured `MaxTake` for an invalid `Mode`,
+with the default limit for a section that cannot be bound; a misconfiguration never turns the guard off silently. A
+`take` of `int.MaxValue` always counts as unbounded, whatever `MaxTake` is. Engine-internal lookups (the tenant
+registry and tenant configuration lookups of the tenant context, the data-policy table load) run suppressed and are
+never attributed to a node. The mesh adapter chart sets the section from `runtimeReadGuard.mode` / `runtimeReadGuard.maxTake`.
 
 ## Warning and metric
 
