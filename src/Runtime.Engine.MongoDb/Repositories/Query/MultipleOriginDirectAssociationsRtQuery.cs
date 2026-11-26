@@ -318,7 +318,72 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
     private async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteCountOnlyAsync(IOctoSession session)
     {
-        var (_, _, connectToFieldName) = GetDirectionFieldNames();
+        var (_, innerLocalFieldCkIdName, connectToFieldName) = GetDirectionFieldNames();
+
+        // Dense origins (AB#4369): without a security, id, field or geospatial filter on the targets, an origin
+        // with more than EdgeThreshold edges is answered by the capped, index-only edge count - the same total the
+        // sorted item path reports for it - instead of one target probe per edge (650k random reads for the
+        // execution origin of AB#4369). The edge count includes edges whose target is archived or missing; that
+        // approximation is the documented one of dense origins. With a target filter every origin is counted
+        // exactly by the pipeline below.
+        var countOrigins = _rtIds.ToList();
+        var denseResults = new List<QueryMultipleResult<TTargetEntity>>();
+        if (_geospatialFilters.Count == 0 && RenderTargetFieldFilter() == null)
+        {
+            var allTargetCkIds = GetAllTargetCkIds();
+            var denseOrigins = new List<(OctoObjectId OriginRtId, long EdgeCount)>();
+            foreach (var originId in _rtIds)
+            {
+                var edgeCountFilter = BuildEdgeCountFilter(originId, connectToFieldName, innerLocalFieldCkIdName,
+                    allTargetCkIds);
+                var cappedCount = await _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations
+                    .GetTotalCountAsync(session, edgeCountFilter, ReverseNavigationOptions.EdgeThreshold + 1);
+                if (cappedCount > ReverseNavigationOptions.EdgeThreshold)
+                {
+                    var edgeCount = await _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations
+                        .GetTotalCountAsync(session, edgeCountFilter);
+                    denseOrigins.Add((originId, edgeCount));
+                }
+            }
+
+            if (denseOrigins.Count > 0)
+            {
+                var originCkTypeIds = await LoadOriginCkTypeIdsAsync(session,
+                    denseOrigins.Select(d => d.OriginRtId).ToList());
+                foreach (var (originId, edgeCount) in denseOrigins)
+                {
+                    countOrigins.Remove(originId);
+                    if (originCkTypeIds.TryGetValue(originId, out var originEntityCkTypeId))
+                    {
+                        denseResults.Add(new QueryMultipleResult<TTargetEntity>
+                        {
+                            Id = new RtEntityId(originEntityCkTypeId, originId),
+                            TotalCount = edgeCount,
+                            Targets = []
+                        });
+                    }
+                }
+            }
+        }
+
+        var result = countOrigins.Count > 0
+            ? await ExecuteCountOnlyPipelineAsync(session, countOrigins, connectToFieldName)
+            : new List<QueryMultipleResult<TTargetEntity>>();
+        result.AddRange(denseResults);
+
+        foreach (var multipleResult in result)
+        {
+            var aggregations = FinalizeResults(multipleResult.Targets);
+            multipleResult.AggregationResult = aggregations.Item1;
+            multipleResult.FieldAggregationResults = aggregations.Item2;
+        }
+
+        return new MultipleOriginResultSet<TTargetEntity>(result);
+    }
+
+    private async Task<List<QueryMultipleResult<TTargetEntity>>> ExecuteCountOnlyPipelineAsync(
+        IOctoSession session, IReadOnlyList<OctoObjectId> originRtIds, string connectToFieldName)
+    {
         var stages = CreateCountOnlyAssociationStages();
         CountOnlyPipelineObserver?.Invoke(stages);
 
@@ -333,9 +398,9 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             typedStages, BsonDocumentSerializer.Instance);
 
         // An origin without a matching edge gets an empty array (no $count document): total 0.
-        var result = await _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)
+        return await _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)
             .Aggregate(session)
-            .Match(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds))
+            .Match(Builders<RtEntity>.Filter.In(x => x.RtId, originRtIds))
             .Lookup(
                 _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.GetMongoCollection(),
                 (FieldDefinition<RtEntity, string[]>)"_id",
@@ -345,15 +410,6 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             .ReplaceWith((AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)
                 "{ _id: { 'rtId': '$_id', 'ckTypeId': '$ckTypeId' }, totalCount: { $ifNull: [ { $arrayElemAt: [ '$_associations._assocCount', 0 ] }, 0 ] }, 'targets': [] }")
             .ToListAsync();
-
-        foreach (var multipleResult in result)
-        {
-            var aggregations = FinalizeResults(multipleResult.Targets);
-            multipleResult.AggregationResult = aggregations.Item1;
-            multipleResult.FieldAggregationResults = aggregations.Item2;
-        }
-
-        return new MultipleOriginResultSet<TTargetEntity>(result);
     }
 
     private async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteQueryCore(IOctoSession session, int? skip,

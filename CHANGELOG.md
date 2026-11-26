@@ -13,11 +13,16 @@
   filters). Skip and sort do not change it and are ignored. Behaviour change of `take: 0` with a sort order: before, it
   took the sorted paths and reported their total - without a field filter the number of non-archived edges, including
   edges whose target is archived or missing (also the edge count of a dense origin, AB#4369); now it reports the exact
-  count, which can be lower. A sorted page (`take` above 0) still reports the edge count. Every other paging (`take` null
-  or above 0) is unchanged. Code: `MultipleOriginDirectAssociationsRtQuery`
+  count, which can be lower. A sorted page (`take` above 0) without a field filter still reports the edge count.
+  Dense origins (AB#4369): without a security, id, field or geospatial filter on the targets, an origin with more than
+  `ReverseNavigationOptions.EdgeThreshold` edges is answered by the capped, index-only edge count and runs no target
+  probe, with or without a sort order. Behaviour change: the `totalCount` of a dense origin without a field filter is
+  the edge count and may include archived or missing targets (before, without a sort order it was the exact count);
+  with a field filter it stays exact. Every other paging (`take` null or above 0) is unchanged. Code: `MultipleOriginDirectAssociationsRtQuery`
   (`CreateCountOnlyAssociationStages`), `TenantRepository.CreateRtAssociationTargetsQueryAsync` (internal: the query
   construction of `GetRtAssociationTargetsAsync`, so tests can render the pipeline). Tests:
-  `NestedAssociationCountOnlyTests` (pipeline assertion; parity with the item query for six option shapes, zero, `Any`),
+  `NestedAssociationCountOnlyTests` (pipeline assertion; parity with the item query for six option shapes, zero, `Any`;
+  archived targets; dense origins with and without a field filter; a batch of dense and sparse origins),
   `NestedAssociationCountOnlyLargeAttributeTests` (twenty targets of 1 MB each). CK compatibility: no CK model, API or
   contract change.
 - AB#9702 Test: the regression test of the escaped element pattern

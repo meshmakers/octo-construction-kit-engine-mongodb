@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 using MongoDB.Bson;
 
@@ -25,6 +26,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Q
 public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
 {
     private static readonly OctoObjectId SalzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+    private static readonly OctoObjectId TirolRtId = OctoObjectId.Parse("68fded922b85e5d74c05a560");
 
     public static TheoryData<string> OptionShapes =>
         ["Plain", "Sorted", "FieldFilter", "SortedAndFieldFilter", "IncludeArchived", "IdFilter"];
@@ -164,6 +166,127 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
         Assert.Empty(countOnly.Single().Value.Items);
     }
 
+    [Fact]
+    public async Task CountOnly_ExcludesArchivedTargets_AndIncludesThemWhenAsked()
+    {
+        // Tirol has four district edges; two of the districts are archived.
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        var countOnly = await DistrictsOfTirolAsync(repository, session, RtEntityQueryOptions.Create(), 0);
+        var unpagedGlobal = await DistrictsOfTirolAsync(repository, session, RtEntityQueryOptions.Create().Global(true),
+            null);
+        var countOnlyGlobal = await DistrictsOfTirolAsync(repository, session, RtEntityQueryOptions.Create().Global(true),
+            0);
+
+        await session.CommitTransactionAsync();
+
+        Assert.Equal(2, countOnly.TotalCount);
+        Assert.Equal(4, unpagedGlobal.TotalCount);
+        Assert.Equal(4, countOnlyGlobal.TotalCount);
+        Assert.Empty(countOnly.Items);
+        Assert.Empty(countOnlyGlobal.Items);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CountOnly_OfADenseOriginWithoutTargetFilter_IsTheIndexEdgeCount_WithoutTargetProbes(bool sorted)
+    {
+        // A dense origin (more edges than the threshold) without a target filter is counted on the edge index
+        // alone (AB#4369): no per-edge target probe runs, and the count is the number of edges - for Tirol four,
+        // although two of its districts are archived.
+        var repository = (TenantRepository)fixture.GetSystemContext().GetTenantRepository();
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        ReverseNavigationOptions.EdgeThreshold = 3;
+        try
+        {
+            var observed = new List<IReadOnlyList<BsonDocument>>();
+            var query = await repository.CreateRtAssociationTargetsQueryAsync<RtEntity>(session, [TirolRtId],
+                TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, GraphDirections.Inbound,
+                null, [TestCkIds.RtCkDistrictTypeId], sorted ? Options("Sorted") : Options("Plain"));
+            query.CountOnlyPipelineObserver = observed.Add;
+
+            var result = await query.ExecuteQuery(session, null, 0);
+
+            await session.CommitTransactionAsync();
+
+            Assert.Empty(observed);
+            var tirol = Assert.Single(result);
+            Assert.Equal(TirolRtId, tirol.Key.RtId);
+            Assert.Equal(4, tirol.Value.TotalCount);
+            Assert.Empty(tirol.Value.Items);
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
+    }
+
+    [Fact]
+    public async Task CountOnly_OfADenseOriginWithAFieldFilter_StaysExact()
+    {
+        var repository = (TenantRepository)fixture.GetSystemContext().GetTenantRepository();
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        ReverseNavigationOptions.EdgeThreshold = 0;
+        try
+        {
+            var observed = new List<IReadOnlyList<BsonDocument>>();
+            var query = await repository.CreateRtAssociationTargetsQueryAsync<RtEntity>(session, [TirolRtId],
+                TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, GraphDirections.Inbound,
+                null, [TestCkIds.RtCkDistrictTypeId],
+                RtEntityQueryOptions.Create().FieldFilter("Name", FieldFilterOperator.NotEquals, "no-such-district"));
+            query.CountOnlyPipelineObserver = observed.Add;
+
+            var result = await query.ExecuteQuery(session, null, 0);
+
+            await session.CommitTransactionAsync();
+
+            Assert.Single(observed);
+            Assert.Equal(2, Assert.Single(result).Value.TotalCount);
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
+    }
+
+    [Fact]
+    public async Task CountOnly_OfABatchOfDenseAndSparseOrigins_AnswersBoth()
+    {
+        // Salzburg has six district edges (dense at threshold 5, edge count), Tirol four (sparse, exact count 2).
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        ReverseNavigationOptions.EdgeThreshold = 5;
+        try
+        {
+            var result = await repository.GetRtAssociationTargetsAsync(session, [SalzburgRtId, TirolRtId],
+                TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, TestCkIds.RtCkDistrictTypeId,
+                GraphDirections.Inbound, null, RtEntityQueryOptions.Create(), null, 0);
+
+            await session.CommitTransactionAsync();
+
+            Assert.Equal(2, result.Count);
+            Assert.Equal(6, result.Single(r => r.Key.RtId == SalzburgRtId).Value.TotalCount);
+            Assert.Equal(2, result.Single(r => r.Key.RtId == TirolRtId).Value.TotalCount);
+            Assert.All(result, r => Assert.Empty(r.Value.Items));
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
+    }
+
     /// <summary>
     ///     The sub-pipeline over the association collection of the count-only path: a <c>$match</c> on the edges, one
     ///     index-backed target lookup per collection (<c>localField</c> → <c>_id</c>) whose own pipeline only filters
@@ -212,6 +335,16 @@ public class NestedAssociationCountOnlyTests(SampleRtModelDataFixture fixture)
         var result = await repository.GetRtAssociationTargetsAsync(session, [SalzburgRtId],
             TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, TestCkIds.RtCkDistrictTypeId,
             GraphDirections.Inbound, targetRtIds, options, skip, take);
+        return result.Single().Value;
+    }
+
+    private static async Task<IResultSet<RtEntity>> DistrictsOfTirolAsync(
+        Contracts.MongoDb.Repositories.ITenantRepository repository, IOctoSession session,
+        RtEntityQueryOptions options, int? take)
+    {
+        var result = await repository.GetRtAssociationTargetsAsync(session, [TirolRtId],
+            TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, TestCkIds.RtCkDistrictTypeId,
+            GraphDirections.Inbound, null, options, null, take);
         return result.Single().Value;
     }
 }

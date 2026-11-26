@@ -321,11 +321,18 @@ document (`CreateCountOnlyAssociationStages`):
 - `$unwind` and `$count` close the sub-pipeline, so each origin receives one count document instead of an array of
   targets or ids; an origin without a matching edge counts 0. A large association therefore cannot reach the 16 MB
   document limit or the memory limit of a pipeline stage through this path.
-- No sort, no paging, no `$setWindowFields` and no dense-origin path: a total does not depend on them. The count equals
-  the `totalCount` of the unpaged item query with the same options (one per edge whose target exists and passes the
-  filters). A sorted page without a field filter reports the number of non-archived edges instead, which also counts
-  edges whose target is archived or missing, so it can be higher than the count.
+- No sort, no paging and no `$setWindowFields`: a total does not depend on them. The count equals the `totalCount` of
+  the unpaged item query with the same options (one per edge whose target exists and passes the filters). A sorted page
+  (`take` above 0) without a field filter reports the number of non-archived edges instead, which also counts edges
+  whose target is archived or missing, so it can be higher than the count.
+- **Dense origins** (AB#4369): when the targets carry no security, id, field or geospatial filter, each origin is first
+  counted on the edge index, capped at `ReverseNavigationOptions.EdgeThreshold` + 1. An origin above the threshold is
+  answered with its edge count (role and target types, on the index alone, like the dense path of a sorted page) and
+  gets no target probe; only the other origins run the sub-pipeline above. So the `totalCount` of a dense origin without
+  a field filter is the edge count and may include archived or missing targets; with a field filter (or a security or
+  id filter) it stays exact. This holds with and without a sort order.
 
 Every other `take` keeps the item pipelines (edge-driven, optimized sorted and dense-origin paths). Tests:
-`NestedAssociationCountOnlyTests` (stage assertion, parity with the item query), `NestedAssociationCountOnlyLargeAttributeTests`
+`NestedAssociationCountOnlyTests` (stage assertion, parity with the item query, archived targets, dense origins with and
+without a field filter, a batch of dense and sparse origins), `NestedAssociationCountOnlyLargeAttributeTests`
 (targets that together exceed the document limit).
