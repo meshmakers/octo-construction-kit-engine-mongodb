@@ -12,7 +12,9 @@
   `int.MaxValue` included). The caller (pipeline, data flow, node type and path) comes from `RuntimeReadScope`
   (octo-construction-kit-engine); reads outside a pipeline are reported with caller `unknown`, at most once per tenant,
   CK type and hour. `RuntimeReadGuard:Mode` is `Off` or `Warn` (default); an invalid value is logged once (event 41002)
-  and the guard runs as `Warn`. Reads, results, paging and errors are unchanged in every mode. Docs:
+  and the guard runs as `Warn`. Reads, results, paging and errors are unchanged in every mode.
+  `ISystemContext.InvalidateTenantResolveImportGuards` (lease end on a pooled adapter, tenant update/delete) also drops
+  the guard's unknown-caller throttle of the tenant, its only tenant-keyed state. Docs:
   `docs/runtime-read-guard.md`.
 
 - AB#9750 Fix: the count-only form of a nested association query (`GetRtAssociationTargetsAsync` with `take: 0`, the

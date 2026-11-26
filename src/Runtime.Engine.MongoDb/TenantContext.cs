@@ -2658,6 +2658,9 @@ public class TenantContext : ITenantContext
         ClearTenantResolveImportGuards(tenantId);
         // AB#8796: the next resolve re-checks the marker; a detached or deleted tenant stops degrading health.
         _serviceProvider.GetRequiredService<TenantOwnershipConflictTracker>().Clear(tenantId.NormalizeString());
+        // AB#9824: the runtime read guard's unknown-caller throttle is keyed by tenant; a pooled adapter drops it with
+        // the lease, so no tenant state of the guard outlives the lease (null when the host did not opt in).
+        _serviceProvider.GetService<RuntimeReadGuard>()?.ForgetTenant(tenantId);
     }
 
     /// <inheritdoc cref="ISystemContext.InvalidateTenantRepositoryClientsAsync" />

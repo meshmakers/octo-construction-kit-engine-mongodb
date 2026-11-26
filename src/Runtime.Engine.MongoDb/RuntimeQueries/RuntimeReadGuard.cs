@@ -234,6 +234,29 @@ internal sealed class RuntimeReadGuard
         }
     }
 
+    /// <summary>
+    ///     Forgets the unknown-caller throttle of a tenant, the guard's only tenant-keyed state, so nothing of the
+    ///     tenant outlives its lease on a pooled adapter or its deletion (AB#9824). Called by
+    ///     <c>ISystemContext.InvalidateTenantResolveImportGuards</c>. The next read of the tenant without execution is
+    ///     reported again. The counter series of <see cref="RuntimeReadGuardMetrics" /> are kept: they carry the tenant
+    ///     only as a label and are cumulative by design. Never throws.
+    /// </summary>
+    internal void ForgetTenant(string tenantId)
+    {
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            return;
+        }
+
+        foreach (var key in _unknownCallerReported.Keys)
+        {
+            if (string.Equals(key.Tenant, tenantId, StringComparison.OrdinalIgnoreCase))
+            {
+                _unknownCallerReported.TryRemove(key, out _);
+            }
+        }
+    }
+
     private void PruneUnknownCallers(DateTimeOffset now)
     {
         foreach (var (key, last) in _unknownCallerReported)

@@ -180,7 +180,9 @@ public interface ISystemContext : ITenantContext
     /// <remarks>
     /// Call this from the Pre-update / Pre-delete tenant lifecycle events. A delete+recreate of a tenant
     /// within one process lifetime would otherwise skip the guarded auto-import and leave the fresh tenant
-    /// without those models (AB#4294 regression). Safe no-op when the tenant has no guard entries.
+    /// without those models (AB#4294 regression). Safe no-op when the tenant has no guard entries. A pooled adapter
+    /// calls it when a lease ends; it also drops the tenant's recorded ownership conflict and the runtime read
+    /// guard's unknown-caller throttle of the tenant (AB#9824).
     /// </remarks>
     /// <param name="tenantId">The tenant whose resolve-import guards should be cleared.</param>
     void InvalidateTenantResolveImportGuards(string tenantId);

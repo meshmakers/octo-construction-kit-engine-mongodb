@@ -29,6 +29,12 @@ per execution and node**, however often the node runs (a `ForEach` over 500 item
 execution (the host's own reads) is reported with caller `unknown`, at most once per tenant, CK type and hour. Reads
 inside `RuntimeReadScope.Suppress()` are deliberate batch work and not reported.
 
+**Tenant state and leases.** The per-execution marks live on the execution scope, not on the guard. The guard's only
+tenant-keyed state is the hourly throttle of the `unknown` caller; `ISystemContext.InvalidateTenantResolveImportGuards`
+drops it for the tenant (`RuntimeReadGuard.ForgetTenant`), which a pooled mesh adapter calls when a lease ends and the
+tenant lifecycle calls before an update or delete. The counter series carry the tenant as a label and are cumulative by
+design: they are kept, so `increase()` stays correct, and a read of one tenant is never counted under another.
+
 ## Opt-in per host, no double count
 
 `AddRuntimeReadGuard()` on the runtime engine builder registers the guard; `TenantContext` hands it to every tenant

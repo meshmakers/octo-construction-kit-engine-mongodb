@@ -242,6 +242,54 @@ public sealed class RuntimeReadGuardTests : IDisposable
         Assert.Equal(3, _logger.Warnings.Count);
     }
 
+    /// <summary>
+    ///     Lease invariant (AB#9824, pooled adapters): the throttle is the guard's only tenant-keyed state; forgetting
+    ///     tenant A drops exactly A's entries, so nothing of A outlives its lease and B is untouched.
+    /// </summary>
+    [Fact]
+    public void ForgetTenant_DropsOnlyThatTenantsThrottle()
+    {
+        const string other = "tenant-b";
+        _guard.Observe(Tenant, "ByType", CkType, null, null, 7);
+        _guard.Observe(other, "ByType", CkType, null, null, 7);
+        Assert.Equal(2, _logger.Warnings.Count);
+
+        _guard.ForgetTenant("TENANT-A");
+
+        _guard.Observe(Tenant, "ByType", CkType, null, null, 7);
+        _guard.Observe(other, "ByType", CkType, null, null, 7);
+        var warnings = _logger.Warnings;
+        Assert.Equal(3, warnings.Count);
+        Assert.Equal(Tenant, warnings[2].State["TenantId"]);
+
+        _guard.ForgetTenant("");
+        _guard.ForgetTenant("unknown-tenant");
+    }
+
+    /// <summary>
+    ///     Lease invariant (AB#9824): counter series are labelled per tenant, so a read of tenant A is never counted
+    ///     as, or visible under, tenant B - also when both read the same CK type in the same node type.
+    /// </summary>
+    [Fact]
+    public void Counter_SeriesOfTwoTenants_AreSeparate_AndNeverAttributedToTheOther()
+    {
+        const string other = "tenant-b";
+        foreach (var (tenant, executionId, reads) in new[] { (Tenant, "e1", 1), (other, "e2", 1), (other, "e3", 1) })
+        {
+            using var execution = RuntimeReadScope.BeginExecution(new RuntimeReadExecution(tenant, "p", null, "f",
+                executionId));
+            using var node = RuntimeReadScope.BeginNode("A@1", "A@1");
+            for (var i = 0; i < reads; i++)
+            {
+                _guard.Observe(tenant, "ByType", CkType, null, null, 5);
+            }
+        }
+
+        Assert.Equal(1, CollectCount(Tenant, CkType, "A@1"));
+        Assert.Equal(2, CollectCount(other, CkType, "A@1"));
+        Assert.All(_logger.Warnings, w => Assert.Contains(w.State["TenantId"], new object?[] { Tenant, other }));
+    }
+
     [Fact]
     public void Counter_NewSeries_IsExportedAsZeroFirst_SoTheFirstHitIsAnIncrease()
     {
