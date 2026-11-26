@@ -37,6 +37,23 @@ internal abstract class OctoSession : IOctoSessionInternal
 
     public RtSecurityContext SecurityContext { get; }
 
+    /// <summary>
+    ///     The source tenant whose copies this session writes as the master-data sync, or <c>null</c> for every other
+    ///     session (see <see cref="Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.SyncOriginWriteRules" />). Set once, only by
+    ///     <see cref="TenantRepository.GetSyncWriterSessionAsync" />.
+    /// </summary>
+    internal string? SyncWriterSourceTenantId { get; private set; }
+
+    internal void MarkAsSyncWriter(string sourceTenantId)
+    {
+        if (SyncWriterSourceTenantId != null)
+        {
+            throw new InvalidOperationException("The session is already a sync-writer session.");
+        }
+
+        SyncWriterSourceTenantId = sourceTenantId;
+    }
+
     public void Dispose()
     {
         if (!_isDisposed)

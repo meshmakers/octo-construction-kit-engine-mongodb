@@ -68,6 +68,16 @@
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
           <Pack>false</Pack>
         </Content>
+        <!-- AB#9756: copies of the energy-community CK models (System 2.8.0 build) and counter seed. -->
+        <Content Include="testData\energyCommunityUpgrade\*.yaml">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+          <Pack>false</Pack>
+        </Content>
+        <!-- AB#9757: copy of the seed example of the octo-documentation page "Number ranges". -->
+        <Content Include="testData\numberRangeDocs\*.yaml">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+          <Pack>false</Pack>
+        </Content>
         <Content Include="TestBlueprints/**/*.yaml">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
           <Pack>false</Pack>

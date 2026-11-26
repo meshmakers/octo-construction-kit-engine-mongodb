@@ -16,8 +16,32 @@ internal static class MongoProfiler
     ///     Runs <paramref name="run" /> with the profiler of <paramref name="databaseName" /> on and returns the profiled
     ///     aggregate commands (counts included: <c>countDocuments</c> is an aggregate on the server).
     /// </summary>
-    public static async Task<List<BsonDocument>> ProfileAggregatesAsync(OctoSystemConfiguration config,
-        string databaseName, Func<Task> run)
+    public static Task<List<BsonDocument>> ProfileAggregatesAsync(OctoSystemConfiguration config,
+        string databaseName, Func<Task> run) =>
+        ProfileAsync(config, databaseName, run, new BsonDocument("command.aggregate", new BsonDocument("$exists", true)));
+
+    /// <summary>
+    ///     Runs <paramref name="run" /> with the profiler of <paramref name="databaseName" /> on and returns the profiled
+    ///     reads: <c>find</c> and <c>aggregate</c> commands.
+    /// </summary>
+    public static Task<List<BsonDocument>> ProfileReadsAsync(OctoSystemConfiguration config,
+        string databaseName, Func<Task> run) =>
+        ProfileAsync(config, databaseName, run, new BsonDocument("$or", new BsonArray
+        {
+            new BsonDocument("command.find", new BsonDocument("$exists", true)),
+            new BsonDocument("command.aggregate", new BsonDocument("$exists", true))
+        }));
+
+    /// <summary>
+    ///     Runs <paramref name="run" /> with the profiler of <paramref name="databaseName" /> on and returns every
+    ///     profiled operation (reads, writes and commands such as <c>findAndModify</c>).
+    /// </summary>
+    public static Task<List<BsonDocument>> ProfileAllAsync(OctoSystemConfiguration config,
+        string databaseName, Func<Task> run) =>
+        ProfileAsync(config, databaseName, run, new BsonDocument());
+
+    private static async Task<List<BsonDocument>> ProfileAsync(OctoSystemConfiguration config,
+        string databaseName, Func<Task> run, BsonDocument filter)
     {
         var urlBuilder = new MongoUrlBuilder
         {
@@ -44,6 +68,6 @@ internal static class MongoProfiler
         }
 
         return await database.GetCollection<BsonDocument>("system.profile")
-            .Find(new BsonDocument("command.aggregate", new BsonDocument("$exists", true))).ToListAsync();
+            .Find(filter).ToListAsync();
     }
 }

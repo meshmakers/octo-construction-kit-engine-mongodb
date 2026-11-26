@@ -107,6 +107,15 @@ public class OperationFailedException : PersistenceException
             $"Enable the flag on the collection-root CK type.");
     }
 
+    public static Exception DeleteEventsNeedPreImages(CkId<CkTypeId> rootCkTypeId, CkId<CkTypeId> watchedCkTypeId)
+    {
+        return new OperationFailedException(
+            $"Delete events of CK type '{watchedCkTypeId}' cannot be matched: a delete event carries only the " +
+            $"document key, which is exact only for a watch on the collection root '{rootCkTypeId}' without field " +
+            $"filters. Enable EnableChangeStreamPreAndPostImages on '{rootCkTypeId}' or watch the collection root " +
+            "without field filters.");
+    }
+
     public static Exception IndexTypeNotSupported(IndexTypes indexIndexType)
     {
         return new OperationFailedException($"Index type '{indexIndexType}' not supported with MongoDB.");

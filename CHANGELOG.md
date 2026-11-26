@@ -20,6 +20,45 @@
   `NestedAssociationCountOnlyTests` (pipeline assertion; parity with the item query for six option shapes, zero, `Any`),
   `NestedAssociationCountOnlyLargeAttributeTests` (twenty targets of 1 MB each). CK compatibility: no CK model, API or
   contract change.
+- AB#9702 Test: the regression test of the escaped element pattern
+  (`ServiceManagedImportRefusalTests.OrdinaryModelWhoseNameIsAPatternForSystemIdentity_LeavesTheSystemIdentityRowsAlone`)
+  asserts that both versions of `Sy.tem.Identity` are installed - the second import runs `DeletePreviousVersion` - and
+  that the snapshot holds System.Identity element rows; with the old unescaped pattern it fails. The `S.*` case is
+  gone (model names allow only letters, digits, `_` and `.`), and the test class disposes its MongoDB client.
+
+- AB#9770 New: the engine refuses changes to synced master data outside the sync. An entity that carries `RtSyncOrigin`
+  is changed, replaced, deleted or archived, and `RtSyncOrigin` is set or changed, only by a sync-writer session of the
+  source tenant it names (`ITenantRepository.GetSyncWriterSessionAsync`); every other session of every tenant
+  repository - GraphQL and REST callers, pipelines, system sessions - is refused with `RuntimeRepositoryException`,
+  message 144, `code` = `SYNC_OWNED_ENTITY` (`SyncOriginWriteRules`). A sync-writer session in turn never touches an
+  entity without an origin or another source's copy. The rule is folded into the write filters of the guarded funnel, so
+  an update or delete that touches no copy costs no extra command; only a miss reads once to tell a refusal from "not
+  found". An archive, every replace, an update that writes a linked binary and a bulk-mode insert (an upsert on the id)
+  read once per type before anything is written, so a refusal deletes or uploads no GridFS bytes, also without a
+  transaction. Member paths of the origin (`RtSyncOrigin.<member>`, any case) are refused like the origin; the
+  `attributes: null` repair statement carries the same write filter as its update. A filter write does not select copies
+  the session may not touch (silently, without a read). Entities without `RtSyncOrigin` are written exactly as
+  before. Not covered: bulk import, `*ForMigrationAsync`, and the repositories of the engine maintenance services
+  (`MongoRuntimeRepositoryProvider`, now handing out `TenantContext.GetMaintenanceTenantRepository`). Docs:
+  `docs/runtime-write-semantics.md`, "Synced master data". Test: `SyncOriginWriteGuardTests`.
+- AB#9770 Fix: an update whose attribute value is a generated record class (any CK model's `Rt<Name>Record`, also
+  inside a record list) is stored as a plain record, like the insert of the same entity. The update path writes each
+  attribute as a boxed `$set` value (`MongoDataSourceMapper.ApplyUpdate`), and the registered object serializer allows
+  only the runtime contract types, so such an update failed with "Type … is not configured as a type that is allowed to
+  be serialized". `RtRecordValueNormalizer` copies the value to `RtRecord` / `List<RtRecord>` first; values without a
+  generated record are passed through unchanged; the member values of a record array item update go through the same
+  step. Tests: `TypedRecordUpdateTests`, `RecordArrayItemUpdateTests`.
+- AB#9770 New: opt-in delete events for runtime-entity watches. `WatchStreamFilter.IncludeDeleteEvents` (default
+  `false`) keeps every existing subscription exactly as it was: before, a delete never passed the watch (its change
+  event has no full document, and the watch matched on `fullDocument.ckTypeId`), and without the opt-in it still does
+  not. With the opt-in and `Delete` in `UpdateTypes` a delete event is matched in an own `$or` branch: on the pre-image
+  (`fullDocumentBeforeChange`: type set, RtId, field filters and before-field filters) when the collection root has
+  `EnableChangeStreamPreAndPostImages` - exact for derived types sharing the collection -, otherwise on the document key
+  alone (`documentKey._id` for a watched RtId), which is exact only for a watch on the collection root without field
+  filters; any other combination is refused at subscription (`OperationFailedException.DeleteEventsNeedPreImages`).
+  `IUpdateInfo<T>.DocumentRtId` (additive default member, `null` in other implementations) carries the RtId of the
+  document key for every event; `UpdateInfo` sets it. No consumer must rebuild: implementers keep compiling, and the
+  watch only changes for callers that set the opt-in. Tests: `WatchRtEntitiesDeleteEventTests` (real MongoDB).
 - AB#8875 Fix: a large raw or time-range archive write no longer runs its 1,000-row statements one after another.
   `CrateDatabaseClient.InsertGroupedAsync` splits the rows of a statement shape into lanes by row key and runs the lanes at
   the same time (`InsertStatementLanes`), so two statements in flight never carry the same key and the rows of one key are
@@ -39,6 +78,99 @@
   precedence), so a retry of the same insert converges when no other write of the same keys comes in between; without
   conflict precedence the last write wins, and a retry can replace a newer value that another write stored meanwhile. Tests: `InsertStatementLanesTests` and `MaxConcurrentInsertStatementsBindingTests` (unit), `StreamDataWriteLoss/ArchiveWriteConcurrencyIntegrationTests`
   (real CrateDB, 130,000 guarded rows, both modes compared).
+- AB#6209 Test: the contention-heavy AutoIncrement integration tests (20 parallel writers with retry loops, with and
+  without transactions, also across the year boundary) are `Category=Stress` (+ `LoadSensitive`) and run in the
+  performance pipeline; the regular suite keeps one small concurrency test per criterion (3 parallel creations; 2+2
+  across the year boundary; no retry, no timing). The allocation decisions - retry only outside a transaction and at
+  most 3 attempts, the first number of a block, the overflow guard, the numbers left from the `StartValue` floor - are
+  unit tests without Docker (`AutoIncrementAllocationRulesTests`), and the format and range-rule tests moved to the unit
+  test project.
+- AB#6209 Fix: a legacy format that does not show the counter (no `{0}`, e.g. `INV`) would give every document the
+  same text. It is refused when a range is configured - insert, a replace that changes the format, a partial update of
+  the format - with an error that names the range. A range already stored with such a format keeps numbering, and a
+  replace that keeps its format (a seed re-apply) is written.
+- AB#8675 Fix (review of PR #283): a `PeriodKind = FiscalYear` range that was numbered without periods (`CurrentValue`
+  n > 0) and has no fiscal-year period yet needs a `StartValue` above n; its first fiscal year would otherwise start
+  at `StartValue` (or 1) and issue numbers again (e.g. `26-{0:D4}` becoming `{yy}-{counter:D4}`). It is a range rule,
+  so it is checked on every write of the range (the switch itself, a later change of `StartValue`) and again before
+  allocation, which also covers a range written past the validator and a legacy number taken between the check and
+  the switch outside a transaction (the allocation then refuses until `StartValue` is above the counter, never a
+  duplicate). A legacy format whose token text is escaped
+  (`{{yyyy}}-{0:D4}`) stays a legacy format. An entity's numbers are all taken in one fiscal year (its creation time
+  is read once). A range switched from FiscalYear to legacy after the first statement and before the read of the
+  range is tried again instead of reporting end reached; a switch after that read is refused with "write again". The numbers left
+  in `AutoIncrementEndReached` count from the `StartValue` floor, and the message names the refused block only. A new
+  period's block whose last number would pass `long.MaxValue` is refused instead of overflowing. Breaking for direct
+  callers: the `AutoIncrementModifier` constructor takes `(ICkCacheService, ILogger<AutoIncrementModifier>,
+  TimeProvider? = null)`; it is registered by `AddMongoDbRuntimeRepository`, no direct caller in the services.
+- AB#8675 Fix: number ranges refuse configurations that would issue a number twice. A token format without
+  `{counter}` (e.g. `RE-{yyyy}`) is refused, it would give every document of a period the same number. A
+  `PeriodKind = FiscalYear` range needs a token format with `{yyyy}` or `{yy}`: without a format, with a legacy
+  `string.Format` format or with a token format without the year, its counter restarts every fiscal year and the numbers
+  would repeat, so the range is refused with `InvalidNumberRange` (when it is configured and before any allocation);
+  ranges without periods are unchanged. A FiscalYear range numbers only String attributes; an Int attribute is refused
+  before anything is allocated. Every allocation statement now also bumps `rtVersion` and sets `rtChangedDateTime` like
+  any engine update, so a stale copy of the counter written back with an expected `rtVersion` (outside a transaction)
+  is refused instead of setting the counter back. Tests: `AutoIncrementNumberFormatTests`,
+  `AutoIncrementFiscalYearTests` (`FiscalYearRange_ForAnIntAttribute_HandsOutNoNumber`,
+  `Allocation_BumpsTheCounterVersion`, configuration refusals).
+- AB#9755 New: a number range continues from its `StartValue` (System 2.9.0, design note D5). Every allocation takes
+  its block from `max(counter, StartValue - 1) + 1` on, with and without fiscal-year periods: a range with start value
+  1235 continues an external range that ended at 1234, and a start value set below a counter already in use is ignored,
+  so it never produces a duplicate. The floor is part of the single allocation statement (a pipeline update instead of
+  `$inc`), so allocation stays one atomic statement per counter, year and batch; without a start value the numbers are
+  exactly as before. The range rules refuse a `StartValue` below 1 or above `End`, and `AutoIncrementRangeValidator`
+  now also checks partial updates of a range (engine hook `IPreDocumentUpdateValidation`): the stored range with the
+  update laid over it must be valid, so an update that sets `PeriodKind = FiscalYear` without a zone, an unknown zone,
+  a fiscal-year token without periods or a start value outside 1..`End` is refused before anything is written (it was
+  refused only at the next allocation). Updates that touch no configuration attribute read nothing. Tests:
+  `AutoIncrementStartValueTests` (MongoDB: start value 1235, start value below the counter, the floor in a fiscal year
+  in use, two company tenants under one group tenant in two tenant databases, seed re-apply keeps `CurrentValue`,
+  `Periods` and a tenant-changed start value, partial-update refusals).
+- AB#9754 New: number ranges per document type and fiscal year with format tokens (System 2.9.0). A
+  `System/AutoIncrement` with `PeriodKind = FiscalYear` keeps one counter per fiscal year in `Periods` and restarts at
+  `StartValue` (or 1) when a fiscal year starts. The fiscal year is taken from the creation time of each entity (an
+  injected `TimeProvider`, read per entity, so a batch across the year boundary numbers each entity in its own year)
+  read in the range's IANA `ReferenceTimeZone`, with `FiscalYearStartMonth` (1-12, default 1); it is named by the
+  calendar year in which it starts. Allocation stays atomic: one update of the year's entry per counter, year and
+  batch, bounded by `End`; the first number of a new year adds the entry with its block in one conditional update
+  that matches only while the year is missing, so parallel writers never create it twice. `Format` knows the tokens
+  `{yyyy}`, `{yy}` (fiscal year) and `{counter}` / `{counter:D<n>}` with literal text around them
+  (`RE-{yyyy}-{counter:D5}`); every other format is passed to `string.Format` exactly as before, and a range without a
+  period numbers exactly as before (same single statement, no read). A range whose configuration is not valid is
+  refused with `AutoIncrementFailedException` (`InvalidNumberRange`) when it is inserted or replaced (new
+  `AutoIncrementRangeValidator`) and again at allocation (a fiscal-year range before a number is taken; a range
+  without periods right after its statement, so a refused block of such a range stays unused - a gap, never a
+  duplicate): `FiscalYear` without a known IANA zone
+  (no UTC default; Windows ids refused), a start month outside 1-12, a token format that does not parse, or
+  `{yyyy}`/`{yy}` without `FiscalYear`. Tests: `AutoIncrementFiscalYearTests` (MongoDB, fake clock: restart on
+  1 January and 1 July, two types, legacy `{0:D4}`, batch across midnight, 20 parallel creations across the boundary
+  with and without transactions, configuration refusals) and `AutoIncrementNumberFormatTests`.
+- AB#9753 New: `AutoIncrementModifier` allocates numbers atomically. Before, it read the counters once per batch,
+  incremented `CurrentValue` in memory and replaced the whole counter entity, so two parallel writers outside a
+  transaction could get the same number. Now one `findOneAndUpdate` per counter and batch takes a block of
+  consecutive numbers; its filter holds the `End` bound (`currentValue + n <= end`), so the counter never passes `End`
+  (`AutoIncrementEndReached`, also when the batch needs more numbers than are left: the batch is refused as a whole,
+  nothing is taken, and the message names the range, the numbers needed and the numbers left) and `AutoIncrementReferenceNotFound` is raised as before when there is no counter. The counter is neither
+  read first nor replaced. Numbers follow the batch order (with the engine's ordered `EntityRuleEngine`). The statement
+  runs in the caller's session: inside a transaction it is rolled back with it, and a parallel writer of the same
+  counter aborts the transaction with `TransientTransactionError`, which is passed on unretried for the transaction
+  owner to run again; outside a transaction the statement runs at most 3 times (the first attempt and up to 2
+  retries) on that label or a write conflict
+  (committed at once, so a later failure leaves a gap). Tests: `AutoIncrementModifierTests` (20 parallel creations
+  with and without transactions, injected and real transient errors, rollback, block over `End`, one findAndModify
+  and no replace on the counter).
+- AB#6209 Fix: `AutoIncrementModifier` numbers every new entity of a mixed batch. Before, the first type or entity
+  without an auto-increment attribute ended the pass (`return`), so in a batch such as `[Note, Ticket]` the Ticket got
+  no number, depending on the order. Because the pre-document modifications run on insert and on replace without
+  telling them apart, the modifier now reads the stored entities of the batch's auto-increment types by RtId (one read
+  per type, only when the batch has such a type): a stored entity (replace, bulk import of an existing entity) is never
+  renumbered and the counter does not move; when its payload has no value, the stored number is carried over. A new
+  entity is numbered only for an attribute without a value, so ImportRt/restore values are kept and do not advance the
+  counter. The stored-entity check is one helper, `StoredRtEntities.GetByRtIdAsync` (read by `_id` in the session
+  of the write), for the later number allocation stories to reuse. A batch without auto-increment types reads
+  nothing extra. Two new entities of one batch get consecutive numbers (in batch order since AB#9753). The version-less AutoIncrement lookup (D-G1-1) stays. Tests:
+  `AutoIncrementModifierTests` (MongoDB).
 - AB#9524 Fix: the index update resolves index attribute paths against the inheritance chain of the index-defining type
   (its own attributes and those of its base types, the chain the update already loads; the type's own assignment wins
   over an inherited one of the same name), not only against the attributes the type assigns itself. An inherited plain
@@ -62,8 +194,8 @@
   version; a damaged model of the same version or a too new one needs a manual database repair. Non-System models
   keep the explicit downgrade with WARN. The element delete of an import (`DeletePreviousVersion`,
   `PreserveExtensibleEnumValues`) escapes the model name in its pattern (`ModelElementsPattern`): before, a caller
-  import of an ordinary model named `Sy.tem.Identity` or `.*` deleted the element rows of System.Identity or of every
-  model. New public predicate `ServiceManagedCkModels.IsServiceManaged` (single source;
+  import of an ordinary model named `Sy.tem.Identity` (`.` is the only regex metacharacter a model name may hold)
+  deleted the element rows of System.Identity. New public predicate `ServiceManagedCkModels.IsServiceManaged` (single source;
   the tenant upgrade guard uses it). No `ITenantContext` member changed. Tests in other repositories that installed a
   System model through the caller overload must load it into a test catalog and import it by id (consumer PRs merge
   first).

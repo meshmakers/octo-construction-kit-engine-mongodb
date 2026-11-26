@@ -1,0 +1,19 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies: []
+entities:
+- rtId: 6750a1c2e4b0f1a2b3c4d5e6
+  ckTypeId: System/AutoIncrement-1
+  rtWellKnownName: InvoiceNumber
+  attributes:
+  - id: System/AutoIncrement.End-1
+    value: 99999
+  - id: System/AutoIncrement.CurrentValue-1
+    value: 0
+  - id: System/AutoIncrement.Format-1
+    value: RE-{yyyy}-{counter:D5}
+  - id: System/AutoIncrement.PeriodKind-1
+    value: FiscalYear
+  - id: System/AutoIncrement.FiscalYearStartMonth-1
+    value: 1
+  - id: System/AutoIncrement.ReferenceTimeZone-1
+    value: Europe/Vienna

@@ -1,0 +1,717 @@
+$schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
+dependencies:
+- System-2.8.0
+dependencyRanges:
+- range: System-[2.7,3.0)
+  floor: 2.7.0
+  usedSurface:
+  - System@2/Describable-1
+  - System@2/Description-1
+  - System@2/Entity-1
+  - System@2/Hierarchical-1
+  - System@2/Name-1
+  - System@2/Named-1
+  - System@2/ParentChild-1
+  usedSurfaceHash: sha256:b79ed6307bddfd87bb7af6c8b83d2a80802ef24db30a7ad661c3327309b2e7be
+minEngineVersion: 3.5.1
+types:
+- typeId: Asset
+  derivedFromCkTypeId: Basic-2.7.0/TreeNode-1
+  associations:
+  - id: Basic-2.7.0/RelatedClassification-1
+    targetCkTypeId: Basic-2.7.0/TreeNode-1
+  derivable: Any
+- typeId: City
+  derivedFromCkTypeId: Basic-2.7.0/TreeNode-1
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/AddressZipcode-1
+    name: Zipcode
+- typeId: Country
+  derivedFromCkTypeId: Basic-2.7.0/TreeNode-1
+  derivable: Any
+- typeId: District
+  derivedFromCkTypeId: Basic-2.7.0/TreeNode-1
+  derivable: Any
+- isCollectionRoot: true
+  typeId: Document
+  derivedFromCkTypeId: System@2/Entity-1
+  isAbstract: true
+  description: A document that can be used in the system.
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/DocumentNumber-1
+    name: DocumentNumber
+    autoIncrementReference: BillingDocumentDocumentNumber
+  - id: Basic-2.7.0/DocumentDate-1
+    name: DocumentDate
+- isCollectionRoot: true
+  typeId: Employee
+  derivedFromCkTypeId: System@2/Entity-1
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/FirstName-1
+    name: FirstName
+  - id: Basic-2.7.0/LastName-1
+    name: LastName
+  - id: Basic-2.7.0/EmployeeId-1
+    name: EmployeeId
+  - id: Basic-2.7.0/EmployeeExternalId-1
+    name: EmployeeExternalId
+- isCollectionRoot: true
+  typeId: NamedEntity
+  derivedFromCkTypeId: System@2/Entity-1
+  isAbstract: true
+  displayNameRule: ${Name}
+  displayDescriptionRule: ${Description}
+  implements:
+  - System@2/Named-1
+  - System@2/Describable-1
+  derivable: Any
+  attributes:
+  - id: System@2/Name-1
+    name: Name
+  - id: System@2/Description-1
+    name: Description
+    isOptional: true
+- typeId: State
+  derivedFromCkTypeId: Basic-2.7.0/TreeNode-1
+  derivable: Any
+- typeId: Tree
+  derivedFromCkTypeId: Basic-2.7.0/NamedEntity-1
+  derivable: Any
+- typeId: TreeNode
+  derivedFromCkTypeId: Basic-2.7.0/NamedEntity-1
+  associations:
+  - id: System@2/ParentChild-1
+    targetCkTypeId: Basic-2.7.0/Tree-1
+  - id: System@2/ParentChild-1
+    targetCkTypeId: Basic-2.7.0/TreeNode-1
+  implements:
+  - System@2/Hierarchical-1
+  derivable: Any
+associationRoles:
+- id: RelatedClassification
+  inboundName: RelatesFrom
+  outboundName: RelatesTo
+  inboundMultiplicity: N
+  outboundMultiplicity: N
+attributes:
+- id: AcademicTitlePrefix
+  valueType: String
+  ownership: SeedOwned
+  description: Academic title prefix associated with the contact
+- id: AcademicTitleSuffix
+  valueType: String
+  ownership: SeedOwned
+  description: Academic title suffix associated with the contact
+- id: AccountHolder
+  valueType: String
+  ownership: SeedOwned
+  description: Name of the account holder
+- id: Address
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/Address-1
+  ownership: SeedOwned
+  description: Record containing address information
+- id: AddressCityTown
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO132#002
+    description: town or city
+- id: AddressDepartment
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO127#003
+    description: administrative section within an organisation where a business partner is located
+- id: AddressEMail
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/EMail-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAQ836#005
+    description: E-mail address and encryption method
+- id: AddressFax
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/FaxNumber-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAQ834#005
+    description: Fax number including type
+- id: AddressNationalCode
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO134#002
+    description: 'code of a country Note: Country codes defined accord. to DIN EN ISO 3166-1'
+- id: AddressOfAdditionalLink
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAQ326#002
+    description: web site address where information about the product or contact is given
+- id: AddressPOBox
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO130#002
+    description: P.O. box number
+- id: AddressPhone
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/PhoneNumber-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAQ833#005
+    description: Phone number including type
+- id: AddressRemarks
+  valueType: StringArray
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO202#003
+    description: plain text characterizing address information for which there is no property
+- id: AddressStateCounty
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO133#002
+    description: federal state a part of a state
+- id: AddressStreet
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO128#002
+    description: street name and house number
+- id: AddressVATnumber
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO135#002
+    description: VAT identification number of the business partner
+- id: AddressZipOfPOBox
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO131#002
+    description: ZIP code of P.O. box address
+- id: AddressZipcode
+  valueType: Int
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO129#002
+    description: ZIP code of address
+- id: Amount
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/Amount-1
+  ownership: SeedOwned
+  description: A measured amount with value and unit
+- id: AmountValue
+  valueType: Double
+  ownership: SeedOwned
+  description: Defines the amount of a resource
+- id: AvgTemperature
+  valueType: Double
+  ownership: SeedOwned
+  metaData:
+  - key: Unit
+    value: °C
+  - key: Type
+    value: Average
+- id: BankAccount
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/BankAccount-1
+  ownership: SeedOwned
+  description: Bank account information
+- id: BankName
+  valueType: String
+  ownership: SeedOwned
+  description: Name of the bank
+- id: Comment
+  valueType: String
+  ownership: SeedOwned
+  description: Optional Comment on the user
+- id: CompanyName
+  valueType: String
+  ownership: SeedOwned
+  description: Associated company name
+- id: CompanyRegisterNumber
+  valueType: String
+  ownership: SeedOwned
+  description: Public registry number for the legal identification of the company
+- id: Contact
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/Contact-1
+  ownership: SeedOwned
+  description: Contact data with name and address
+- id: DocumentDate
+  valueType: DateTime
+  ownership: SeedOwned
+  description: Date of a document
+- id: DocumentNumber
+  valueType: String
+  ownership: SeedOwned
+  description: Identifying number of a document
+- id: EMailAddress
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO198#002
+    description: electronic mail address of a business partner
+- id: EMailPublicKey
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO200#002
+    description: public part of an unsymmetrical key pair to sign or encrypt text or messages
+- id: EMailTypeOfEmailAddress
+  valueType: Enum
+  valueCkEnumId: Basic-2.7.0/TypeOfTelephoneBasic-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO199#003
+    description: characterization of an e-mail address according to its location or usage
+- id: EMailTypeOfPublicKey
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO201#002
+    description: characterization of a public key according to its encryption process
+- id: EmployeeExternalId
+  valueType: String
+  ownership: SeedOwned
+  description: External identifier for the employee
+- id: EmployeeId
+  valueType: String
+  ownership: SeedOwned
+  description: Unique identifier for the employee
+- id: File
+  valueType: BinaryLinked
+  ownership: SeedOwned
+- id: FirstName
+  valueType: String
+  ownership: SeedOwned
+  description: The users first name(s)
+- id: From
+  valueType: DateTime
+  ownership: SeedOwned
+  description: From date within a time range
+- id: Iban
+  valueType: String
+  ownership: SeedOwned
+  description: International Bank Account Number
+- id: LastName
+  valueType: String
+  ownership: SeedOwned
+  description: The users last name(s)
+- id: LegalEntityType
+  valueType: Enum
+  valueCkEnumId: Basic-2.7.0/LegalEntityType-1
+  defaultValues:
+  - 0
+  ownership: SeedOwned
+  description: The legal entity type of the contact
+- id: MaxTemperature
+  valueType: Double
+  ownership: SeedOwned
+  metaData:
+  - key: Unit
+    value: °C
+  - key: Type
+    value: Maximum
+- id: MinTemperature
+  valueType: Double
+  ownership: SeedOwned
+  metaData:
+  - key: Unit
+    value: °C
+  - key: Type
+    value: Minimum
+- id: NamePlate
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/NamePlate-1
+  ownership: SeedOwned
+- id: NamePlate.Address
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/Address-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAQ832#005
+    description: Address information of a business partner
+- id: NamePlate.AssetSpecificProperties
+  valueType: RecordArray
+  valueCkRecordId: Basic-2.7.0/Marking-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO856#002
+    description: guideline, stipulation or legislation used for determining conformity
+- id: NamePlate.ManufacturerName
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO677#002
+    description: legally valid designation of the natural or judicial person which is directly responsible for the design, production, packaging and labeling of a product in respect to its being brought into circulation
+- id: NamePlate.ManufacturerProductDesignation
+  valueType: String
+  ownership: SeedOwned
+  description: Manufacturer Product Description
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAW338#001
+    description: Short description of the product (short text)
+- id: NamePlate.ManufacturerProductFamily
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAU731#001
+    description: 2nd level of a 3 level manufacturer specific product hierarchy
+- id: NamePlate.Markings
+  valueType: RecordArray
+  valueCkRecordId: Basic-2.7.0/Marking-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: ''
+    description: ''
+- id: NamePlate.SerialNumber
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAM556#002
+    description: unique combination of numbers and letters used to identify the device once it has been manufactured
+- id: NamePlate.YearOfConstruction
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAP906#001
+    description: Year as completion date of object
+- id: Quantity
+  valueType: Double
+  ownership: SeedOwned
+  description: Defines the quantity of a resource
+- id: Salutation
+  valueType: Enum
+  valueCkEnumId: Basic-2.7.0/Salutation-1
+  ownership: SeedOwned
+  description: Salutation associated with the contact
+- id: SwiftCode
+  valueType: String
+  ownership: SeedOwned
+  description: Bank Identifier Code
+- id: TaxIdentificationNumber
+  valueType: String
+  ownership: SeedOwned
+  description: Tax identification number of a entity
+- id: TelephoneNumber
+  valueType: String
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO136#002
+    description: complete telephone number to be called to reach a business partner
+- id: Temperature
+  valueType: Double
+  ownership: SeedOwned
+  metaData:
+  - key: Unit
+    value: °C
+  - key: Type
+    value: Current
+- id: Time
+  valueType: DateTime
+  ownership: SeedOwned
+- id: TimeRange
+  valueType: Record
+  valueCkRecordId: Basic-2.7.0/TimeRange-1
+  ownership: SeedOwned
+  description: A time range with a start and end date
+- id: To
+  valueType: DateTime
+  ownership: SeedOwned
+  description: To date within a time range
+- id: TypeOfTelephoneBasic
+  valueType: Enum
+  valueCkEnumId: Basic-2.7.0/TypeOfTelephoneBasic-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO196#003
+    description: characterization of a telephone according to its location or usage
+- id: TypeOfTelephoneEnhanced
+  valueType: Enum
+  valueCkEnumId: Basic-2.7.0/TypeOfTelephoneEnhanced-1
+  ownership: SeedOwned
+  metaData:
+  - key: semanticId
+    value: 0173-1#02-AAO137#003
+    description: characterization of a telephone according to its location or usage
+- id: UnitOfMeasure
+  valueType: Enum
+  valueCkEnumId: Basic-2.7.0/UnitOfMeasure-1
+  ownership: SeedOwned
+  description: The unit of measure for the quantity or amount
+records:
+- recordId: Address
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/AddressDepartment-1
+    name: Department
+    isOptional: true
+  - id: Basic-2.7.0/AddressStreet-1
+    name: Street
+  - id: Basic-2.7.0/AddressZipcode-1
+    name: Zipcode
+  - id: Basic-2.7.0/AddressPOBox-1
+    name: POBox
+    isOptional: true
+  - id: Basic-2.7.0/AddressZipOfPOBox-1
+    name: ZipOfPOBox
+    isOptional: true
+  - id: Basic-2.7.0/AddressCityTown-1
+    name: CityTown
+  - id: Basic-2.7.0/AddressStateCounty-1
+    name: StateCounty
+    isOptional: true
+  - id: Basic-2.7.0/AddressNationalCode-1
+    name: NationalCode
+  - id: Basic-2.7.0/AddressVATnumber-1
+    name: VATnumber
+    isOptional: true
+  - id: Basic-2.7.0/AddressRemarks-1
+    name: AddressRemarks
+    isOptional: true
+  - id: Basic-2.7.0/AddressOfAdditionalLink-1
+    name: AddressOfAdditionalLink
+    isOptional: true
+  - id: Basic-2.7.0/AddressPhone-1
+    name: Phone
+    isOptional: true
+  - id: Basic-2.7.0/AddressFax-1
+    name: Fax
+    isOptional: true
+  - id: Basic-2.7.0/AddressEMail-1
+    name: EMail
+    isOptional: true
+- recordId: Amount
+  description: A measured amount with value and unit
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/AmountValue-1
+    name: Value
+  - id: Basic-2.7.0/UnitOfMeasure-1
+    name: Unit
+- recordId: BankAccount
+  description: A bank account with its details
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/Iban-1
+    name: Iban
+  - id: Basic-2.7.0/SwiftCode-1
+    name: SwiftCode
+    isOptional: true
+  - id: Basic-2.7.0/BankName-1
+    name: BankName
+    isOptional: true
+  - id: Basic-2.7.0/AccountHolder-1
+    name: AccountHolder
+- recordId: Contact
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/LegalEntityType-1
+    name: LegalEntityType
+    isOptional: true
+  - id: Basic-2.7.0/Salutation-1
+    name: Salutation
+    isOptional: true
+  - id: Basic-2.7.0/FirstName-1
+    name: FirstName
+    isOptional: true
+  - id: Basic-2.7.0/LastName-1
+    name: LastName
+    isOptional: true
+  - id: Basic-2.7.0/AcademicTitlePrefix-1
+    name: TitlePrefix
+    isOptional: true
+  - id: Basic-2.7.0/AcademicTitleSuffix-1
+    name: TitleSuffix
+    isOptional: true
+  - id: Basic-2.7.0/CompanyName-1
+    name: CompanyName
+    isOptional: true
+  - id: Basic-2.7.0/Address-1
+    name: Address
+    isOptional: true
+  - id: Basic-2.7.0/TaxIdentificationNumber-1
+    name: TaxIdentificationNumber
+    isOptional: true
+  - id: Basic-2.7.0/CompanyRegisterNumber-1
+    name: CompanyRegisterNumber
+    isOptional: true
+  - id: Basic-2.7.0/EMailAddress-1
+    name: Email
+    isOptional: true
+- recordId: EMail
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/EMailAddress-1
+    name: EMail
+  - id: Basic-2.7.0/EMailPublicKey-1
+    name: PublicKey
+    isOptional: true
+  - id: Basic-2.7.0/EMailTypeOfEmailAddress-1
+    name: TypeOfEMail
+    isOptional: true
+  - id: Basic-2.7.0/EMailTypeOfPublicKey-1
+    name: TypeOfPublicKey
+    isOptional: true
+- recordId: FaxNumber
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/TelephoneNumber-1
+    name: Number
+  - id: Basic-2.7.0/TypeOfTelephoneBasic-1
+    name: Type
+    isOptional: true
+- recordId: Marking
+  derivable: Any
+  attributes:
+  - id: System@2/Name-1
+    name: Name
+  - id: Basic-2.7.0/File-1
+    name: File
+  - id: System@2/Description-1
+    name: AdditionalText
+    isOptional: true
+- recordId: NamePlate
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/NamePlate.ManufacturerName-1
+    name: ManufacturerName
+  - id: Basic-2.7.0/NamePlate.ManufacturerProductDesignation-1
+    name: ManufacturerProductDesignation
+  - id: Basic-2.7.0/NamePlate.Address-1
+    name: Address
+    isOptional: true
+  - id: Basic-2.7.0/NamePlate.ManufacturerProductFamily-1
+    name: ManufacturerProductFamily
+  - id: Basic-2.7.0/NamePlate.SerialNumber-1
+    name: SerialNumber
+    isOptional: true
+  - id: Basic-2.7.0/NamePlate.YearOfConstruction-1
+    name: YearOfConstruction
+  - id: Basic-2.7.0/NamePlate.Markings-1
+    name: Markings
+    isOptional: true
+  - id: Basic-2.7.0/NamePlate.AssetSpecificProperties-1
+    name: AssetSpecificProperties
+    isOptional: true
+- recordId: PhoneNumber
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/TelephoneNumber-1
+    name: Number
+  - id: Basic-2.7.0/TypeOfTelephoneEnhanced-1
+    name: Type
+    isOptional: true
+- recordId: TimeRange
+  description: A time range with a start and end date
+  derivable: Any
+  attributes:
+  - id: Basic-2.7.0/From-1
+    name: From
+  - id: Basic-2.7.0/To-1
+    name: To
+enums:
+- enumId: LegalEntityType
+  values:
+  - key: 0
+    name: NaturalPerson
+    description: A natural person is a human being with legal capacity, in contrast to a legal person (such as a company, organization, or government entity).
+  - key: 1
+    name: LegalPerson
+    description: Legal structure with the characteristics of a person
+  - key: 2
+    name: Company
+    description: Actor in economic life, such as any natural or legal person with UGB relevance.
+  - key: 3
+    name: LocalAuthority
+    description: Administrative unit with sovereign power such as municipality, federal state, republic.
+  description: The legal entity type of a contact
+- enumId: Salutation
+  isExtensible: true
+  values:
+  - key: 0
+    name: Unknown
+    description: The salutation is unknown or not defined
+  - key: 1
+    name: Male
+    description: The salutation is male
+  - key: 2
+    name: Female
+    description: The salutation is female
+  - key: 3
+    name: NonBinary
+    description: The salutation is non-binary
+  description: Defines the salutation a Customer wishes to be addressed by
+- enumId: TypeOfTelephoneBasic
+  values:
+  - key: 1
+    name: Office
+  - key: 3
+    name: Secretary
+  - key: 4
+    name: Substitute
+  - key: 5
+    name: Home
+- enumId: TypeOfTelephoneEnhanced
+  values:
+  - key: 1
+    name: Office
+  - key: 2
+    name: OfficeMobile
+  - key: 3
+    name: Secretary
+  - key: 4
+    name: Substitute
+  - key: 5
+    name: Home
+  - key: 6
+    name: PrivateMobile
+- enumId: UnitOfMeasure
+  values:
+  - key: 0
+    name: NonUnit
+    description: No unit applicable
+  - key: 1
+    name: KWh
+    description: Kilowatt-hour, a unit of energy equal to one kilowatt of power used for one hour
+  - key: 2
+    name: MWh
+    description: Megawatt-hour, a unit of energy equal to one megawatt of power used for one hour
+  description: Defines various units of measurement
+modelId: Basic-2.7.0
+ckLanguage: 2

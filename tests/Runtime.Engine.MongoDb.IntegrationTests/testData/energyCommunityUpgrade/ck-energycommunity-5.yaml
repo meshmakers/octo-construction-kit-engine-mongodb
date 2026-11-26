@@ -1,0 +1,682 @@
+$schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
+dependencies:
+- Basic-2.7.0
+- Basic.Energy-2.1.0
+- System-2.8.0
+dependencyRanges:
+- range: Basic-[2.4,3.0)
+  floor: 2.4.0
+  usedSurface:
+  - Basic@2/BankAccount-1
+  - Basic@2/Comment-1
+  - Basic@2/Contact-1
+  - Basic@2/Document-1
+  - Basic@2/Quantity-1
+  - Basic@2/TimeRange-1
+  usedSurfaceHash: sha256:57b0d6af000a5456eb7c7fa0ef02d7db7fd4c26a0e24f0d639dbaee965ed19d8
+- range: Basic.Energy-[2.0,3.0)
+  floor: 2.0.0
+  usedSurface:
+  - Basic.Energy@2/Consumer-1
+  - Basic.Energy@2/MeteringPoint-1
+  - Basic.Energy@2/OperatingFacility-1
+  - Basic.Energy@2/PartitionFactor-1
+  - Basic.Energy@2/Producer-1
+  - Basic.Energy@2/State-1
+  usedSurfaceHash: sha256:e24a9839e7654a8da5f4ed159eaf1341024d3f049da3eb28457cc20b10b899be
+- range: System-[2.5,3.0)
+  floor: 2.5.0
+  usedSurface:
+  - System@2/Description-1
+  - System@2/Entity-1
+  - System@2/ParentChild-1
+  usedSurfaceHash: sha256:054405be64b6c6ac10995466c05c7eddf85017d3c1f1cd616fd4d784c6ce6587
+minEngineVersion: 3.5.1
+types:
+- typeId: BillingDocument
+  derivedFromCkTypeId: Basic@2/Document-1
+  associations:
+  - id: EnergyCommunity-5.1.0/AssignedBilling-1
+    targetCkTypeId: EnergyCommunity-5.1.0/Customer-1
+  description: A billing document entity that contains accounting information.
+  derivable: Any
+  attributes:
+  - id: EnergyCommunity-5.1.0/CustomerNumber-1
+    name: CustomerNumber
+  - id: Basic@2/Contact-1
+    name: Contact
+  - id: Basic@2/TimeRange-1
+    name: TimeRange
+  - id: Basic@2/Comment-1
+    name: Comment
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/TaxProcedureCreditNote-1
+    name: TaxProcedureCreditNote
+  - id: EnergyCommunity-5.1.0/BillingType-1
+    name: BillingType
+  - id: EnergyCommunity-5.1.0/BillingDocumentState-1
+    name: BillingDocumentState
+  - id: EnergyCommunity-5.1.0/GrossTotal-1
+    name: GrossTotal
+  - id: Basic@2/BankAccount-1
+    name: BankAccount
+    isOptional: true
+- isCollectionRoot: true
+  typeId: BillingDocumentLineItem
+  derivedFromCkTypeId: System@2/Entity-1
+  associations:
+  - id: System@2/ParentChild-1
+    targetCkTypeId: EnergyCommunity-5.1.0/BillingDocument-1
+  - id: EnergyCommunity-5.1.0/BilledMeteringPoint-1
+    targetCkTypeId: Basic.Energy@2/MeteringPoint-1
+  description: A billing document line item
+  derivable: Any
+  attributes:
+  - id: EnergyCommunity-5.1.0/GrossAmount-1
+    name: GrossAmount
+  - id: EnergyCommunity-5.1.0/NetAmount-1
+    name: NetAmount
+  - id: EnergyCommunity-5.1.0/TaxAmount-1
+    name: TaxAmount
+  - id: EnergyCommunity-5.1.0/TaxRate-1
+    name: TaxRate
+  - id: EnergyCommunity-5.1.0/UnitPrice-1
+    name: UnitPrice
+  - id: EnergyCommunity-5.1.0/BillingType-1
+    name: BillingType
+  - id: Basic@2/Quantity-1
+    name: Quantity
+  - id: Basic@2/TimeRange-1
+    name: BilledTimeRange
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/IntervalCount-1
+    name: IntervalCount
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/IntervalCountL1-1
+    name: IntervalCountL1
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/IntervalCountL2-1
+    name: IntervalCountL2
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/IntervalCountL3-1
+    name: IntervalCountL3
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/IntervalCountUnknown-1
+    name: IntervalCountUnknown
+    isOptional: true
+- isCollectionRoot: true
+  typeId: CommunitySettings
+  derivedFromCkTypeId: System@2/Entity-1
+  description: Product settings of the energy community as a whole (one entity per tenant; real and simulated communities alike). Readers take the first entity and fall back to the documented defaults when none exists or a value is empty.
+  derivable: Any
+  attributes:
+  - id: EnergyCommunity-5.1.0/AllocationCutOffTime-1
+    name: AllocationCutOffTime
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/AllocationKey-1
+    name: AllocationKey
+    isOptional: true
+  - id: System@2/Description-1
+    name: Comment
+    isOptional: true
+- typeId: Consumer
+  derivedFromCkTypeId: Basic.Energy@2/Consumer-1
+  description: A consumer metering point participating in an energy community
+  derivable: Any
+  attributes:
+  - id: Basic.Energy@2/PartitionFactor-1
+    name: PartitionFactor
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/EnergyConsumption-1
+    name: EnergyConsumption
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/MeteringDataSource-1
+    name: MeteringDataSource
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/LoadProfile-1
+    name: LoadProfile
+    isOptional: true
+- isCollectionRoot: true
+  typeId: Customer
+  derivedFromCkTypeId: System@2/Entity-1
+  associations:
+  - id: EnergyCommunity-5.1.0/AssociatedFacilities-1
+    targetCkTypeId: Basic.Energy@2/OperatingFacility-1
+  description: Represents a customer of an energy community
+  derivable: Any
+  attributes:
+  - id: EnergyCommunity-5.1.0/CustomerNumber-1
+    name: CustomerNumber
+    autoIncrementReference: CustomerNumber
+  - id: Basic@2/Contact-1
+    name: Contact
+  - id: Basic@2/Comment-1
+    name: Comment
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/BillingCycle-1
+    name: BillingCycle
+  - id: Basic.Energy@2/State-1
+    name: State
+  - id: Basic@2/BankAccount-1
+    name: BankAccount
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/TaxProcedureCreditNote-1
+    name: TaxProcedureCreditNote
+  - id: EnergyCommunity-5.1.0/DateOfBirth-1
+    name: DateOfBirth
+    isOptional: true
+- isCollectionRoot: true
+  typeId: EnergyPrice
+  derivedFromCkTypeId: System@2/Entity-1
+  description: The price of Energy at a certain time
+  derivable: Any
+  attributes:
+  - id: EnergyCommunity-5.1.0/Price-1
+    name: Price
+  - id: EnergyCommunity-5.1.0/Currency-1
+    name: Currency
+- isCollectionRoot: true
+  typeId: ParticipationPeriod
+  derivedFromCkTypeId: System@2/Entity-1
+  associations:
+  - id: EnergyCommunity-5.1.0/ParticipationPeriod-1
+    targetCkTypeId: Basic.Energy@2/MeteringPoint-1
+  description: The participation period with a start and end date
+  derivable: Any
+  attributes:
+  - id: Basic@2/TimeRange-1
+    name: TimeRange
+- typeId: Producer
+  derivedFromCkTypeId: Basic.Energy@2/Producer-1
+  description: A producer metering point participating in an energy community
+  derivable: Any
+  attributes:
+  - id: Basic.Energy@2/PartitionFactor-1
+    name: PartitionFactor
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/EnergyProductionCapacity-1
+    name: EnergyProductionCapacity
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/MeteringDataSource-1
+    name: MeteringDataSource
+    isOptional: true
+- isCollectionRoot: true
+  typeId: SimulationResetRequest
+  derivedFromCkTypeId: System@2/Entity-1
+  description: A request to reset the simulated data of the energy community. The request is only recorded here; an operator tool executes it and writes state and report back.
+  derivable: Any
+  attributes:
+  - id: EnergyCommunity-5.1.0/SimulationResetMode-1
+    name: Mode
+  - id: EnergyCommunity-5.1.0/BackfillDays-1
+    name: Days
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/DiscardReported-1
+    name: DiscardReported
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/SimulationResetState-1
+    name: State
+  - id: EnergyCommunity-5.1.0/RequestedAt-1
+    name: RequestedAt
+  - id: EnergyCommunity-5.1.0/RequestedBy-1
+    name: RequestedBy
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/CompletedAt-1
+    name: CompletedAt
+    isOptional: true
+  - id: System@2/Description-1
+    name: Message
+    isOptional: true
+- isCollectionRoot: true
+  typeId: SimulationSettings
+  derivedFromCkTypeId: System@2/Entity-1
+  description: One revision of the simulation settings of an energy community. For a day D the non-superseded revision with the greatest effective date <= D applies; the effective date is max(EffectiveFrom, creation date), except for the base revision written by a reset. Unset values fall back to the simulation defaults.
+  derivable: Any
+  attributes:
+  - id: EnergyCommunity-5.1.0/SimulationPreset-1
+    name: Preset
+  - id: EnergyCommunity-5.1.0/EffectiveFrom-1
+    name: EffectiveFrom
+  - id: EnergyCommunity-5.1.0/SimulationSeed-1
+    name: Seed
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/ConsumptionFactor-1
+    name: ConsumptionFactor
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/PvCapacityFactor-1
+    name: PvCapacityFactor
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/PvSpecificYield-1
+    name: PvSpecificYield
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/MemberSpread-1
+    name: MemberSpread
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/SimulationNoiseLevel-1
+    name: Noise
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/SimulationWeatherMode-1
+    name: Weather
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/MemberScale-1
+    name: MemberScale
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/BackfillDays-1
+    name: BackfillDays
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/DailyRun-1
+    name: DailyRun
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/NearRealTime-1
+    name: NearRealTime
+    isOptional: true
+  - id: EnergyCommunity-5.1.0/SupersededByReset-1
+    name: SupersededByReset
+    isOptional: true
+  - id: System@2/Description-1
+    name: Comment
+    isOptional: true
+associationRoles:
+- id: AssignedBilling
+  inboundName: Billing
+  outboundName: AssignedTo
+  inboundMultiplicity: N
+  outboundMultiplicity: ZeroOrOne
+  description: A billing document or line item associated with data source.
+- id: AssociatedFacilities
+  inboundName: Customer
+  outboundName: Facilities
+  inboundMultiplicity: ZeroOrOne
+  outboundMultiplicity: N
+  description: 'The operating facilities associated with a customer. Optional: facilities may exist without a customer (data minimization for tenants without the Billing blueprint, AB#4718).'
+- id: BilledMeteringPoint
+  inboundName: Billings
+  outboundName: MeteringPoint
+  inboundMultiplicity: N
+  outboundMultiplicity: ZeroOrOne
+  description: A metering point associated with a billing line item.
+- id: ParticipationPeriod
+  inboundName: Periods
+  outboundName: MeteringPoint
+  inboundMultiplicity: N
+  outboundMultiplicity: One
+  description: Association between a metering point an a time range to get the participation period for a metering point
+attributes:
+- id: AllocationCutOffTime
+  valueType: String
+  ownership: SeedOwned
+  description: Local time (HH:mm, Europe/Vienna) on day D+1 after which the allocation of day D is final and frozen; empty means 06:00
+- id: AllocationKey
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/AllocationKey-1
+  ownership: SeedOwned
+  description: Allocation key of the community (default Dynamic)
+- id: BackfillDays
+  valueType: Int
+  ownership: SeedOwned
+  description: Number of days a reset simulates backwards from today (default 730)
+- id: BillingCycle
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/BillingCycle-1
+  defaultValues:
+  - 1
+  ownership: SeedOwned
+  description: Billing cycle associated with the customer
+- id: BillingDocumentState
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/BillingDocumentState-1
+  ownership: SeedOwned
+  description: The state of the billing document
+- id: BillingType
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/BillingType-1
+  ownership: SeedOwned
+  description: The type of the billing document or billing item
+- id: CompletedAt
+  valueType: DateTime
+  ownership: SeedOwned
+  description: When the reset runner finished the request
+- id: ConsumptionFactor
+  valueType: Double
+  ownership: SeedOwned
+  description: Multiplier on the annual consumption of all simulated consumers (default 1.0, sensible range 0.5-2)
+- id: Currency
+  valueType: String
+  ownership: SeedOwned
+  description: The ISO 4217 representation of the used currency
+- id: CustomerNumber
+  valueType: String
+  ownership: SeedOwned
+  description: Internal customer number
+- id: DailyRun
+  valueType: Boolean
+  ownership: SeedOwned
+  description: Whether the daily simulation run generates values for this community (default true)
+- id: DateOfBirth
+  valueType: DateTime
+  ownership: SeedOwned
+  description: Date of birth of the customer (natural person)
+- id: DiscardReported
+  valueType: Boolean
+  ownership: SeedOwned
+  description: Allow a full reset to discard the values of self-reported metering points
+- id: EffectiveFrom
+  valueType: DateTime
+  ownership: SeedOwned
+  description: First day (Europe/Vienna) the settings revision applies to; never earlier than the day the revision was created, unless it is the base revision of a reset
+- id: EnergyConsumption
+  valueType: Double
+  ownership: SeedOwned
+  description: Energy consumed per year in kWh
+  metaData:
+  - key: Unit
+    value: kWh
+- id: EnergyProductionCapacity
+  valueType: Double
+  ownership: SeedOwned
+  description: Maximal energy production capacity in kWp
+  metaData:
+  - key: Unit
+    value: kWp
+- id: GrossAmount
+  valueType: Double
+  ownership: SeedOwned
+  description: The gross amount of the billing document
+- id: GrossTotal
+  valueType: Double
+  ownership: SeedOwned
+  description: The gross total of the billing document
+- id: IntervalCount
+  valueType: Int
+  ownership: SeedOwned
+  description: Total number of stream-data intervals aggregated into the billed quantity
+- id: IntervalCountL1
+  valueType: Int
+  ownership: SeedOwned
+  description: Number of billed intervals with data quality L1 (metered values)
+- id: IntervalCountL2
+  valueType: Int
+  ownership: SeedOwned
+  description: Number of billed intervals with data quality L2 (interpolated values)
+- id: IntervalCountL3
+  valueType: Int
+  ownership: SeedOwned
+  description: Number of billed intervals with data quality L3 (estimated values)
+- id: IntervalCountUnknown
+  valueType: Int
+  ownership: SeedOwned
+  description: Number of billed intervals with unknown data quality
+- id: LoadProfile
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/LoadProfile-1
+  ownership: SeedOwned
+  description: Standard load profile used to simulate the consumption (default H0)
+- id: MemberScale
+  valueType: Double
+  ownership: SeedOwned
+  description: Multiplier on the number of members of the preset; takes effect only through a full reset (default 1.0)
+- id: MemberSpread
+  valueType: Double
+  ownership: SeedOwned
+  description: Relative seeded spread of the size of each simulated member around its nominal value (0 = none, 0.25 = +/-25 %)
+- id: MeteringDataSource
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/MeteringDataSource-1
+  ownership: SeedOwned
+  description: Origin of the metering values; the simulation only writes metering points marked Simulated
+- id: NearRealTime
+  valueType: Boolean
+  ownership: SeedOwned
+  description: Generate values every 15 minutes instead of once per day (planned)
+- id: NetAmount
+  valueType: Double
+  ownership: SeedOwned
+  description: The net amount of the billing document
+- id: Price
+  valueType: Double
+  ownership: SeedOwned
+  description: The price of a given unit of energy
+- id: PvCapacityFactor
+  valueType: Double
+  ownership: SeedOwned
+  description: Multiplier on the installed capacity of all simulated PV producers (default 1.0, sensible range 0-3)
+- id: PvSpecificYield
+  valueType: Double
+  ownership: SeedOwned
+  description: Annual PV yield in kWh per kWp under clear sky (default 1050, Salzburg)
+  metaData:
+  - key: Unit
+    value: kWh/kWp
+- id: RequestedAt
+  valueType: DateTime
+  ownership: SeedOwned
+  description: When the reset was requested
+- id: RequestedBy
+  valueType: String
+  ownership: SeedOwned
+  description: Who requested the reset (user or client id)
+- id: SimulationNoiseLevel
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/SimulationNoiseLevel-1
+  ownership: SeedOwned
+  description: Seeded noise on simulated values (default Off)
+- id: SimulationPreset
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/SimulationPreset-1
+  ownership: SeedOwned
+  description: Composition preset of the simulated community; changing it takes effect only through a full reset
+- id: SimulationResetMode
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/SimulationResetMode-1
+  ownership: SeedOwned
+  description: Requested reset mode
+- id: SimulationResetState
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/SimulationResetState-1
+  ownership: SeedOwned
+  description: Processing state of the reset request
+- id: SimulationSeed
+  valueType: Int
+  ownership: SeedOwned
+  description: Seed of all random values of the simulation; same settings and seed give identical data
+- id: SimulationWeatherMode
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/SimulationWeatherMode-1
+  ownership: SeedOwned
+  description: Daily weather model for PV (default ClearSky)
+- id: SupersededByReset
+  valueType: Boolean
+  ownership: SeedOwned
+  description: Set by a reset on all earlier settings revisions; superseded revisions no longer apply
+- id: TaxAmount
+  valueType: Double
+  ownership: SeedOwned
+  description: The tax amount of the billing document
+- id: TaxProcedureCreditNote
+  valueType: Enum
+  valueCkEnumId: EnergyCommunity-5.1.0/TaxProcedureCreditNote-1
+  ownership: SeedOwned
+  description: The tax procedure credit notes associated with the billing document
+- id: TaxRate
+  valueType: Double
+  ownership: SeedOwned
+  description: The tax rate of the billing document
+- id: UnitPrice
+  valueType: Double
+  ownership: SeedOwned
+  description: The unit price of the billing document
+records: []
+enums:
+- enumId: AllocationKey
+  values:
+  - key: 0
+    name: Dynamic
+    description: Proportional to consumption, capped at the participant's own consumption
+  - key: 1
+    name: Static
+    description: Fixed shares per participant
+  description: Key used to allocate the community production to the participants per 15-minute slot
+- enumId: BillingCycle
+  values:
+  - key: 0
+    name: Monthly
+    description: The billing cycle is one month
+  - key: 1
+    name: Quarterly
+    description: The billing cycle is one quarter
+  - key: 2
+    name: SemiAnnually
+    description: The billing cycle is six months
+  - key: 3
+    name: Annually
+    description: The billing cycle is one year
+  description: Defines the billing cycle
+- enumId: BillingDocumentState
+  values:
+  - key: 0
+    name: Draft
+    description: The billing document is a draft
+  - key: 1
+    name: Released
+    description: The billing document is released
+  - key: 2
+    name: Sent
+    description: The billing document has been sent
+  - key: 3
+    name: Paid
+    description: The billing document has been paid
+  - key: 4
+    name: Canceled
+    description: The billing document has been canceled
+  description: Defines the billing state
+- enumId: BillingType
+  values:
+  - key: 0
+    name: Debit
+    description: The document is an invoice or the item is a debit note
+  - key: 1
+    name: Credit
+    description: The document or item is an credit note or credit
+  description: The type a billing document or item
+- enumId: LoadProfile
+  values:
+  - key: 0
+    name: H0
+    description: Household
+  - key: 1
+    name: G0
+    description: Commercial, general
+  - key: 2
+    name: L0
+    description: Agriculture, general
+  - key: 3
+    name: HeatPump
+    description: Heat pump (simulation support planned)
+  - key: 4
+    name: Ev
+    description: Electric vehicle charging (simulation support planned)
+  description: Standard load profile used to shape the consumption of a consumer metering point
+- enumId: MeteringDataSource
+  values:
+  - key: 0
+    name: Eda
+    description: Values come from the grid operator via EDA (default for productive metering points)
+  - key: 1
+    name: Simulated
+    description: Values are generated by the energy simulation
+  - key: 2
+    name: SelfReported
+    description: Values are reported by the participant itself (non-EDA meter)
+  description: Origin of the metering values of a metering point
+- enumId: SimulationNoiseLevel
+  values:
+  - key: 0
+    name: Off
+    description: No noise, deterministic profile values
+  - key: 1
+    name: Low
+    description: Low noise
+  - key: 2
+    name: Medium
+    description: Medium noise
+  - key: 3
+    name: High
+    description: High noise
+  description: Strength of the seeded random noise added to simulated values
+- enumId: SimulationPreset
+  values:
+  - key: 0
+    name: Legacy
+    description: 'The historic demo community: 14 household consumers and 3 PV producers'
+  - key: 1
+    name: PvDorf
+    description: 'PV-heavy village: households, two small businesses, many rooftop PV systems (seller at noon)'
+  - key: 2
+    name: Gewerbepark
+    description: 'Business park: commercial load with large rooftop PV (buyer, high coverage)'
+  - key: 3
+    name: Landwirtschaft
+    description: 'Farming community: agricultural load profile, households and barn-roof PV (seller at noon)'
+  - key: 4
+    name: Stadtblock
+    description: 'City block: many small households and one small PV system (pure buyer)'
+  - key: 5
+    name: WasserkraftTal
+    description: Valley with a small run-of-river hydro plant (night-time seller; hydro profile from M3)
+  description: Community composition preset of the energy simulation (members, mix and sizes)
+- enumId: SimulationResetMode
+  values:
+  - key: 0
+    name: Values
+    description: Overwrite the simulated values in place; structure and self-reported values stay
+  - key: 1
+    name: Full
+    description: Delete simulated master data and archives and rebuild everything
+  description: Mode of a simulation reset
+- enumId: SimulationResetState
+  values:
+  - key: 0
+    name: Requested
+    description: The request waits for the reset runner
+  - key: 1
+    name: Running
+    description: The reset is running
+  - key: 2
+    name: Done
+    description: The reset finished successfully
+  - key: 3
+    name: Rejected
+    description: The request was rejected (e.g. full reset not allowed any more)
+  - key: 4
+    name: Failed
+    description: The reset failed; see the message
+  description: Processing state of a simulation reset request
+- enumId: SimulationWeatherMode
+  values:
+  - key: 0
+    name: ClearSky
+    description: Every day is a clear-sky day
+  - key: 1
+    name: Mixed
+    description: Seeded mix of sunny, changeable and overcast days
+  - key: 2
+    name: Variable
+    description: Mixed weather with bad-weather periods
+  description: Daily weather model applied to simulated PV production
+- enumId: TaxProcedureCreditNote
+  values:
+  - key: 0
+    name: SmallBusinessOwners
+    description: No tax procedure is applied for small business owners
+  - key: 1
+    name: ReverseCharge
+    description: The reverse charge procedure is applied
+  - key: 2
+    name: NoTaxProcedure
+    description: No tax procedure is applied
+  - key: 3
+    name: FarmerTaxProcedure
+    description: The farmer tax procedure is applied, which is a reduced tax amount for farmers
+  description: Defines the tax procedure credit notes for a billing document or customer
+modelId: EnergyCommunity-5.1.0
+ckLanguage: 2

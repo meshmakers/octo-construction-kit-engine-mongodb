@@ -48,7 +48,12 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
     {
         try
         {
-            var repository = await _systemContext.TryFindTenantRepositoryAsync(tenantId);
+            // The engine maintenance services (CK model migrations, blueprints, secret maintenance) also reach the
+            // copies of synced master data, so they get the maintenance repository (SyncOriginWriteRules).
+            var tenantContext = await _systemContext.TryFindTenantContextAsync(tenantId);
+            var repository = tenantContext is TenantContext concrete
+                ? concrete.GetMaintenanceTenantRepository()
+                : tenantContext?.GetTenantRepository();
 
             if (repository == null)
             {
