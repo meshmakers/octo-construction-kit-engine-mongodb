@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- AB#9761 Test: storno rules against a real MongoDB. A credit note that cancels a released invoice (`System/Cancels`)
+  is numbered from its own range when it is released, the invoice stays byte for byte the same and finds it through
+  `CancelledBy`; a storno of a draft (169), a second released storno - new, or a second draft released later - (170)
+  and a storno without a configured storno type (172) are refused. The test model of `AutoIncrementReleaseTests`
+  gains the storno type `CreditNote`. Tests: `ReleasedDocumentLockIntegrationTests`.
+- AB#8676 Test: the distributed lock tests with real contention and wall-clock bounds (`ConcurrentAcquire`, heartbeat
+  loss, cancellation while polling) are `Category=Stress` and `LoadSensitive`, out of the normal run.
+
 - AB#9759 Test: D11 against a real MongoDB - once a range with `Release` has handed out a number, removing `Release`,
   changing `StateAttribute` or `StornoCkTypeId`, removing a released value, adding a changeable attribute and deleting
   the range are refused with message 168 and a Denied entry, the range unchanged; before the first number every change

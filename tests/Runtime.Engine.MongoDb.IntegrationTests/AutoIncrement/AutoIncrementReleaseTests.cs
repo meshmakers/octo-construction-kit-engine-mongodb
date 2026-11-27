@@ -460,11 +460,29 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
         return new MongoClient(urlBuilder.ToMongoUrl()).GetDatabase(tenantId.ToLowerInvariant());
     }
 
-    /// <summary>Invoice and LegacyDoc, each with Title, the enum DocumentState and a String Number from its own counter.</summary>
+    /// <summary>
+    ///     Invoice, LegacyDoc and CreditNote (the storno of an Invoice, association System/Cancels), each with Title, the
+    ///     enum DocumentState and a String Number from its own counter.
+    /// </summary>
     internal static CkCompiledModelRoot DocumentModel(CkModelId system)
     {
         var id = new CkModelId("ReleaseTest-1.0.0");
         var stateEnumId = new CkId<CkEnumId>(id, new CkEnumId("DocumentStates-1"));
+
+        // The storno type: numbered from its own range, cancels an Invoice (role System/Cancels, design note 1.6).
+        CkCompiledTypeDto StornoType()
+        {
+            var type = DocumentType("CreditNote", "CreditNoteNumber");
+            type.Associations =
+            [
+                new CkTypeAssociationDto
+                {
+                    CkRoleId = new CkId<CkAssociationRoleId>(system, new CkAssociationRoleId("Cancels-1")),
+                    TargetCkTypeId = new CkId<CkTypeId>(id, new CkTypeId("Invoice-1"))
+                }
+            ];
+            return type;
+        }
 
         CkCompiledTypeDto DocumentType(string typeName, string reference) => new()
         {
@@ -522,7 +540,8 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
             Types =
             [
                 DocumentType("Invoice", "InvoiceNumber"),
-                DocumentType("LegacyDoc", "LegacyNumber")
+                DocumentType("LegacyDoc", "LegacyNumber"),
+                StornoType()
             ]
         };
     }

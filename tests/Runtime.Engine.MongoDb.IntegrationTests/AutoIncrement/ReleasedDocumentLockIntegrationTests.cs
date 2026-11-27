@@ -45,6 +45,8 @@ public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixt
 
     private static readonly RtCkId<CkTypeId> InvoiceTypeId = new("ReleaseTest/Invoice");
     private static readonly RtCkId<CkTypeId> AutoIncrementTypeId = new("System/AutoIncrement");
+    private static readonly RtCkId<CkTypeId> CreditNoteTypeId = new("ReleaseTest/CreditNote");
+    private static readonly RtCkId<CkAssociationRoleId> CancelsRoleId = new("System/Cancels");
 
     public static TheoryData<string> RepositoryWritePaths =>
     [
@@ -294,6 +296,128 @@ public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixt
                 Directory.Delete(backupDirectory, true);
             }
         }
+    }
+
+    /// <summary>
+    ///     Storno AC 1 and 4: a credit note that cancels a released invoice is created as a draft with its
+    ///     <c>System/Cancels</c> association and released; it gets its own number from its own range, the invoice is byte
+    ///     for byte the same, and the invoice finds the credit note through the inbound association.
+    /// </summary>
+    [Fact]
+    public async Task Storno_OfAReleasedInvoice_GetsItsOwnNumber_AndTheOriginalStaysUnchanged()
+    {
+        await WithTenantAsync("relstorno", async (repository, database) =>
+        {
+            await InsertRangeAsync(repository, storno: "ReleaseTest/CreditNote");
+            await InsertRangeAsync(repository, wellKnownName: "CreditNoteNumber");
+            var invoice = await InsertInvoiceAsync(repository, Released);
+            var before = await RawAsync(database, invoice.RtId);
+
+            var creditNote = await InsertCreditNoteAsync(repository, invoice.RtId, Draft);
+            var release = new RtEntity(CreditNoteTypeId, creditNote.RtId,
+                new Dictionary<string, object?> { [StateAttribute] = Released });
+            await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateUpdate(release.ToRtEntityId(), release));
+
+            Assert.EndsWith("-00001", (await RawAsync(database, creditNote.RtId))["attributes"]["number"].AsString);
+            Assert.Equal(before, await RawAsync(database, invoice.RtId));
+            using var session = await repository.GetSessionAsync();
+            var inbound = await repository.GetRtAssociationsAsync(session,
+                [new RtEntityId(InvoiceTypeId, invoice.RtId)],
+                RtAssociationExtendedQueryOptions.Create(GraphDirections.Inbound, CancelsRoleId));
+            var cancelledBy = Assert.Single(inbound.Values.SelectMany(r => r.Items));
+            Assert.Equal(creditNote.RtId, cancelledBy.OriginRtId);
+        });
+    }
+
+    /// <summary>Storno AC 2 (D7): a storno of a draft invoice is refused with message 169; nothing is written.</summary>
+    [Fact]
+    public async Task Storno_OfADraft_IsRefused()
+    {
+        await WithTenantAsync("relsdraft", async (repository, database) =>
+        {
+            await InsertRangeAsync(repository, storno: "ReleaseTest/CreditNote");
+            await InsertRangeAsync(repository, wellKnownName: "CreditNoteNumber");
+            var draft = await InsertInvoiceAsync(repository, Draft);
+
+            var exception = await Record.ExceptionAsync(() => InsertCreditNoteAsync(repository, draft.RtId, Draft));
+
+            var refused = Assert.IsType<StornoRefusedException>(exception);
+            Assert.Equal(169, Assert.Single(refused.OperationResult.Messages).MessageNumber);
+            Assert.Empty(await CreditNotesOfAsync(repository, draft.RtId));
+        });
+    }
+
+    /// <summary>
+    ///     Storno AC 3 (D6): an invoice with a released credit note gets no second one - neither a new credit note
+    ///     linked to it nor a second draft credit note that is released later (message 170).
+    /// </summary>
+    [Fact]
+    public async Task SecondStorno_IsRefused()
+    {
+        await WithTenantAsync("relssecond", async (repository, _) =>
+        {
+            await InsertRangeAsync(repository, storno: "ReleaseTest/CreditNote");
+            await InsertRangeAsync(repository, wellKnownName: "CreditNoteNumber");
+            var invoice = await InsertInvoiceAsync(repository, Released);
+            var otherDraft = await InsertCreditNoteAsync(repository, invoice.RtId, Draft);
+            await InsertCreditNoteAsync(repository, invoice.RtId, Released);
+
+            var second = await Record.ExceptionAsync(() => InsertCreditNoteAsync(repository, invoice.RtId, Released));
+            Assert.Equal(170, Assert.Single(Assert.IsType<StornoRefusedException>(second).OperationResult.Messages)
+                .MessageNumber);
+
+            var release = new RtEntity(CreditNoteTypeId, otherDraft.RtId,
+                new Dictionary<string, object?> { [StateAttribute] = Released });
+            var late = await Record.ExceptionAsync(() =>
+                ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateUpdate(release.ToRtEntityId(), release)));
+            Assert.Equal(170, Assert.Single(Assert.IsType<StornoRefusedException>(late).OperationResult.Messages)
+                .MessageNumber);
+            Assert.Equal(2, (await CreditNotesOfAsync(repository, invoice.RtId)).Count);
+        });
+    }
+
+    /// <summary>A storno of an invoice whose range configures no storno type is refused (message 172).</summary>
+    [Fact]
+    public async Task Storno_WithoutAConfiguredStornoType_IsRefused()
+    {
+        await WithTenantAsync("relsnone", async (repository, _) =>
+        {
+            await InsertRangeAsync(repository);
+            await InsertRangeAsync(repository, wellKnownName: "CreditNoteNumber");
+            var invoice = await InsertInvoiceAsync(repository, Released);
+
+            var exception = await Record.ExceptionAsync(() => InsertCreditNoteAsync(repository, invoice.RtId, Draft));
+
+            Assert.Equal(172, Assert.Single(Assert.IsType<StornoRefusedException>(exception).OperationResult.Messages)
+                .MessageNumber);
+        });
+    }
+
+    private static async Task<RtEntity> InsertCreditNoteAsync(ITenantRepository repository, OctoObjectId originalId,
+        int state)
+    {
+        var creditNote = new RtEntity(CreditNoteTypeId, OctoObjectId.GenerateNewId(),
+            new Dictionary<string, object?> { ["Title"] = "credit note", [StateAttribute] = state });
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+        var operationResult = new OperationResult();
+        await repository.ApplyChangesAsync(session, [EntityUpdateInfo<RtEntity>.CreateInsert(creditNote)],
+            [
+                AssociationUpdateInfo.CreateInsert(creditNote.ToRtEntityId(), new RtEntityId(InvoiceTypeId, originalId),
+                    CancelsRoleId)
+            ], operationResult);
+        Assert.False(operationResult.HasErrors, operationResult.GetMessages());
+        await session.CommitTransactionAsync();
+        return creditNote;
+    }
+
+    private static async Task<List<RtAssociation>> CreditNotesOfAsync(ITenantRepository repository,
+        OctoObjectId originalId)
+    {
+        using var session = await repository.GetSessionAsync();
+        var inbound = await repository.GetRtAssociationsAsync(session, [new RtEntityId(InvoiceTypeId, originalId)],
+            RtAssociationExtendedQueryOptions.Create(GraphDirections.Inbound, CancelsRoleId));
+        return inbound.Values.SelectMany(r => r.Items).ToList();
     }
 
     public static TheoryData<string> RefusedRangeChanges =>
@@ -552,11 +676,11 @@ public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixt
         """;
 
     private static async Task<OctoObjectId> InsertRangeAsync(ITenantRepository repository,
-        List<string>? changeable = null, string? storno = null)
+        List<string>? changeable = null, string? storno = null, string wellKnownName = "InvoiceNumber")
     {
         var counter = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
         counter.RtId = OctoObjectId.GenerateNewId();
-        counter.RtWellKnownName = "InvoiceNumber";
+        counter.RtWellKnownName = wellKnownName;
         counter.Format = "RE-{yyyy}-{counter:D5}";
         counter.CurrentValue = 0;
         counter.End = 99999;
