@@ -13,6 +13,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
+using Meshmakers.Octo.Runtime.Engine.Repositories;
 
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -234,6 +235,65 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
             Assert.False((await AttributesAsync(database, draft.RtId)).Contains("number"));
             Assert.Equal(counterBefore, await CounterDocumentAsync(database, counterId));
         });
+    }
+
+    /// <summary>
+    ///     D13: on a range that numbers on release the number is never supplied by the caller. An insert with a number, an
+    ///     update that releases a draft with a chosen number and an update that puts a number on a draft are refused
+    ///     (message 174, <c>RELEASED_DOCUMENT_LOCKED</c>); nothing is written and the counter is unchanged. An update
+    ///     that repeats the stored number passes.
+    /// </summary>
+    [Fact]
+    public async Task ACallerSuppliedNumber_IsRefused_OnInsertReleaseUpdateAndDraftUpdate()
+    {
+        await WithTenantAsync("relsupplied", async (repository, database, _) =>
+        {
+            var counterId = await InsertReleaseCounterAsync(repository);
+            var draft = Invoice(Draft);
+            await ApplyAsync(repository, Insert(draft));
+            var counterBefore = await CounterDocumentAsync(database, counterId);
+
+            var inserted = Invoice(Released);
+            inserted.SetAttributeRawValue(NumberAttribute, "RE-2027-00001");
+            await AssertSuppliedNumberRefusedAsync(() => ApplyAsync(repository, Insert(inserted)), "insert");
+            Assert.Null(await TryFindDocumentAsync(database, inserted.RtId));
+
+            var release = StateUpdate(draft.RtId, Released);
+            release.SetAttributeRawValue(NumberAttribute, "RE-2027-00001");
+            await AssertSuppliedNumberRefusedAsync(() => ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateUpdate(release.ToRtEntityId(), release)), "update");
+
+            var numberOnDraft = new RtEntity(InvoiceTypeId, draft.RtId,
+                new Dictionary<string, object?> { [NumberAttribute] = "RE-2027-00001" });
+            await AssertSuppliedNumberRefusedAsync(() => ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateUpdate(numberOnDraft.ToRtEntityId(), numberOnDraft)), "update");
+
+            var stored = await AttributesAsync(database, draft.RtId);
+            Assert.Equal(Draft, stored["documentState"].ToInt32());
+            Assert.False(stored.Contains("number"));
+            Assert.Equal(counterBefore, await CounterDocumentAsync(database, counterId));
+
+            // Released by the engine, the stored number may be repeated by a later update.
+            var engineRelease = StateUpdate(draft.RtId, Released);
+            await ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateUpdate(engineRelease.ToRtEntityId(), engineRelease));
+            var number = (await AttributesAsync(database, draft.RtId))["number"].AsString;
+            var repeated = StateUpdate(draft.RtId, Released);
+            repeated.SetAttributeRawValue(NumberAttribute, number);
+            await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateUpdate(repeated.ToRtEntityId(), repeated));
+            Assert.Equal(number, (await AttributesAsync(database, draft.RtId))["number"].AsString);
+        });
+    }
+
+    private static async Task AssertSuppliedNumberRefusedAsync(Func<Task> write, string operation)
+    {
+        var refused = await Assert.ThrowsAsync<ReleasedDocumentLockedException>(write);
+        var refusal = Assert.Single(refused.Refusals);
+        Assert.Equal(operation, refusal.Operation);
+        Assert.Equal([NumberAttribute], refusal.Changes);
+        Assert.Equal(ReleasedDocumentNumberRefusal.MessageNumber,
+            Assert.Single(refused.OperationResult.Messages).MessageNumber);
+        Assert.StartsWith($"{ReleasedDocumentLockedException.ErrorCode}: ", refused.Message, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- AB#9759 Fix: on a number range with a release configuration the number is never supplied by the caller (design note
+  D13). `AutoIncrementModifier` refuses an insert, replace or partial update through `BulkRtMutation` whose number
+  attribute carries a value other than the stored number (`ReleasedDocumentLockedException`, code
+  `RELEASED_DOCUMENT_LOCKED`, message 174); before, a caller could release a draft with a number of its choice, without
+  advancing the counter and without a `Release` audit entry. Repeating the stored number passes; the bulk import keeps
+  the number from its file (D10); a range without release configuration keeps a supplied value as before. Tests:
+  `AutoIncrementReleaseTests.ACallerSuppliedNumber_IsRefused_OnInsertReleaseUpdateAndDraftUpdate`.
 - AB#9763 New: `ITenantRepository.GetNumberRangeGapReportAsync(session, numberRange, fiscalYear)` - the gap report of a
   number range per fiscal year: the counter values from `StartValue` (or 1) to the fiscal year's current value (of the
   range without periods) that no released document carries (as intervals), the values more than one document carries

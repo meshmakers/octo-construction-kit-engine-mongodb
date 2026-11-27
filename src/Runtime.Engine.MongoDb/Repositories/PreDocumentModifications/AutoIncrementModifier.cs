@@ -9,6 +9,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.Repositories;
 
 using Microsoft.Extensions.Logging;
 
@@ -118,6 +119,7 @@ public class AutoIncrementModifier(
 
         // The numbers to allocate, in batch order (also across types that share a counter).
         var requests = new List<NumberRequest>();
+        var supplied = new List<SuppliedCandidate>();
         foreach (var rtEntity in documentList)
         {
             if (!autoIncrementTypes.TryGetValue(rtEntity.GetRtCkTypeId(), out var autoIncrementType))
@@ -130,9 +132,18 @@ public class AutoIncrementModifier(
             foreach (var (ckTypeAttributeGraph, reference) in autoIncrementType.Attributes)
             {
                 var attributeName = ckTypeAttributeGraph.AttributeName;
-                if (HasValue(rtEntity.GetAttributeValueOrDefault(attributeName)))
+                var suppliedValue = rtEntity.GetAttributeValueOrDefault(attributeName);
+                if (HasValue(suppliedValue))
                 {
-                    // A supplied value is kept: never renumber, never advance the counter for it.
+                    // A supplied value is kept: never renumber, never advance the counter for it. A range that numbers
+                    // on release refuses it unless it is the stored number (D13), checked below.
+                    if (storedEntity == null ||
+                        !SameNumber(suppliedValue, storedEntity.GetAttributeValueOrDefault(attributeName)))
+                    {
+                        supplied.Add(new SuppliedCandidate(rtEntity, autoIncrementType, ckTypeAttributeGraph,
+                            reference, storedEntity == null ? OperationInsert : OperationReplace, suppliedValue!));
+                    }
+
                     continue;
                 }
 
@@ -161,6 +172,12 @@ public class AutoIncrementModifier(
             }
         }
 
+        if (supplied.Count > 0)
+        {
+            RefuseSuppliedNumbers(repositoryDataSource, supplied,
+                await ReadCountersAsync(session, repositoryDataSource, supplied.Select(c => c.Reference)));
+        }
+
         await NumberRequestsAsync(session, repositoryDataSource, requests, null);
     }
 
@@ -181,6 +198,7 @@ public class AutoIncrementModifier(
         }
 
         var candidates = new List<UpdateCandidate>();
+        var supplied = new List<UpdateCandidate>();
         foreach (var partial in partialDocuments)
         {
             if (!autoIncrementTypes.TryGetValue(partial.GetRtCkTypeId(), out var autoIncrementType))
@@ -190,24 +208,24 @@ public class AutoIncrementModifier(
 
             foreach (var (attribute, reference) in autoIncrementType.Attributes)
             {
-                if (!HasValue(partial.GetAttributeValueOrDefault(attribute.AttributeName)))
-                {
-                    candidates.Add(new UpdateCandidate(partial, autoIncrementType, attribute, reference));
-                }
+                (HasValue(partial.GetAttributeValueOrDefault(attribute.AttributeName)) ? supplied : candidates)
+                    .Add(new UpdateCandidate(partial, autoIncrementType, attribute, reference));
             }
         }
 
-        if (candidates.Count == 0)
+        if (candidates.Count == 0 && supplied.Count == 0)
         {
             return;
         }
 
         // The ranges are read once per batch; only a range with release configuration numbers on an update.
-        var autoIncrementCollection = GetAutoIncrementCollection(repositoryDataSource);
-        var references = candidates.Select(c => c.Reference).Distinct().ToList();
-        var counters = (await autoIncrementCollection.FindManyAsync(session,
-                c => references.Contains(c.RtWellKnownName!)))
-            .GroupBy(c => c.RtWellKnownName!).ToDictionary(g => g.Key, g => g.First());
+        var counters = await ReadCountersAsync(session, repositoryDataSource,
+            candidates.Concat(supplied).Select(c => c.Reference));
+
+        if (supplied.Count > 0)
+        {
+            await RefuseSuppliedUpdatesAsync(session, repositoryDataSource, supplied, counters);
+        }
 
         var releasing = new List<UpdateCandidate>();
         foreach (var candidate in candidates)
@@ -570,6 +588,102 @@ public class AutoIncrementModifier(
         return release.IsReleased(document.GetAttributeValueOrDefault(stateAttribute.AttributeName), stateAttribute,
             stateEnum);
     }
+
+    /// <summary>The counters of <paramref name="references" />, by well-known name (one read).</summary>
+    private async Task<Dictionary<string, RtAutoIncrement>> ReadCountersAsync(IOctoSession session,
+        IRepositoryDataSource repositoryDataSource, IEnumerable<string> references)
+    {
+        var names = references.Distinct().ToList();
+        return (await GetAutoIncrementCollection(repositoryDataSource).FindManyAsync(session,
+                c => names.Contains(c.RtWellKnownName!)))
+            .GroupBy(c => c.RtWellKnownName!).ToDictionary(g => g.Key, g => g.First());
+    }
+
+    /// <summary>
+    ///     Refuses the number values a partial update supplies for a range with release configuration (D13) when they
+    ///     differ from the stored number; an update that repeats the stored number changes nothing and passes.
+    /// </summary>
+    private async Task RefuseSuppliedUpdatesAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
+        List<UpdateCandidate> supplied, IReadOnlyDictionary<string, RtAutoIncrement> counters)
+    {
+        var onReleaseRanges = supplied.Where(c =>
+            counters.TryGetValue(c.Reference, out var counter) && GetValidRelease(counter, c.Reference) != null).ToList();
+        var refused = new List<SuppliedCandidate>();
+        foreach (var typeGroup in onReleaseRanges.GroupBy(c => c.Type.CkTypeId))
+        {
+            var stored = await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource,
+                typeGroup.First().Type.CkTypeGraph, typeGroup.Select(c => c.Partial));
+            foreach (var candidate in typeGroup)
+            {
+                var value = candidate.Partial.GetAttributeValueOrDefault(candidate.Attribute.AttributeName)!;
+                if (stored.TryGetValue(candidate.Partial.RtId, out var storedEntity) &&
+                    SameNumber(value, storedEntity.GetAttributeValueOrDefault(candidate.Attribute.AttributeName)))
+                {
+                    continue;
+                }
+
+                refused.Add(new SuppliedCandidate(candidate.Partial, candidate.Type, candidate.Attribute,
+                    candidate.Reference, OperationUpdate, value));
+            }
+        }
+
+        RefuseSuppliedNumbers(repositoryDataSource, refused, counters);
+    }
+
+    /// <summary>
+    ///     Throws the refusal (message 174, <c>RELEASED_DOCUMENT_LOCKED</c>) of the supplied numbers of
+    ///     <paramref name="supplied" /> that belong to a range with release configuration; a range without one keeps a
+    ///     supplied value as before.
+    /// </summary>
+    private void RefuseSuppliedNumbers(IRepositoryDataSource repositoryDataSource, List<SuppliedCandidate> supplied,
+        IReadOnlyDictionary<string, RtAutoIncrement> counters)
+    {
+        var refusals = new List<ReleasedDocumentNumberRefusal.SuppliedNumber>();
+        foreach (var candidate in supplied)
+        {
+            if (!counters.TryGetValue(candidate.Reference, out var counter))
+            {
+                continue;
+            }
+
+            var release = GetValidRelease(counter, candidate.Reference);
+            if (release == null)
+            {
+                continue;
+            }
+
+            var stateAttribute = GetStateAttribute(release, candidate.Type.CkTypeGraph, counter, candidate.Reference);
+            var state = candidate.Entity.GetAttributeValueOrDefault(stateAttribute.AttributeName);
+            refusals.Add(new ReleasedDocumentNumberRefusal.SuppliedNumber(
+                new RtEntityId(candidate.Type.CkTypeId, candidate.Entity.RtId), candidate.Operation,
+                candidate.Attribute.AttributeName, candidate.Value,
+                Convert.ToString(state, CultureInfo.InvariantCulture) ?? string.Empty, candidate.Reference));
+        }
+
+        if (refusals.Count > 0)
+        {
+            logger.LogWarning("Refused {Count} caller-supplied number(s) of a number range that numbers on release",
+                refusals.Count);
+            throw ReleasedDocumentNumberRefusal.Create(refusals);
+        }
+    }
+
+    private static bool SameNumber(object? supplied, object? stored) =>
+        HasValue(stored) && string.Equals(Convert.ToString(supplied, CultureInfo.InvariantCulture),
+            Convert.ToString(stored, CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
+    private const string OperationInsert = "insert";
+    private const string OperationReplace = "replace";
+    private const string OperationUpdate = "update";
+
+    /// <summary>A number value a write supplies, with the operation that supplies it.</summary>
+    private sealed record SuppliedCandidate(
+        RtEntity Entity,
+        AutoIncrementType Type,
+        CkTypeAttributeGraph Attribute,
+        string Reference,
+        string Operation,
+        object Value);
 
     private sealed record UpdateCandidate(
         RtEntity Partial,
