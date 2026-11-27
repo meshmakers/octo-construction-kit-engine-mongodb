@@ -327,6 +327,73 @@ public class StagingCopyRunnerTests
     }
 
     [Fact]
+    public async Task CopyFrom_AnEarlierDumpWithTheColumnOfARemovedComputedColumn_IsRefusedNamingItAsALeftover()
+    {
+        var dumped = await Dumped();
+        // A dump made before leftovers were left out: its data table still describes the removed computed column.
+        var data = dumped.Tables.Single(t => t.Table == ArchiveCopyTable.Data);
+        var plan = dumped with
+        {
+            Tables = dumped.Tables.Select(t => t.Table == ArchiveCopyTable.Data
+                ? data with { Columns = [.. data.Columns, new ArchiveCopyColumn("tripled", "double precision")] }
+                : t).ToList()
+        };
+        var target = RestoreTarget with
+        {
+            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid", "value"], [], new HashSet<string> { "value" })
+        };
+
+        var ex = await Assert.ThrowsAsync<ArchiveCopyRefusedException>(() =>
+            Collect(Runner().CopyFromAsync(target, plan, Location, Small, Ct)));
+
+        Assert.Equal(ArchiveCopyRefusalReason.ColumnMissing, ex.Reason);
+        Assert.Contains("'tripled'", ex.Message);
+        Assert.Contains("left over from removed computed columns", ex.Message);
+        Assert.DoesNotContain(_crate.Executed, s => s.StartsWith("COPY", StringComparison.Ordinal));
+        Assert.Empty(_crate.TargetRows);
+    }
+
+    [Fact]
+    public async Task CopyFrom_ADumpedColumnThatIsNoLeftover_IsRefusedWithoutTheLeftoverHint()
+    {
+        var plan = await Dumped();
+        _crate.TargetColumns = ["timestamp", "rtid"]; // 'value' is missing, and it is an attribute of the type
+        var target = RestoreTarget with
+        {
+            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid"], [], new HashSet<string> { "value" })
+        };
+
+        var ex = await Assert.ThrowsAsync<ArchiveCopyRefusedException>(() =>
+            Collect(Runner().CopyFromAsync(target, plan, Location, Small, Ct)));
+
+        Assert.Contains("'value'", ex.Message);
+        Assert.DoesNotContain("left over", ex.Message);
+    }
+
+    [Fact]
+    public async Task Plan_LeavesTheLeftoversOfComputedColumnsOut_AndTheDumpNamesTheColumnsItCopies()
+    {
+        WithData();
+        _crate.SourceColumns = ["timestamp", "rtid", "value", "tripled", "doubled__v1", "note"];
+        _crate.ColumnTypes["value"] = "double precision";
+        _crate.ColumnTypes["tripled"] = "double precision";
+        _crate.ColumnTypes["doubled__v1"] = "double precision";
+        var target = SourceTarget with
+        {
+            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid", "value"], [], new HashSet<string> { "value" })
+        };
+
+        var plan = await Runner().PlanAsync(target, Small, Ct);
+
+        // 'tripled' maps to no attribute, 'doubled__v1' is a versioned name: both are left out. 'note' is text and stays.
+        Assert.Equal(["timestamp", "rtid", "value", "note"],
+            plan.Tables.Single(t => t.Table == ArchiveCopyTable.Data).Columns.Select(c => c.Name));
+        Assert.Equal(17, plan.TotalRows);
+        Assert.Equal(["timestamp", "rtid", "value", "note"], StagingCopyRunner.DumpedColumns(target, plan));
+        Assert.Null(StagingCopyRunner.DumpedColumns(SourceTarget, plan));
+    }
+
+    [Fact]
     public async Task CopyFrom_NotEnoughDiskOnANode_RefusesWithTheSizes_BeforeChangingAnything()
     {
         var plan = await Dumped(withBytes: true);

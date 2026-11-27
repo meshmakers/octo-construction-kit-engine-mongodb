@@ -20,9 +20,14 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
 /// AB#9141: physical columns of the data table a dump leaves out - columns that reach a Hidden attribute and the computed
 /// and aggregate columns derived from them. <c>null</c> when the dump copies every column. A load ignores it.
 /// </param>
+/// <param name="Ownership">
+/// The columns of the data table the archive definition owns, and which of the others are left over from computed
+/// columns (a removed computed column, an earlier formula version); a dump leaves the leftovers out, a load names them when
+/// a dump made before still carries them. <c>null</c> when nothing is known about the definition.
+/// </param>
 internal sealed record ArchiveCopyTarget(
     OctoObjectId ArchiveRtId, string Schema, string TableName, string TimeColumn, string? GenerationMapTableName = null,
-    Func<string, bool>? ExcludedColumns = null)
+    Func<string, bool>? ExcludedColumns = null, ArchiveColumnOwnership? Ownership = null)
 {
     public string QualifiedTable => $"\"{Schema}\".\"{TableName}\"";
 
@@ -109,6 +114,24 @@ internal sealed class StagingCopyRunner(
                 description = description with
                 {
                     Columns = description.Columns.Where(c => !excluded(TopLevelColumn(c.Name))).ToList()
+                };
+            }
+        }
+
+        if (target.Ownership is { } ownership && description.Columns.Count > 0)
+        {
+            // The physical columns of removed computed columns and the earlier versions of changed formulas stay in
+            // the table, but the restore provisions the table from the definition; their derived values are not dumped.
+            var leftovers = ownership.FindLeftovers(description.Columns);
+            if (leftovers.Count > 0)
+            {
+                logger.LogWarning(
+                    "Archive {ArchiveRtId} of tenant {TenantId}: the dump leaves out {Count} column(s) the archive definition does not " +
+                    "own, left over from removed computed columns or earlier formula versions (derived values): {Columns}.",
+                    target.ArchiveRtId, tenantId, leftovers.Count, string.Join(", ", leftovers.Order(StringComparer.Ordinal)));
+                description = description with
+                {
+                    Columns = description.Columns.Where(c => !leftovers.Contains(TopLevelColumn(c.Name))).ToList()
                 };
             }
         }
@@ -279,10 +302,13 @@ internal sealed class StagingCopyRunner(
     /// </summary>
     internal static IReadOnlyList<string>? DumpedColumns(ArchiveCopyTarget target, ArchiveCopyPlan plan)
     {
-        if (target.ExcludedColumns is not { } excluded)
+        if (target.ExcludedColumns is null && target.Ownership is null)
         {
             return null;
         }
+
+        // The leftovers of computed columns are not in a plan of PlanAsync; the columns it describes are copied.
+        var excluded = target.ExcludedColumns ?? (_ => false);
 
         var data = plan.Tables.FirstOrDefault(t => t.Table == ArchiveCopyTable.Data)
                    ?? throw new InvalidOperationException(
@@ -589,9 +615,17 @@ internal sealed class StagingCopyRunner(
             if (missing.Count > 0)
             {
                 var what = dumped.Table == ArchiveCopyTable.Data ? "The table" : "The generation map table";
+                // A dump made before the leftovers of computed columns were left out still carries them.
+                var leftovers = dumped.Table == ArchiveCopyTable.Data && target.Ownership is { } ownership
+                    ? ownership.FindLeftovers(dumped.Columns)
+                    : (IReadOnlySet<string>)new HashSet<string>();
+                var hint = missing.All(leftovers.Contains)
+                    ? " The columns are left over from removed computed columns or earlier formula versions of the archive " +
+                      "(derived values the definition no longer owns); a dump made with this version leaves them out."
+                    : string.Empty;
                 throw new ArchiveCopyRefusedException(ArchiveCopyRefusalReason.ColumnMissing,
                     $"{what} of archive '{target.ArchiveRtId}' has no column {string.Join(", ", missing.Select(m => $"'{m}'"))} " +
-                    "that the dump contains. Nothing was loaded.", target.ArchiveRtId);
+                    "that the dump contains. Nothing was loaded." + hint, target.ArchiveRtId);
             }
         }
     }
