@@ -429,7 +429,8 @@ twice:
 1. **Pre-check, before anything destructive.** The `Ck*` collections of the archive are restored into a scratch database
    `<tenant database prefix>restorecheck_<20 hex digits>`, checked there, and the scratch database is dropped again. A
    refused dump drops no existing tenant, writes nothing into the target and leaves no database behind. A process that
-   dies during the pre-check can leave a scratch database; it holds only CK collections and is safe to drop.
+   dies during the pre-check can leave a scratch database; it holds only CK collections and is safe to drop (its name is
+   in the INFO line "Restore of tenant ...: checking the service-managed CK models of the dump in scratch database ...").
 2. **Check and raise, after mongorestore and before the attach**, on the restored target (also for `attachTenant: false`).
    A refusal here (a raise that does not complete, a catalog or system tenant that cannot be read any more) comes after
    `dropExistingTenant` dropped an existing tenant: that tenant is then gone, like after any restore that fails after

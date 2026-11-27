@@ -609,6 +609,10 @@ internal class TenantBackupService(
         var sourceDatabaseName = string.IsNullOrEmpty(effectiveSourceDatabaseName)
             ? databaseName
             : effectiveSourceDatabaseName;
+        // Named, so an operator can drop a scratch database a crashed process left behind.
+        logger.LogInformation(
+            "Restore of tenant '{TenantId}': checking the service-managed CK models of the dump in scratch database " +
+            "'{ScratchDatabaseName}'", tenantId, scratchDatabaseName);
         try
         {
             var options = new MongoRestoreOptions

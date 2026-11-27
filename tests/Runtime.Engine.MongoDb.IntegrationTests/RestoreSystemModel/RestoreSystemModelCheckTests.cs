@@ -316,23 +316,9 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         Assert.False(await TenantExistsAsync(target), "a refused restore must not attach the tenant");
         Assert.False(await Sys.IsDatabaseExistingAsync(target), "a refused restore must not leave its database");
         Assert.False(await UserExistsAsync(target), "a refused restore must not leave a database user");
-        // Restores of other test collections share the MongoDB container and may hold their own scratch database for a
-        // moment; a scratch database this restore leaked never goes away.
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        List<string> scratch;
-        do
-        {
-            scratch = (await ListDatabasesAsync())
-                .Where(n => n.Contains("restorecheck_", StringComparison.Ordinal)).ToList();
-            if (scratch.Count == 0)
-            {
-                break;
-            }
-
-            await Task.Delay(500, TestContext.Current.CancellationToken);
-        } while (DateTime.UtcNow < deadline);
-
-        Assert.Empty(scratch);
+        // The scratch database of exactly this restore (other test collections restore on the same container).
+        var scratch = ScratchDatabaseOf(target);
+        Assert.DoesNotContain(scratch, await ListDatabasesAsync());
     }
 
     private async Task AssertGenericUserWriteRefusedAsync(ITenantContext tenant)
@@ -350,6 +336,16 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
             await session.CommitTransactionAsync();
         });
         Assert.Contains(refused.OperationResult.Messages, m => m.MessageNumber == 144);
+    }
+
+    /// <summary>The scratch database the pre-check of the restore of <paramref name="tenantId" /> used, from its log line.</summary>
+    private string ScratchDatabaseOf(string tenantId)
+    {
+        var line = Assert.Single(fixture.Logs.Find(Microsoft.Extensions.Logging.LogLevel.Information,
+            $"Restore of tenant '{tenantId}': checking the service-managed CK models of the dump in scratch database"));
+        var name = line[(line.LastIndexOf(" '", StringComparison.Ordinal) + 2)..].TrimEnd('\'');
+        Assert.Contains("restorecheck_", name, StringComparison.Ordinal);
+        return name;
     }
 
     private string NewTenantId(string prefix)

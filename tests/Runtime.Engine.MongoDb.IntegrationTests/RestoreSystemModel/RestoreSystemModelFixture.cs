@@ -36,9 +36,13 @@ public class RestoreSystemModelFixture : SystemFixture
         Services.AddTransient<ICatalog, EmbeddedResourceCatalog>();
         Services.AddSingleton(Catalog);
         Services.AddSingleton<ICatalog>(sp => sp.GetRequiredService<TestSystemIdentityCatalog>());
+        Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(Logs);
     }
 
     public TestSystemIdentityCatalog Catalog { get; } = new();
+
+    /// <summary>Every log line of the fixture's services (the scratch database name of a restore is in one).</summary>
+    public RecordingLoggerProvider Logs { get; } = new();
 
     protected override async Task InitializeServicesAsync()
     {
