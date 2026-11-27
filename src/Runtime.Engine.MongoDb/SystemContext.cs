@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.RestoreSystemModelCheck;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using Microsoft.Extensions.DependencyInjection;
@@ -207,6 +208,14 @@ public class SystemContext : TenantContext, ISystemContext
         //
         // Optional on purpose — GetService, not GetRequiredService. No host registers a source unless
         // it is a pool member, and one that does not takes the unchanged path below.
+        // A tenant restore that raises a service-managed model of its still unattached database: its migrations resolve
+        // exactly that tenant id, in exactly that async flow, to the restored database (RestoringTenantScope). Detached
+        // like a leased tenant: no System or service-managed import into the restored database from here.
+        if (RestoringTenantScope.TryGetDatabaseName(tenantId, out var restoringDatabaseName))
+        {
+            return CreateDetachedTenantContext(tenantId, restoringDatabaseName);
+        }
+
         var locationSource = _serviceProvider.GetService<ITenantLocationSource>();
         if (locationSource is not null
             && locationSource.TryGetDatabaseName(tenantId, out var leasedDatabaseName))

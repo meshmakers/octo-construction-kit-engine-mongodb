@@ -1,5 +1,5 @@
 ---
-description: "CK model import: migration on import, hidden backstop, import guard, ResolveFailed handling, blueprint ranges, auto-import"
+description: "CK model import: migration on import, hidden backstop, import guard, ResolveFailed handling, blueprint ranges, restore check, auto-import"
 applies_to: src/Runtime.Engine.MongoDb/Services/**, src/Runtime.Engine.MongoDb/CkCache/**, src/Runtime.Engine.MongoDb/Blueprints/**, src/Runtime.Engine.MongoDb/Fixups/**, src/Runtime.Engine.MongoDb/EmbeddedCkModelImportGuard.cs
 ---
 
@@ -412,15 +412,91 @@ without the field load as "no reason". Pinned by `CkRangeRetentionImportTests.Re
 (real MongoDB: failed -> reason persisted and read back through the tenant repository after the CK cache was dropped ->
 dependency restored -> reason gone). The public surface (LibraryStatus, GraphQL `CkModel`, CLI) lives in asset-repo / octo-cli.
 
+### Restore check of service-managed models
+
+A tenant dump is a physical mongodump of the whole tenant database, including its CK model collections. Without a check
+the restore brought back whatever System model the dump held, and the embedded import guard above then trusted it: an
+equal version is `AlreadyInstalled` (content never compared), a higher one is kept. A dump edited to hold System.Identity
+without the `writeAccess` blocks, or a fake higher version, would have reopened generic writes to identity types.
+
+**Invariant.** After a restore attaches a tenant, every `System` / `System.*` model in it (model row and element rows) has
+the content of a version published in the CK catalog, and no such model is older than the platform's version of it or
+below the platform's security floor. A dump that cannot be brought to that state is refused before the attach.
+
+`TenantBackupService.RestoreTenantAsync` runs `RestoreSystemModelGuard` (`src/Runtime.Engine.MongoDb/Services/RestoreSystemModelCheck/`)
+twice:
+
+1. **Pre-check, before anything destructive.** The `Ck*` collections of the archive are restored into a scratch database
+   `<tenant database prefix>restorecheck_<20 hex digits>`, checked there, and the scratch database is dropped again. A
+   refused dump drops no existing tenant, writes nothing into the target and leaves no database behind. A process that
+   dies during the pre-check can leave a scratch database; it holds only CK collections and is safe to drop.
+2. **Check and raise, after mongorestore and before the attach**, on the restored target (also for `attachTenant: false`).
+
+What is compared: every `CkModel` row whose name is service-managed (`ServiceManagedCkModels.IsServiceManaged`), in any
+state, is read back with its element rows the way the runtime CK cache reads it
+(`DatabaseCkModelRepository.ReadServiceManagedModelsAsync`, the builder of `TryLookupCkModelAsync`) and compared in
+canonical form (`CkCompiledModelCanonicalizer`, shared with the round-trip gate of the tests) with the catalog's model of
+the same id (`ICatalogService`: the configured catalogs, including the host's embedded models; the bot host embeds no
+System.Identity, so its reference comes from the published catalog). Not compared: the members of
+`CkCompiledModelCanonicalizer.IgnoredPaths` (never persisted), and values a tenant added to an extensible enum
+(`IsExtension`). Attribute default values are converted to their value type on both sides, like the import does
+(a `TimeSpan` default is stored as ticks). Element rows that touch a service-managed model but do not belong to its model
+row (an element of System.Identity filed under another model, element rows without a model row) are refused
+(`DatabaseCkModelRepository.FindForeignServiceManagedElementRowsAsync`), and so is a dump with two versions of one model.
+
+The platform's version of a model is the one installed in the system tenant (every service imports its embedded models
+there). `RestoreSystemModelDecider` (pure) decides per model:
+
+| Dump model | Decision |
+|---|---|
+| no version of the name published | refused, `unknown_model` (e.g. a fake `System.Foo`) |
+| major above every published major | refused, `higher_major` |
+| this version not published | refused, `unknown_version` |
+| published id, other content | refused, `content_differs` - also when the version is older: a manipulated model is never raised |
+| genuine, older than the platform's version of the same major | raised to exactly the platform's version, which must itself be published with identical content (else `target_not_published`) |
+| genuine, equal to or newer than the platform's, another major, or not held by the system tenant | kept (a restore never downgrades) |
+| kept or raised version below the floor (`ServiceManagedCkModelFloors`: System.Identity 3.6.0) | refused, `below_floor` |
+
+Fail closed: a catalog that cannot be read (`catalog_unavailable`), a system tenant whose models cannot be read
+(`system_tenant_unavailable`), a dump model that cannot be read (`model_unreadable`), a raise that does not reach its
+target (`upgrade_failed`) all refuse the restore.
+
+**Raise.** The raise goes through the guarded system import (`ITenantContext.ImportCkModelAsync(CkModelId, OperationResult)`:
+catalog content, downgrade guard, migrations) on a detached context of the restored, still unattached database, in
+dependency order (`System` first). The CK migrations resolve the tenant by id; `RestoringTenantScope` (an `AsyncLocal`
+holder that ends with the raise) makes exactly the restoring tenant id resolve to the restored database in exactly that
+async flow (`SystemContext.TryFindTenantContextAsync`, like a leased tenant). The tenant database user the migrations need
+is ensured first; a user the check created is dropped again when the restore is refused or does not attach. After the
+raise the full check runs again and must keep every model. The import publishes its pre/post tenant-update
+notifications for the restoring tenant id; other services find no registered tenant for it yet. Known limitation: a CK
+migration that fails is logged and does not fail the import (the same as for every embedded import), so the restore
+then attaches the raised model with the migration not applied.
+
+**Refusal.** The restore returns a failure whose `Error` starts with `RESTORE_SYSTEM_MODEL_REFUSED` and names each refused
+model, its version and the reason, never model content; nothing is attached. The restored database is dropped when
+this restore created it (a new name, or the existing tenant's database this restore dropped), and only while it still
+carries exactly this restore's claim (`TenantOwnershipStore.TryDropClaimedDatabaseAsync`). A target that existed before
+as an unattached database stays unattached as mongorestore left it. Each refused model logs a WARN (tenant, model id,
+reason) and counts `octo.ck.restore_system_model.refused` (tag `reason` only; no model or tenant tag, the dump names the
+model); each raised model counts `octo.ck.restore_system_model.raised` (tag `model`).
+
+Consequence: a dump that holds an unpublished System version (e.g. from a dev lane) cannot be restored where that version
+is not in the catalog, and a restore needs the catalog to be reachable.
+
+Tests: `RestoreSystemModelDeciderTests`, `RestoreSystemModelContentTests`, `RestoringTenantScopeTests` (unit),
+`RestoreSystemModelCheckTests`, `PublishedSystemModelRoundTripTests` (MongoDB, mongodump/mongorestore).
+
 ### Service-Managed CK Model Auto-import
 
 `TenantContext.EnsureServiceManagedCkModelsImportedAsync` runs on every tenant-resolve
 (`TryGetChildTenantContextAsync`) and imports each host-registered
 `IServiceManagedCkModelDescriptor` (e.g. `System.UI`, registered by platform-services) at its
 embedded version via the same downgrade-guarded import. A per-process `ConcurrentDictionary`
-guard (`_serviceManagedCkModelsAttempted`, keyed `{TenantId}:{modelName}`) makes the import run
-at most once per (tenant, model) — it breaks the `ImportCkModelAsync → RetryPendingMigrations →
-tenant-resolve → here` recursion. `_streamDataAutoImportAttempted` is the StreamData analogue.
+guard (`_serviceManagedCkModelsAttempted`, keyed `{TenantId}:{RegistrationKey}:{modelName}`) makes the import run
+at most once per (tenant, registry record, model) — it breaks the `ImportCkModelAsync → RetryPendingMigrations →
+tenant-resolve → here` recursion. `RegistrationKey` is the id of the tenant's registry record, so a tenant that is attached
+again (a restore creates a new record) is checked again on its next resolve, also when no lifecycle notification reached
+the process (`ServiceManagedImportMemoReattachTests`). `_streamDataAutoImportAttempted` is the StreamData analogue.
 
 **Guard invalidation on tenant delete/update.** Because the guard is per-process
 and keyed only by tenant, a **delete+recreate of a tenant within one process lifetime** (e.g.

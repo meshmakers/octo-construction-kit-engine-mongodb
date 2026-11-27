@@ -12,7 +12,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 ///     <para>
 ///         Units are curly-brace annotations (like <c>CrateDbDiagnostics</c>), which the Prometheus exporter does not
 ///         append to the name: the series are <c>octo_ck_embedded_import_skipped_total</c>,
-///         <c>octo_ck_explicit_import_downgraded_total</c>, <c>octo_ck_explicit_import_refused_total</c> (AB#9325) and
+///         <c>octo_ck_explicit_import_downgraded_total</c>, <c>octo_ck_explicit_import_refused_total</c> (AB#9325), <c>octo_ck_restore_system_model_refused_total</c> and
+///         <c>octo_ck_restore_system_model_raised_total</c> and
 ///         <c>octo_ck_model_revalidated_total</c> (D-G1-2; with
 ///         <c>unit: "count"</c> they were exported as <c>…_count_total</c>).
 ///     </para>
@@ -30,6 +31,20 @@ public static class CkModelImportDiagnostics
     ///     tag: the name is caller-supplied, the model id is in the matching WARN line.
     /// </summary>
     public const string ServiceManagedImportRefusedCounterName = "octo.ck.explicit_import.refused";
+
+    /// <summary>
+    ///     Counter: a tenant restore was refused before the attach because a service-managed model (System, System.*) of
+    ///     its dump is not a genuine published one. Tag <c>reason</c> only (a fixed set, see
+    ///     <c>RestoreSystemModelGuard.ReasonTag</c>); no model and no tenant tag: the dump names the model, and the model
+    ///     id and the tenant id are in the matching WARN line.
+    /// </summary>
+    public const string RestoreSystemModelRefusedCounterName = "octo.ck.restore_system_model.refused";
+
+    /// <summary>
+    ///     Counter: a tenant restore raised a genuine older service-managed model to the platform's version before the
+    ///     attach. Tag <c>model</c>: the name of the raised model, always a published service-managed model.
+    /// </summary>
+    public const string RestoreSystemModelRaisedCounterName = "octo.ck.restore_system_model.raised";
 
     /// <summary>Counter: outcome of the re-validation of a <c>ResolveFailed</c> model after an import.</summary>
     public const string ModelRevalidatedCounterName = "octo.ck.model.revalidated";
@@ -63,6 +78,16 @@ public static class CkModelImportDiagnostics
         unit: "{import}",
         description: "Caller imports of a service-managed CK model (System, System.*) that were refused");
 
+    private static readonly Counter<long> RestoreSystemModelRefused = Meter.CreateCounter<long>(
+        RestoreSystemModelRefusedCounterName,
+        unit: "{model}",
+        description: "Service-managed CK models (System, System.*) of a tenant restore that made the restore refuse");
+
+    private static readonly Counter<long> RestoreSystemModelRaised = Meter.CreateCounter<long>(
+        RestoreSystemModelRaisedCounterName,
+        unit: "{model}",
+        description: "Genuine older service-managed CK models a tenant restore raised to the platform's version");
+
     private static readonly Counter<long> ModelRevalidated = Meter.CreateCounter<long>(
         ModelRevalidatedCounterName,
         unit: "{model}",
@@ -77,6 +102,12 @@ public static class CkModelImportDiagnostics
         ExplicitDowngrade.Add(1, new KeyValuePair<string, object?>("model", modelName));
 
     internal static void RecordServiceManagedImportRefused() => ServiceManagedImportRefused.Add(1);
+
+    internal static void RecordRestoreSystemModelRefused(string reason) =>
+        RestoreSystemModelRefused.Add(1, new KeyValuePair<string, object?>("reason", reason));
+
+    internal static void RecordRestoreSystemModelRaised(string modelName) =>
+        RestoreSystemModelRaised.Add(1, new KeyValuePair<string, object?>("model", modelName));
 
     internal static void RecordRevalidation(string result) =>
         ModelRevalidated.Add(1, new KeyValuePair<string, object?>("result", result));

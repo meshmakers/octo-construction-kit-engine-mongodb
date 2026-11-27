@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- AB#9326 New: a tenant restore can no longer bring in a manipulated or outdated service-managed CK model (System,
+  System.*). `TenantBackupService.RestoreTenantAsync` compares every such model of the dump (model row and element rows,
+  read back like the CK cache reads them) in canonical form with the catalog's model of the same id. It runs once on the
+  dump's `Ck*` collections in a scratch database before anything destructive, and once on the restored database before
+  the attach. Refused, with an error starting with `RESTORE_SYSTEM_MODEL_REFUSED` that names model, version and reason:
+  content that differs from the published model of the same id (also for an older version), an unpublished version, a
+  higher major than published, an unknown model name, element rows filed under another model, two versions of one model,
+  a version below the security floor (System.Identity 3.6.0), and an unreadable catalog or system tenant (fail closed).
+  A genuine older model is raised to the platform's version (the system tenant's, which must be published with identical
+  content) through the guarded system import with migrations, while the database is still unattached
+  (`RestoringTenantScope`). A refused restore attaches nothing and drops the restored database when it created it; an
+  existing target tenant stays as it was. WARN log per refused model and counters `octo.ck.restore_system_model.refused`
+  (tag `reason`) and `octo.ck.restore_system_model.raised` (tag `model`). The per-process memo of the service-managed
+  auto-import is now keyed by the tenant's registry record, so a re-attached tenant is checked again on its next resolve.
+  The round-trip gate of the tests and the restore check share one canonical form (`CkCompiledModelCanonicalizer`), which
+  now converts attribute default values to their value type like the import (a `TimeSpan` default is stored as ticks).
+  Behaviour change: a dump with an unpublished System version (e.g. from a dev lane) is no longer restorable, and a restore
+  needs the CK catalog. No public contract changes. Tests: `RestoreSystemModelCheckTests`,
+  `PublishedSystemModelRoundTripTests`, `ServiceManagedImportMemoReattachTests`, `RestoreSystemModelDeciderTests`,
+  `RestoreSystemModelContentTests`, `RestoringTenantScopeTests`. Docs: `docs/ck-model-import.md`, "Restore check of
+  service-managed models".
+
 - AB#9932 Fix: a native dump of an archive without Hidden columns or leftovers of computed columns copies the whole row
   again, so the restore gives a NULL in a column with a DEFAULT its default (`rtcreationdatetime`, `was_updated`;
   AB#5490, AB#6647). Since AB#9837 every dump named its columns (`format = 'json_object'`), which writes a NULL as an

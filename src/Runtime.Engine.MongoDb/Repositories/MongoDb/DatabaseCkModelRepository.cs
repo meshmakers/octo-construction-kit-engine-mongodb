@@ -371,26 +371,141 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             return null;
         }
 
-        var ckEnums = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums
+        return await BuildCompiledModelAsync(session, sourceIdentifierObject.MongoDbRepositoryDataSource, ckModel);
+    }
+
+    /// <summary>
+    ///     Reads every model row of a service-managed model (System, System.*) in <paramref name="dataSource" />, in any
+    ///     state, and the compiled form of each built from its element rows exactly like
+    ///     <see cref="TryLookupCkModelAsync" /> builds it for the runtime CK cache. The restore check of service-managed
+    ///     models compares that form with the catalog's; the state is deliberately not filtered, so a model in another
+    ///     state than <c>Available</c> cannot escape the comparison.
+    /// </summary>
+    internal static async Task<IReadOnlyList<(CkModel Row, CkCompiledModelRoot Compiled)>> ReadServiceManagedModelsAsync(
+        ICkMongoDbRepositoryDataSource dataSource)
+    {
+        using var session = await dataSource.CreateSessionAsync();
+        var rows = (await dataSource.CkModels.FindManyAsync(session, _ => true))
+            .Where(m => ServiceManagedCkModels.IsServiceManaged(m.Id.Name))
+            .ToList();
+        var result = new List<(CkModel, CkCompiledModelRoot)>(rows.Count);
+        foreach (var row in rows)
+        {
+            result.Add((row, await BuildCompiledModelAsync(session, dataSource, row)));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    ///     Element rows that touch a service-managed model but do not belong to it: a row whose model id or own element id
+    ///     names a service-managed model must carry the same model id in both, and that model must have a model row in
+    ///     <paramref name="modelRows" />. Such rows would reach the runtime CK cache beside the model the restore check
+    ///     compared (an element of System.Identity filed under another model, or element rows of a model without a model
+    ///     row). Returns one line per row (collection and ids, never content).
+    /// </summary>
+    internal static async Task<IReadOnlyList<string>> FindForeignServiceManagedElementRowsAsync(
+        ICkMongoDbRepositoryDataSource dataSource, IReadOnlyCollection<CkModelId> modelRows)
+    {
+        using var session = await dataSource.CreateSessionAsync();
+        var known = modelRows.ToHashSet();
+        var findings = new List<string>();
+
+        void Check(string collection, CkModelId rowModel, CkModelId elementModel, string elementId)
+        {
+            if (!ServiceManagedCkModels.IsServiceManaged(rowModel.Name) &&
+                !ServiceManagedCkModels.IsServiceManaged(elementModel.Name))
+            {
+                return;
+            }
+
+            if (rowModel != elementModel)
+            {
+                findings.Add($"{collection} row '{elementId}' is filed under model '{rowModel}'");
+            }
+            else if (!known.Contains(rowModel))
+            {
+                findings.Add($"{collection} row '{elementId}' belongs to model '{rowModel}', which has no model row");
+            }
+        }
+
+        foreach (var r in await dataSource.CkTypes.FindManyAsync(session, _ => true))
+        {
+            Check("CkType", r.CkModelId, r.CkTypeId.ModelId, r.CkTypeId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkAttributes.FindManyAsync(session, _ => true))
+        {
+            Check("CkAttribute", r.CkModelId, r.CkAttributeId.ModelId, r.CkAttributeId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkEnums.FindManyAsync(session, _ => true))
+        {
+            Check("CkEnum", r.CkModelId, r.CkEnumId.ModelId, r.CkEnumId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkRecords.FindManyAsync(session, _ => true))
+        {
+            Check("CkRecord", r.CkModelId, r.CkRecordId.ModelId, r.CkRecordId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkAssociationRoles.FindManyAsync(session, _ => true))
+        {
+            Check("CkAssociationRole", r.CkModelId, r.RoleId.ModelId, r.RoleId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkInterfaces.FindManyAsync(session, _ => true))
+        {
+            Check("CkInterface", r.CkModelId, r.CkInterfaceId.ModelId, r.CkInterfaceId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkTypeInheritances.FindManyAsync(session, _ => true))
+        {
+            Check("CkTypeInheritance", r.CkModelId, r.InheritorCkTypeId.ModelId, r.InheritorCkTypeId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkTypeAssociations.FindManyAsync(session, _ => true))
+        {
+            Check("CkTypeAssociation", r.CkModelId, r.OriginCkTypeId.ModelId, r.OriginCkTypeId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkRecordInheritances.FindManyAsync(session, _ => true))
+        {
+            Check("CkRecordInheritance", r.CkModelId, r.InheritorCkRecordId.ModelId, r.InheritorCkRecordId.FullName);
+        }
+
+        foreach (var r in await dataSource.CkTypeInterfaceImplementations.FindManyAsync(session, _ => true))
+        {
+            Check("CkTypeInterfaceImplementation", r.CkModelId, r.CkTypeId.ModelId, r.CkTypeId.FullName);
+        }
+
+        return findings;
+    }
+
+    private static async Task<CkCompiledModelRoot> BuildCompiledModelAsync(IOctoSession session,
+        ICkMongoDbRepositoryDataSource dataSource, CkModel ckModel)
+    {
+        var ckModelId = ckModel.Id;
+        var ckEnums = await dataSource.CkEnums
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-        var ckRecords = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkRecords
+        var ckRecords = await dataSource.CkRecords
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-        var ckRecordInheritances = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkRecordInheritances
+        var ckRecordInheritances = await dataSource.CkRecordInheritances
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-        var ckAttributes = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAttributes
+        var ckAttributes = await dataSource.CkAttributes
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-        var ckTypes = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypes
+        var ckTypes = await dataSource.CkTypes
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-        var ckTypeInheritances = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypeInheritances
+        var ckTypeInheritances = await dataSource.CkTypeInheritances
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-        var ckTypeAssociations = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypeAssociations
+        var ckTypeAssociations = await dataSource.CkTypeAssociations
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-        var ckAssociationRoles = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAssociationRoles
+        var ckAssociationRoles = await dataSource.CkAssociationRoles
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
         // CK v2 (AB#5667): interfaces of this model and the implements rows of its types.
-        var ckInterfaces = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkInterfaces
+        var ckInterfaces = await dataSource.CkInterfaces
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-        var ckTypeInterfaceImplementations = await sourceIdentifierObject.MongoDbRepositoryDataSource
+        var ckTypeInterfaceImplementations = await dataSource
             .CkTypeInterfaceImplementations.FindManyAsync(session, e => e.CkModelId == ckModelId);
 
         var ckCompiledModelRoot = new CkCompiledModelRoot

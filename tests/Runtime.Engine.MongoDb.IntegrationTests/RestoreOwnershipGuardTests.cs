@@ -553,6 +553,7 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
     private TenantBackupService CreateBackupServiceOfA(IRepositoryOpsService repositoryOps) => new(
         InstanceA, repositoryOps, fixture.GetService<ILogger<TenantBackupService>>(), OwnershipStoreA,
         fixture.GetService<TenantDatabaseRegistrationLookup>(), fixture.GetService<SystemDatabaseMarkerStore>(),
+        fixture.GetService<Services.RestoreSystemModelCheck.RestoreSystemModelGuard>(),
         fixture.GetService<ITenantLifecycleStore>(), fixture.GetService<IOptions<OctoSystemConfiguration>>());
 
     [Fact]
@@ -668,6 +669,13 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
         public async Task<CommandResult> ExecuteMongoRestoreAsync(MongoRestoreOptions options, TimeSpan? timeout = null,
             CancellationToken? cancellationToken = null)
         {
+            // The restore check of service-managed models first restores the CK collections into a scratch database;
+            // the hooks of these tests are about the restore of the target only.
+            if (options.Database.Contains("restorecheck_", StringComparison.Ordinal))
+            {
+                return await inner.ExecuteMongoRestoreAsync(options, timeout, cancellationToken);
+            }
+
             if (beforeRestore != null)
             {
                 await beforeRestore();
