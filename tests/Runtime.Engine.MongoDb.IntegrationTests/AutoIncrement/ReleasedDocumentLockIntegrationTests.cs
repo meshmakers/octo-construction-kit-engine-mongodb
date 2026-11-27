@@ -37,7 +37,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.AutoIncrement;
 ///     counter and the audit entries back, and numbering goes on from the restored counter.
 /// </summary>
 [Collection(CkModelImportGuardCollection.Name)]
-public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixture)
+public partial class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixture)
 {
     private const string StateAttribute = "DocumentState";
     private const int Draft = 0;
@@ -78,6 +78,7 @@ public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixt
             var denied = Assert.Single(await DeniedEntriesAsync(database, released.RtId))["attributes"].AsBsonDocument;
             Assert.Equal(2, denied["action"].ToInt32());
             Assert.StartsWith("168:", denied["message"].AsString);
+            Assert.False(denied.Contains("source"));
         });
     }
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
@@ -330,13 +331,67 @@ public class AutoIncrementModifier(
         }
 
         var autoIncrementCollection = GetAutoIncrementCollection(repositoryDataSource);
+        var released = new List<IssuedNumber>();
         foreach (var counterRequests in requests.GroupBy(r => r.Reference))
         {
             RtAutoIncrement? counter = null;
             counters?.TryGetValue(counterRequests.Key, out counter);
             await NumberAsync(session, repositoryDataSource, autoIncrementCollection, counterRequests.Key,
-                counterRequests.ToList(), counter);
+                counterRequests.ToList(), counter, released);
         }
+
+        await WriteReleaseAuditEntriesAsync(session, repositoryDataSource, released);
+    }
+
+    /// <summary>
+    ///     The <c>Release</c> entries of the document audit trail (<c>System/DocumentAuditEntry</c>): one per number a
+    ///     document got on release, with the caller's subject, the time it was numbered (UTC), the formatted number, the
+    ///     fiscal year and the counter value. Written in the session of the write, after the numbers were allocated and
+    ///     before the document is written: inside a transaction an abort takes the entry back together with the counter
+    ///     and the document; outside one it is committed at once, like the counter. Written straight into the collection,
+    ///     because the append-only lock refuses every insert of an audit entry through the write funnel.
+    /// </summary>
+    private async Task WriteReleaseAuditEntriesAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
+        IReadOnlyList<IssuedNumber> released)
+    {
+        if (released.Count == 0)
+        {
+            return;
+        }
+
+        if (!DocumentAuditTrail.TryGetGraph(ckCacheService, repositoryDataSource.TenantId, out var auditGraph))
+        {
+            logger.LogWarning(
+                "Tenant '{TenantId}' has no System/DocumentAuditEntry type; {Count} release(s) are not audited",
+                repositoryDataSource.TenantId, released.Count);
+            return;
+        }
+
+        var caller = session.GetSecurityContext();
+        var entries = new List<RtEntity>(released.Count);
+        foreach (var number in released)
+        {
+            var document = number.Request.Entity;
+            if (document.RtId == OctoObjectId.Empty)
+            {
+                // A new document gets its id here, so the entry can name it; the insert keeps a given id.
+                document.RtId = OctoObjectId.GenerateNewId();
+            }
+
+            var details = new Dictionary<string, object?>
+            {
+                [DocumentAuditTrail.DocumentNumberAttribute] = number.DocumentNumber,
+                [DocumentAuditTrail.FiscalYearAttribute] = number.FiscalYear,
+                // SequenceValue is an Int attribute; a counter beyond its range is not written there.
+                [DocumentAuditTrail.SequenceValueAttribute] =
+                    number.SequenceValue is >= int.MinValue and <= int.MaxValue ? (int)number.SequenceValue : null
+            };
+            entries.Add(DocumentAuditTrail.CreateEntry(auditGraph, caller,
+                new RtEntityId(document.GetRtCkTypeId(), document.RtId), DocumentAuditTrail.ReleaseAction,
+                number.Request.NumberedAt.UtcDateTime, details));
+        }
+
+        await DocumentAuditTrail.InsertAsync(session, repositoryDataSource, auditGraph, entries);
     }
 
     /// <summary>
@@ -371,7 +426,7 @@ public class AutoIncrementModifier(
     /// </summary>
     private async Task NumberAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
         IDataSourceCollection<OctoObjectId, RtAutoIncrement> autoIncrementCollection, string reference,
-        IReadOnlyList<NumberRequest> requests, RtAutoIncrement? counter)
+        IReadOnlyList<NumberRequest> requests, RtAutoIncrement? counter, List<IssuedNumber> released)
     {
         var mongoCollection = ((IMongoDbDataSourceCollection<OctoObjectId, RtAutoIncrement>)autoIncrementCollection)
             .GetMongoCollection();
@@ -388,7 +443,7 @@ public class AutoIncrementModifier(
                 // valid - e.g. a legacy format stored before System 2.9.0 that string.Format cannot format (AB#9755) -
                 // is refused naming the range; the block it took stays unused. The counter is never set back: another
                 // request may have taken the next block meanwhile, so a gap is accepted, a duplicate never.
-                AssignBlock(requests, GetValidSettings(allocated, reference), allocated);
+                AssignBlock(requests, GetValidSettings(allocated, reference), allocated, null);
                 return;
             }
         }
@@ -408,6 +463,8 @@ public class AutoIncrementModifier(
         }
 
         var release = GetValidRelease(stored, reference);
+        // Only a range with release configuration numbers on release; its numbers go into the audit trail.
+        var issued = release == null ? null : released;
         var block = release == null
             ? requests.Where(r => r.Kind == NumberRequestKind.New).ToList()
             : requests.Where(r => IsReleased(repositoryDataSource, release,
@@ -430,7 +487,7 @@ public class AutoIncrementModifier(
                 withoutRelease: false);
             if (allocated != null)
             {
-                AssignBlock(block, GetValidSettings(allocated, reference), allocated);
+                AssignBlock(block, GetValidSettings(allocated, reference), allocated, issued);
                 return;
             }
 
@@ -459,19 +516,19 @@ public class AutoIncrementModifier(
                 requestingCkTypeId);
             for (var i = 0; i < yearBlock.Count; i++)
             {
-                Assign(yearBlock[i], storedSettings, firstNumber + i, yearRequests.Key);
+                Assign(yearBlock[i], storedSettings, firstNumber + i, yearRequests.Key, issued);
             }
         }
     }
 
     /// <summary>Writes the block a range without periods handed out (it ended at <paramref name="counter" />).</summary>
     private static void AssignBlock(IReadOnlyList<NumberRequest> block, AutoIncrementRangeSettings settings,
-        RtAutoIncrement counter)
+        RtAutoIncrement counter, List<IssuedNumber>? issued)
     {
         var firstNumber = FirstNumberOfTheBlock(ToLong(counter.CurrentValue), block.Count);
         for (var i = 0; i < block.Count; i++)
         {
-            Assign(block[i], settings, firstNumber + i, null);
+            Assign(block[i], settings, firstNumber + i, null, issued);
         }
     }
 
@@ -522,20 +579,26 @@ public class AutoIncrementModifier(
 
     /// <summary>
     ///     Writes number <paramref name="value" /> into the entity: formatted for a String attribute of a range with a
-    ///     format, else the plain number (as before System 2.9.0).
+    ///     format, else the plain number (as before System 2.9.0). A number given on release is added to
+    ///     <paramref name="issued" /> for the audit trail.
     /// </summary>
-    private static void Assign(NumberRequest request, AutoIncrementRangeSettings settings, long value, int? fiscalYear)
+    private static void Assign(NumberRequest request, AutoIncrementRangeSettings settings, long value, int? fiscalYear,
+        List<IssuedNumber>? issued)
     {
         var attribute = request.Attribute;
+        string documentNumber;
         if (settings.Format.IsSet && attribute.ValueType == AttributeValueTypesDto.String)
         {
-            request.Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType,
-                settings.Format.Format(value, fiscalYear));
+            documentNumber = settings.Format.Format(value, fiscalYear);
+            request.Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType, documentNumber);
         }
         else
         {
+            documentNumber = value.ToString(CultureInfo.InvariantCulture);
             request.Entity.SetAttributeValue(attribute.AttributeName, attribute.ValueType, value);
         }
+
+        issued?.Add(new IssuedNumber(request, documentNumber, fiscalYear, value));
     }
 
     private static AutoIncrementRangeSettings GetValidSettings(RtAutoIncrement counter, string reference)
@@ -864,4 +927,11 @@ public class AutoIncrementModifier(
         CkTypeGraph CkTypeGraph,
         NumberRequestKind Kind,
         DateTimeOffset NumberedAt);
+
+    /// <summary>A number a document got on release: formatted as written, its fiscal year and the counter value.</summary>
+    private sealed record IssuedNumber(
+        NumberRequest Request,
+        string DocumentNumber,
+        int? FiscalYear,
+        long SequenceValue);
 }

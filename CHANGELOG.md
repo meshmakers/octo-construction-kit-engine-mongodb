@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- AB#9762 New: `AutoIncrementModifier` writes a `Release` entry of the document audit trail (`System/DocumentAuditEntry`)
+  for every number a document gets on release - document, the caller's subject, the UTC time of the numbering, the
+  number as written, the fiscal year and the counter value - in the session of the write, so an aborted transaction
+  leaves no entry; a range without release configuration writes none. A new document gets its `RtId` there when it has
+  none. Tests against a real MongoDB: the `Release` entry (also on insert in a released state), none after an aborted
+  release, the two `Storno` entries of a released storno, no caller (also no system session) creates, changes or
+  deletes an entry (message 173), an RT import of a new entry is refused, and `Denied` entries carry no `Source`.
+  Tests: `ReleasedDocumentLockIntegrationTests`.
 - AB#9761 Test: storno rules against a real MongoDB. A credit note that cancels a released invoice (`System/Cancels`)
   is numbered from its own range when it is released, the invoice stays byte for byte the same and finds it through
   `CancelledBy`; a storno of a draft (169), a second released storno - new, or a second draft released later - (170)
