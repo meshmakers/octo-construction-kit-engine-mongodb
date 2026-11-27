@@ -1,8 +1,7 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.RestoreSystemModelCheck;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 
@@ -12,106 +11,33 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 ///     fields. A property added to any CK DTO that the persistence layer does not write AND read back shows up
 ///     as a difference automatically, which is exactly the failure class of AB#4589 / AB#5187 / AB#5533.
 ///     <para>
-///         Canonicalization: nulls and empty arrays are dropped (they mean the same), arrays of objects are
-///         sorted by their canonical JSON (Mongo returns rows in no defined order), and the paths in
-///         <see cref="RoundTripIgnoredPaths" /> are removed.
+///         The canonical form is <see cref="CkCompiledModelCanonicalizer" /> (shared with the restore check of
+///         service-managed models): nulls and empty arrays are dropped, arrays of objects are sorted by their canonical
+///         JSON, and the paths in <see cref="RoundTripIgnoredPaths" /> are removed.
 ///     </para>
 /// </summary>
 internal static class CkModelJsonComparer
 {
     /// <summary>
-    ///     JSON paths (wildcard <c>*</c> = any array element) that are legitimately NOT persisted. Every entry
-    ///     needs a justification. Adding an entry is a design decision, not a way to make the gate green.
+    ///     JSON paths that are legitimately NOT persisted: the single list of
+    ///     <see cref="CkCompiledModelCanonicalizer.IgnoredPaths" />, which the restore check of service-managed models
+    ///     uses too. Every entry needs a justification; adding one is a design decision, not a way to make the gate green.
     /// </summary>
-    internal static readonly IReadOnlyDictionary<string, string> RoundTripIgnoredPaths = new Dictionary<string, string>
-    {
-        // Serialization metadata of the compiled file, not model content.
-        ["$.$schema"] = "schema URI of the compiled file",
-        // Migrations are consumed during import (CompiledModelCkMigrationContentProvider) and never stored.
-        ["$.migrations"] = "migration scripts are executed on import, not persisted",
-        // AB#6295: acknowledgements of the author are build and publish-time metadata (the publish gate reads them
-        // from the catalog JSON), a tenant never needs them.
-        ["$.compatibility"] = "compatibility.acknowledge is build and publish-time metadata, not needed in tenants"
-        // AB#7125: "$.types[*].indexes" used to be ignored here (type indexes were never read back); they are read back now and
-        // compared like every other member. Do not list the path again: the upgrade guard's installed baseline depends on it.
-    };
-
-    /// <summary>
-    ///     Paths whose scalar values are compared by their invariant text: <c>ICollection&lt;object&gt;</c> members
-    ///     that the import deliberately converts to the attribute's value type
-    ///     (<c>AttributeValueConverter.ConvertAttributeValue</c>), while the catalog JSON yields them as strings —
-    ///     <c>"0"</c> in the compiled model is the same default as <c>0</c> in the read-back.
-    /// </summary>
-    private static readonly string[] ScalarTextMembers = [".defaultValues[*]", ".autoCompleteValues[*]"];
-
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Converters = { new JsonStringEnumConverter() }
-    };
+    internal static IReadOnlyDictionary<string, string> RoundTripIgnoredPaths => CkCompiledModelCanonicalizer.IgnoredPaths;
 
     /// <summary>
     ///     Returns one line per difference (<c>path: expected ≠ actual</c>); empty when the read-back is equal.
     /// </summary>
     internal static IReadOnlyList<string> Compare(CkCompiledModelRoot expected, CkCompiledModelRoot actual)
     {
-        var expectedNode = Canonicalize(JsonSerializer.SerializeToNode(expected, Options), "$");
-        var actualNode = Canonicalize(JsonSerializer.SerializeToNode(actual, Options), "$");
+        var expectedNode = CkCompiledModelCanonicalizer.ToCanonicalNode(expected);
+        var actualNode = CkCompiledModelCanonicalizer.ToCanonicalNode(actual);
         var differences = new List<string>();
         Diff(expectedNode, actualNode, "$", differences);
         return differences;
     }
 
-    internal static string ToCanonicalJson(CkCompiledModelRoot model) =>
-        Canonicalize(JsonSerializer.SerializeToNode(model, Options), "$")?.ToJsonString() ?? "null";
-
-    private static JsonNode? Canonicalize(JsonNode? node, string path)
-    {
-        switch (node)
-        {
-            case JsonObject jsonObject:
-            {
-                var result = new JsonObject();
-                foreach (var (key, value) in jsonObject.OrderBy(p => p.Key, StringComparer.Ordinal))
-                {
-                    var childPath = $"{path}.{key}";
-                    if (IsIgnored(childPath))
-                    {
-                        continue;
-                    }
-
-                    var canonical = Canonicalize(value, childPath);
-                    if (canonical == null || canonical is JsonArray { Count: 0 })
-                    {
-                        continue;
-                    }
-
-                    result[key] = canonical;
-                }
-
-                return result;
-            }
-            case JsonArray jsonArray:
-            {
-                var items = jsonArray.Select(i => Canonicalize(i, $"{path}[*]")).ToList();
-                if (items.All(i => i is JsonObject))
-                {
-                    items = items.OrderBy(i => i!.ToJsonString(), StringComparer.Ordinal).ToList();
-                }
-
-                return new JsonArray(items.ToArray());
-            }
-            case JsonValue jsonValue when ScalarTextMembers.Any(path.EndsWith):
-                return JsonValue.Create(jsonValue.GetValueKind() == JsonValueKind.String
-                    ? jsonValue.GetValue<string>()
-                    : jsonValue.ToJsonString());
-            default:
-                return node?.DeepClone();
-        }
-    }
-
-    private static bool IsIgnored(string path) => RoundTripIgnoredPaths.ContainsKey(path);
+    internal static string ToCanonicalJson(CkCompiledModelRoot model) => CkCompiledModelCanonicalizer.ToCanonicalJson(model);
 
     private static void Diff(JsonNode? expected, JsonNode? actual, string path, List<string> differences)
     {

@@ -154,6 +154,13 @@ These rules bind new and changed code. Known exceptions in existing code are nam
   `Category=LoadSensitive`, which keeps it out of the PR build and out of the local full suite;
   `LoadSensitiveTraitTests` checks the pair in the integration test assembly only
   ([docs/test-configuration.md](docs/test-configuration.md)).
+- **A tenant restore attaches only published service-managed models.** `TenantBackupService.RestoreTenantAsync` runs
+  `RestoreSystemModelGuard` before anything destructive (scratch database) and again before the attach: a `System` /
+  `System.*` model whose content differs from the catalog's model of the same id, an unpublished or too new version, foreign
+  element rows or an unreadable catalog refuse the restore (`RESTORE_SYSTEM_MODEL_REFUSED`), a genuine older one is raised
+  to the system tenant's version. New restore or attach paths keep that order
+  ([docs/ck-model-import.md](docs/ck-model-import.md), "Restore check of service-managed models";
+  `RestoreSystemModelCheckTests`, `RestoreSystemModelDeciderTests`).
 - **A new CK meta-model field survives the Mongo round trip:** entity, `ProcessCk*` write and `TryLookupCkModelAsync`
   read-back, or an entry with a reason in `CkModelReflectionComparer.AllowList`
   ([docs/ck-meta-model-persistence.md](docs/ck-meta-model-persistence.md); `CkMetaModelReflectionGateTests`).

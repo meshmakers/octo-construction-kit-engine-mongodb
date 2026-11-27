@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.RestoreSystemModelCheck;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -23,6 +24,7 @@ internal class TenantBackupService(
     TenantOwnershipStore tenantOwnershipStore,
     TenantDatabaseRegistrationLookup registrationLookup,
     SystemDatabaseMarkerStore systemDatabaseMarkerStore,
+    RestoreSystemModelGuard systemModelGuard,
     ITenantLifecycleStore? tenantLifecycleStore = null,
     IOptions<OctoSystemConfiguration>? systemConfiguration = null) : ITenantBackupService
 {
@@ -416,6 +418,16 @@ internal class TenantBackupService(
         bool dropExistingTenant, bool attachTenant, bool overrideForeignOwnership, RestoreClaim claim,
         StrongBox<string?> deleteNotificationWarning, TimeSpan? timeout, CancellationToken? cancellationToken)
     {
+        // Before anything destructive: the CK collections of the dump go into a scratch database and their
+        // service-managed models are checked there. A dump the check refuses drops no existing tenant and writes nothing
+        // into the target. The full check (with the raise of genuine older models) runs again on the restored target.
+        var preCheckRefusal = await PreCheckSystemModelsAsync(tenantId, databaseName, archivePath,
+            effectiveSourceDatabaseName, timeout, cancellationToken ?? CancellationToken.None);
+        if (preCheckRefusal != null)
+        {
+            return CommandResult.Failure(preCheckRefusal);
+        }
+
         // Check if tenant exists and optionally drop it
         var existingTenantContext = await systemContext.TryFindTenantContextAsync(tenantId);
         if (existingTenantContext != null)
@@ -521,6 +533,21 @@ internal class TenantBackupService(
         // older mongorestore without namespace exclusion may still have written.
         await systemDatabaseMarkerStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
 
+        // The service-managed models of the dump (System, System.*) must be genuine published ones before the tenant can
+        // become reachable: manipulated, unknown or too new models refuse the restore, genuine older ones are raised to
+        // the platform's version here, while the database is still unattached. Also for a restore without attach, so a
+        // checked database is all a restore ever leaves behind.
+        var systemModelRefusal = await CheckSystemModelsAsync(tenantId, databaseName, attachTenant,
+            cancellationToken ?? CancellationToken.None);
+        if (systemModelRefusal != null)
+        {
+            // The restored database holds the refused content: drop it again when this restore created it (a new name,
+            // or the existing tenant's database this restore dropped). A database that existed before unattached stays
+            // unattached as mongorestore left it (see the restore section of the docs).
+            claim.DropRestoredDatabase();
+            return CommandResult.Failure(systemModelRefusal);
+        }
+
         logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",
             databaseName, tenantId);
 
@@ -560,6 +587,81 @@ internal class TenantBackupService(
         }
 
         return result;
+    }
+
+    /// <summary>
+    ///     Restores only the CK collections of the archive into a scratch database
+    ///     (<c>&lt;prefix&gt;restorecheck_&lt;id&gt;</c>), checks their service-managed models without raising anything and
+    ///     drops the scratch database again. Returns the refusal message, or null. A failing scratch restore fails closed.
+    /// </summary>
+    private async Task<string?> PreCheckSystemModelsAsync(string tenantId, string databaseName, string archivePath,
+        string? effectiveSourceDatabaseName, TimeSpan? timeout, CancellationToken cancellationToken)
+    {
+        if (systemContext is not TenantContext engineSystemContext)
+        {
+            return await CheckSystemModelsAsync(tenantId, databaseName, attachTenant: false, cancellationToken);
+        }
+
+        // Carries this instance's tenant database prefix, so on a shared MongoDB server it is recognisably this
+        // instance's. 20 random hex digits keep it within MongoDB's 64-byte database names for the longest prefix.
+        var scratchDatabaseName = $"{systemConfiguration?.Value.TenantDatabasePrefix ?? string.Empty}restorecheck_" +
+                                  Guid.NewGuid().ToString("N")[..20];
+        var sourceDatabaseName = string.IsNullOrEmpty(effectiveSourceDatabaseName)
+            ? databaseName
+            : effectiveSourceDatabaseName;
+        // Named, so an operator can drop a scratch database a crashed process left behind.
+        logger.LogInformation(
+            "Restore of tenant '{TenantId}': checking the service-managed CK models of the dump in scratch database " +
+            "'{ScratchDatabaseName}'", tenantId, scratchDatabaseName);
+        try
+        {
+            var options = new MongoRestoreOptions
+            {
+                Database = scratchDatabaseName,
+                Archive = archivePath,
+                Gzip = true,
+                Drop = true,
+                NsFrom = $"{sourceDatabaseName}.Ck*",
+                NsTo = $"{scratchDatabaseName}.Ck*"
+            };
+            var restore = await repositoryOpsService.ExecuteMongoRestoreAsync(options, timeout, cancellationToken);
+            if (!restore.Success)
+            {
+                var message = $"{RestoreSystemModelGuard.RefusalCode}: the restore of tenant '{tenantId}' was refused " +
+                              "before the attach: the CK models of the dump could not be read for the check " +
+                              $"({restore.Error}).";
+                logger.LogError("Restore of tenant '{TenantId}': {Message}", tenantId, message);
+                return message;
+            }
+
+            var result = await systemModelGuard.CheckAsync(engineSystemContext, tenantId, scratchDatabaseName,
+                cancellationToken);
+            return result.IsRefused ? systemModelGuard.ReportRefusal(tenantId, result).Message(tenantId) : null;
+        }
+        finally
+        {
+            await engineSystemContext.DropRestoreCheckDatabaseAsync(scratchDatabaseName);
+        }
+    }
+
+    /// <summary>
+    ///     Runs the restore check of service-managed models on the restored, unattached database; returns the refusal
+    ///     message, or null when the restore may go on. Fails closed when the check cannot run.
+    /// </summary>
+    private async Task<string?> CheckSystemModelsAsync(string tenantId, string databaseName, bool attachTenant,
+        CancellationToken cancellationToken)
+    {
+        if (systemContext is not TenantContext engineSystemContext)
+        {
+            var message = $"{RestoreSystemModelGuard.RefusalCode}: the restore of tenant '{tenantId}' was refused " +
+                          "before the attach: the service-managed CK models of the dump cannot be checked by this host.";
+            logger.LogError("Restore of tenant '{TenantId}': {Message}", tenantId, message);
+            return message;
+        }
+
+        var result = await systemModelGuard.EnforceAsync(engineSystemContext, tenantId, databaseName,
+            keepDatabaseUser: attachTenant, cancellationToken);
+        return result.IsRefused ? result.Message(tenantId) : null;
     }
 
     /// <summary>
@@ -607,9 +709,16 @@ internal class TenantBackupService(
         private readonly DateTime _claimTime = TenantOwnershipStore.NewClaimTime();
         private bool _inserted;
         private bool _materializedByClaim = !databaseExistedBefore;
+        private bool _dropRestoredDatabase;
 
         /// <summary>The restore dropped the target (the existing tenant's database): a new claim materializes it again.</summary>
         public void TargetDropped() => _materializedByClaim = true;
+
+        /// <summary>
+        ///     The restore refused the restored content: the release drops the database when this restore created it,
+        ///     whatever it holds, as long as it still carries exactly this restore's claim.
+        /// </summary>
+        public void DropRestoredDatabase() => _dropRestoredDatabase = true;
 
         /// <summary>
         ///     Claims the target; returns the logged refusal reason when another instance holds it.
@@ -654,6 +763,12 @@ internal class TenantBackupService(
         public async Task ReleaseAsync(bool dropIfOnlyTheClaim)
         {
             if (!_inserted)
+            {
+                return;
+            }
+
+            if (_dropRestoredDatabase && _materializedByClaim &&
+                await store.TryDropClaimedDatabaseAsync(databaseName, ownerSystemDatabaseName, tenantId, _claimTime))
             {
                 return;
             }

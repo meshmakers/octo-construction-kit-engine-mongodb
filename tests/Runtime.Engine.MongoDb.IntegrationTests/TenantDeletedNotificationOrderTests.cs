@@ -393,7 +393,8 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
         var tenantId = NewTenantId("delrst");
         var archivePath = Path.Combine(Path.GetTempPath(), $"notify_{Guid.NewGuid():N}.tar.gz");
         var ops = RepositoryOpsThatThrow();
-        A.CallTo(() => ops.ExecuteMongoRestoreAsync(A<MongoRestoreOptions>._, A<TimeSpan?>._, A<CancellationToken?>._))
+        A.CallTo(() => ops.ExecuteMongoRestoreAsync(A<MongoRestoreOptions>.That.Matches(o => IsTargetRestore(o)),
+                A<TimeSpan?>._, A<CancellationToken?>._))
             .ThrowsAsync(new InvalidOperationException("mongorestore crashed (test)"));
         try
         {
@@ -426,7 +427,8 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
         var tenantId = NewTenantId("delrsn");
         var archivePath = Path.Combine(Path.GetTempPath(), $"notify_{Guid.NewGuid():N}.tar.gz");
         var ops = RepositoryOpsThatThrow();
-        A.CallTo(() => ops.ExecuteMongoRestoreAsync(A<MongoRestoreOptions>._, A<TimeSpan?>._, A<CancellationToken?>._))
+        A.CallTo(() => ops.ExecuteMongoRestoreAsync(A<MongoRestoreOptions>.That.Matches(o => IsTargetRestore(o)),
+                A<TimeSpan?>._, A<CancellationToken?>._))
             .ThrowsAsync(new InvalidOperationException("mongorestore crashed (test)"));
         try
         {
@@ -448,6 +450,13 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
         }
     }
 
+    /// <summary>
+    ///     The restore of the target, not the scratch restore of the CK collections the restore check of service-managed
+    ///     models runs first.
+    /// </summary>
+    private static bool IsTargetRestore(MongoRestoreOptions options) =>
+        !options.Database.Contains("restorecheck_", StringComparison.Ordinal);
+
     /// <summary>The fixture's mongo tools; a test makes one call of them throw.</summary>
     private IRepositoryOpsService RepositoryOpsThatThrow() =>
         A.Fake<IRepositoryOpsService>(o => o.Wrapping(fixture.GetService<IRepositoryOpsService>()));
@@ -459,7 +468,9 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
         return new TenantBackupService(fixture.GetSystemContext(), repositoryOps,
             NullLogger<TenantBackupService>.Instance, provider.GetRequiredService<TenantOwnershipStore>(),
             provider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
-            provider.GetRequiredService<SystemDatabaseMarkerStore>(), provider.GetService<ITenantLifecycleStore>(),
+            provider.GetRequiredService<SystemDatabaseMarkerStore>(),
+            provider.GetRequiredService<Services.RestoreSystemModelCheck.RestoreSystemModelGuard>(),
+            provider.GetService<ITenantLifecycleStore>(),
             provider.GetService<IOptions<OctoSystemConfiguration>>());
     }
 

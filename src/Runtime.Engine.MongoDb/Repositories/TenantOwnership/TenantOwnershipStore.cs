@@ -316,6 +316,34 @@ internal sealed class TenantOwnershipStore
     }
 
     /// <summary>
+    ///     Drops <paramref name="databaseName" /> with everything in it, but only while its marker is still exactly the
+    ///     claim of the restore that created it (owner, tenant, claim time): a restore that refused the content it restored
+    ///     removes it again. Returns false - and drops nothing - when the marker is not that claim. Best effort.
+    /// </summary>
+    public async Task<bool> TryDropClaimedDatabaseAsync(string databaseName, string ownerSystemDatabaseName,
+        string tenantId, DateTime claimTime)
+    {
+        try
+        {
+            var marker = await GetAsync(databaseName).ConfigureAwait(false);
+            if (marker == null || !IsClaim(marker, ownerSystemDatabaseName, tenantId, claimTime))
+            {
+                return false;
+            }
+
+            await _adminRepositoryAccess.GetRepositoryClient(databaseName).DropRepositoryAsync(databaseName)
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not drop database '{DatabaseName}' after its restore was refused", databaseName);
+            return false;
+        }
+    }
+
+    /// <summary>
     ///     Removes the marker only when it names <paramref name="ownerSystemDatabaseName" /> (AB#8796).
     ///     Detach uses it: detaching a double-registered tenant in the instance that does NOT own the
     ///     database must leave the owner's marker in place, otherwise the owner would lose its claim.

@@ -16,6 +16,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.RestoreSystemModelCheck;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Defaults;
 
@@ -75,6 +76,8 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddFormulaEngine();
         builder.Services.AddTransient<IRepositoryOpsService, RepositoryOpsService>();
         builder.Services.AddTransient<IMongoTenantBackupService, TenantBackupService>();
+        // The restore check of service-managed models (System, System.*) between mongorestore and attach.
+        builder.Services.AddTransient<RestoreSystemModelGuard>();
 
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();

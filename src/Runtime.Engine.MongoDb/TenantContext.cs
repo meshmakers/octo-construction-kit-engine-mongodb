@@ -111,6 +111,76 @@ public class TenantContext : ITenantContext
     /// </summary>
     public string DatabaseName { get; }
 
+    /// <summary>
+    ///     Identity of the registry record this context was resolved from (the id of the tenant's registry entry), empty
+    ///     for the system tenant and for detached contexts. Part of the key of the per-process service-managed import
+    ///     memo, so a tenant that is attached again (a restore creates a new registry entry) is checked again on its next
+    ///     resolve, even when no tenant lifecycle notification reached this process.
+    /// </summary>
+    internal string RegistrationKey { get; private init; } = string.Empty;
+
+    #region Tenant restore support
+
+    /// <summary>An admin data source on <paramref name="databaseName" />, also for a database no tenant is attached to.</summary>
+    internal IMongoDbRepositoryDataSource CreateAdminDataSourceForRestore(string databaseName, string tenantId) =>
+        CreateRepositoryDataSourceAsAdmin(NormalizeDatabaseName(databaseName), tenantId);
+
+    /// <summary>A tenant context on the restored, still unattached <paramref name="databaseName" />.</summary>
+    internal ITenantContext CreateRestoreTenantContext(string tenantId, string databaseName) =>
+        CreateDetachedTenantContext(tenantId, databaseName);
+
+    /// <summary>Ensures the tenant database user of <paramref name="databaseName" />; true when it had to be created.</summary>
+    internal Task<bool> EnsureTenantDatabaseUserForRestoreAsync(string databaseName)
+    {
+        var normalized = NormalizeDatabaseName(databaseName);
+        return _adminRepositoryClient.EnsureUserAsync(_systemConfiguration.Value.AuthenticationDatabaseName, normalized,
+            string.Format(_systemConfiguration.Value.DatabaseUser, normalized),
+            _systemConfiguration.Value.DatabaseUserPassword);
+    }
+
+    /// <summary>Drops the tenant database user of <paramref name="databaseName" /> (best effort, logged).</summary>
+    internal async Task DropTenantDatabaseUserForRestoreAsync(string databaseName)
+    {
+        var normalized = NormalizeDatabaseName(databaseName);
+        try
+        {
+            await _adminRepositoryClient.DropUser(_systemConfiguration.Value.AuthenticationDatabaseName,
+                string.Format(_systemConfiguration.Value.DatabaseUser, normalized));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not drop the database user of database '{DatabaseName}' after a restore check",
+                normalized);
+        }
+    }
+
+    /// <summary>Drops the scratch database <paramref name="databaseName" /> of a restore pre-check (best effort, logged).</summary>
+    internal async Task DropRestoreCheckDatabaseAsync(string databaseName)
+    {
+        try
+        {
+            // This context's admin client: a client per scratch name would stay in the client cache for the process.
+            await _adminRepositoryClient.DropRepositoryAsync(databaseName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not drop the restore check database '{DatabaseName}'; drop it by hand",
+                databaseName);
+        }
+    }
+
+    /// <summary>Drops this process's CK cache of <paramref name="tenantId" /> when it is loaded.</summary>
+    internal void UnloadCkCacheForRestore(string tenantId)
+    {
+        var normalized = tenantId.NormalizeString();
+        if (_cacheService.IsTenantLoaded(normalized))
+        {
+            _cacheService.Unload(normalized);
+        }
+    }
+
+    #endregion Tenant restore support
+
     #region Transaction handling
 
     public async Task<IOctoAdminSession> GetAdminSessionAsync()
@@ -2382,14 +2452,18 @@ public class TenantContext : ITenantContext
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
-        var tenant = await TryGetChildTenantAsync(adminSession, tenantId);
-        if (tenant == null)
+        var registryRecord = await GetRtTenantAsync(adminSession, tenantId.NormalizeString());
+        if (registryRecord == null)
         {
             return null;
         }
 
+        var tenant = new OctoTenant(registryRecord.TenantId, registryRecord.DatabaseName);
         var context = new TenantContext(_loggerFactory, _systemConfiguration, _serviceProvider, tenantId,
-            tenant.DatabaseName);
+            tenant.DatabaseName)
+        {
+            RegistrationKey = registryRecord.RtId.ToString()
+        };
 
         var systemModelImported = await UpdateSystemCkModelAsync(tenant.DatabaseName, tenant.TenantId);
         await context.EnsureStreamDataCkModelIfEnabledAsync();
@@ -2719,7 +2793,7 @@ public class TenantContext : ITenantContext
     {
         foreach (var key in _serviceManagedCkModelsAttempted.Keys)
         {
-            // Keys are "{TenantId}:{modelName}" — compare only the tenant segment.
+            // Keys are "{TenantId}:{RegistrationKey}:{modelName}" — compare only the tenant segment.
             var separatorIndex = key.IndexOf(':');
             if (separatorIndex > 0 &&
                 key.AsSpan(0, separatorIndex).Equals(tenantId, StringComparison.OrdinalIgnoreCase))
@@ -2756,7 +2830,10 @@ public class TenantContext : ITenantContext
         foreach (var descriptor in _serviceProvider.GetServices<IServiceManagedCkModelDescriptor>())
         {
             var modelId = descriptor.CkModelId;
-            if (!_serviceManagedCkModelsAttempted.TryAdd($"{TenantId}:{modelId.Name}", true)) continue;
+            // Keyed by the registry record as well: a tenant attached again (a restore) is a new record and is checked
+            // again, also when no lifecycle notification cleared the memo. The tenant segment stays first, so
+            // ClearTenantResolveImportGuards still matches it.
+            if (!_serviceManagedCkModelsAttempted.TryAdd($"{TenantId}:{RegistrationKey}:{modelId.Name}", true)) continue;
             await ImportEmbeddedCkModelWithDowngradeGuardAsync(modelId);
         }
     }
