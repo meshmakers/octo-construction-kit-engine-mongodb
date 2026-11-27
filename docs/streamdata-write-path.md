@@ -100,6 +100,54 @@ Tests: `ComputedColumns/ArchiveHiddenColumnBackupIntegrationTests` (real CrateDB
 redaction), `StreamData.UnitTests/Copy/HiddenColumnExclusionTests`, `CopyStatementTests`. Rule and restore: engine
 `octo-construction-kit-engine/docs/archive-hidden-columns.md`, "Backups".
 
+### Backups leave the leftovers of computed columns out
+
+The physical table of an archive only grows, so it can hold columns its definition no longer owns: removing a computed
+column takes it out of the definition and leaves its physical column in the table (with every `{base}__v{N}` version of
+its formula changes), and a formula change of a computed column that stays leaves the earlier version behind. The restore
+provisions the table from the definition, and its column check (`StagingCopyRunner.EnsureColumnsExistAsync`) refuses a
+dump that holds a column the table lacks ("Nothing was loaded"). Before this rule, a native backup of every archive that
+ever removed a computed column, or changed the formula of one, could not be restored.
+
+- **What the dump leaves out.** `ResolveCopyTargetAsync` sets `ArchiveCopyTarget.Ownership`
+  (`Copy/ArchiveColumnOwnership`), and `StagingCopyRunner.PlanAsync` drops its leftovers from the data table's description
+  (= the manifest; a warning names them) and copies the data slices with a column list, like the Hidden columns. A column
+  is a leftover only on positive evidence. It is not owned (standard and platform columns, the ingested or aggregate
+  columns, the active and pending names of the computed columns), its type is one a computed column has (`boolean`,
+  `integer`, `bigint`, `double precision`, `timestamp with time zone`), and one of these holds:
+  - it is the base or a stored version of a computed column the definition still has, other than the active and pending
+    name. This holds even when the computed column carries the name of an attribute of the type;
+  - it has a versioned name (`{base}__v{N}`), or it is the base of such a column in the same table;
+  - the archive's CK type is known and no attribute path of it (records followed) maps to the name. For a rollup this check
+    always holds, because all its columns are derived.
+- **What the dump keeps.** Every other column stays in the manifest, so the restore still refuses it before loading
+  anything. That covers a plain column named like an attribute path of the type (ingested data the definition no longer
+  declares), unless a computed column of the definition explains it, as well as a column of another type (`text`, `object`, arrays), and a plain unknown column when the CK type cannot be read.
+- **What is dropped, and why that is right.** The values of a removed computed column were computed from the stored
+  columns with a formula the archive no longer has; the values of an earlier formula version are superseded by the active
+  version. Both are derived, not data, and no reader of the archive reads them.
+- **Provisioning names the current versions.** `EnsureArchiveCreatedAsync` provisions a computed column under its active
+  name (`{base}__v{N}` after a formula change) and, during a formula change, also under its pending name
+  (`WithCurrentComputedColumnNames`). The resolvers name a computed column by its base, which is the active name only until
+  the first formula change. Before, a restored definition whose formula had changed got a table without the column its
+  values live in: the load was refused, and new rows could not be written.
+- **Older dumps.** A native dump made before this rule still carries the leftovers. `COPY FROM` cannot skip a JSON key that
+  the table lacks: a strict table rejects the row, and a column list helps only for CSV (checked against CrateDB 6.4). So
+  the restore still refuses such a dump, and the refusal says that the columns are leftovers and that a new dump leaves them
+  out. The restore never creates them.
+- Known limit: a column that someone added by hand, with a name that is no attribute path of the type and with a
+  computed column's type, cannot be told apart from a removed computed column. It is left out. The other way round, a
+  removed computed column that carried the name of an attribute of the type keeps its version-0 column in the dump: the
+  definition no longer explains it, so the restore refuses it. Its versioned columns are left out.
+
+Tests: `ComputedColumns/ArchiveComputedColumnLeftoverBackupIntegrationTests` (real CrateDB). It covers a dump and restore
+round trip after a computed column was added and removed, after add, formula change and remove, and for a computed column
+that stays after a formula change (its active version round trips, its values are read by the logical name). It also
+covers a Hidden column together with a removed computed column, a rollup, a freshly provisioned time-range archive during a
+formula change (no column lost), and two refusals: an undeclared ingested column and a `text` column.
+`StreamData.UnitTests/Copy/ArchiveColumnOwnershipTests` and `StagingCopyRunnerTests` cover the rules and the refusal
+message for an older dump.
+
 ### Conflict Precedence — the upsert stops being last-write-wins
 
 Every archive write is an upsert on the row key, and the `DO UPDATE SET` was unconditional: the

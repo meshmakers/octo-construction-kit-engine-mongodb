@@ -48,6 +48,9 @@ internal sealed class SimulatedCrate : ICrateCopyClient
     public Dictionary<string, List<DateTime>> Store { get; } = new();
     public string[] SourceColumns { get; set; } = ["timestamp", "rtid", "value"];
     public string[] TargetColumns { get; set; } = ["timestamp", "rtid", "value"];
+
+    /// <summary>Data types the description reports for named columns; others are <c>text</c> (<c>timestamp</c> a timestamp).</summary>
+    public Dictionary<string, string> ColumnTypes { get; } = new();
     public string Filter { get; set; } = JobLogFilterGuard.RecommendedFilter;
     public long[] NodeDiskAvailable { get; set; } = [100L << 30];
 
@@ -190,7 +193,9 @@ internal sealed class SimulatedCrate : ICrateCopyClient
             return new CrateStatementResult(0, columns
                 .Select(c => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
                 {
-                    ["column_name"] = c, ["data_type"] = c == "timestamp" ? "timestamp with time zone" : "text"
+                    ["column_name"] = c,
+                    ["data_type"] = ColumnTypes.TryGetValue(c, out var type) ? type
+                        : c == "timestamp" ? "timestamp with time zone" : "text"
                 }).ToList());
         }
 

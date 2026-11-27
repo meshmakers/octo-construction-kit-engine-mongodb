@@ -261,7 +261,7 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   (`StagingCopyRunner`), the storage credential only inside `CopyStatement` (never log `Reveal()`). A rollup's generation
   map is the last slice of a plan: a dump copies it first and the data after it, a load the data first and the map last. The
   repeat rule is `RollupArchiveDumper` (read map, copy, read map; repeat up to `MaxMapAttempts`, then
-  `GenerationMapKeptMoving`). The plan in a dump result carries the rows the copy *reported*, not the counted rows.
+  `GenerationMapKeptMoving`). The plan in a dump result carries the rows the copy *reported*, not the counted rows. A dump leaves out the Hidden columns and the leftovers of computed columns (`ArchiveColumnOwnership`); the load refuses a dumped column the table lacks (`streamdata-write-path.md`, "Backups leave the leftovers of computed columns out").
 - **Slice retry and disk headroom**: `CopySliceFromAsync` loads a slice up to 3 times; only a transient failure
   (`CopyFailureClassifier`: circuit breaker, rejected execution, node/shard not available, statement timeout, a `RETURN SUMMARY` that is short with
   `error_count = 0`, rejected rows that all carry such a text) is repeated, after 30 s and 60 s, with `overwrite_duplicates = true` and half the

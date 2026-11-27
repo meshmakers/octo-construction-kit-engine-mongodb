@@ -24,6 +24,23 @@
   reported for the engine's `RollupArchive` read and the drain gives no hourly `unknown` warning. Docs:
   `docs/runtime-read-guard.md`.
 
+- AB#9837 Fix: a native dump of an archive whose table still holds the leftovers of computed columns now restores. A
+  removed computed column leaves its physical column in the table, with the `{base}__v{N}` versions of its formula
+  changes, and a formula change leaves the earlier version behind. The dump copied them, and the restore refused the
+  archive ("has no column ... that the dump contains. Nothing was loaded."), so the archive ended Disabled without rows.
+  The dump now leaves these leftovers out (`Copy/ArchiveColumnOwnership`, `ArchiveCopyTarget.Ownership`, a warning names
+  them). Their values are derived from a formula the archive no longer has, or from an earlier formula, and nothing reads
+  them. A column is left out only on positive evidence: it has a computed column's type, and it is a stored version of a
+  computed column, or it carries a versioned name, or it maps to no attribute path of the CK type. Every other column the
+  definition does not own stays in the dump and is still refused by the restore. That covers undeclared ingested columns,
+  `text`/`object` columns, and plain unknown columns while the CK type cannot be read. `EnsureArchiveCreatedAsync` now
+  provisions a computed column under its active name (and its pending name during a formula change), not under its base
+  name. Before, a restored archive whose formula had changed lacked the column its values live in. Behaviour change: a dump
+  made before this fix still carries the leftovers, and its restore is still refused. The refusal now says that the columns
+  are leftovers and that a new dump leaves them out. The restore never creates them, because `COPY FROM` cannot skip a JSON
+  key. Tests: `ArchiveComputedColumnLeftoverBackupIntegrationTests`, `ArchiveColumnOwnershipTests`, `StagingCopyRunnerTests`.
+  Docs: `docs/streamdata-write-path.md`, "Backups leave the leftovers of computed columns out".
+
 - AB#9750 Fix: the count-only form of a nested association query (`GetRtAssociationTargetsAsync` with `take: 0`, the
   form of `children(first: 0) { totalCount }` and, with the asset repository of the same change, of every nested
   selection of `totalCount` alone) counts on the server and loads no target document. Before, it ran the item pipeline
