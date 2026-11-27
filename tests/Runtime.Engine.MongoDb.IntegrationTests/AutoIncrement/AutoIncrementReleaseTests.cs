@@ -181,15 +181,18 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
-    ///     AC 5: a released document updated again - an update of another attribute, an update that sets the released
-    ///     state again, and a replace without the number - keeps its number, and the counter is not advanced.
+    ///     AC 5: a released document updated again - an update of an attribute the range keeps changeable, an update that
+    ///     sets the released state again, and a replace without the number - keeps its number, and the counter is not
+    ///     advanced. (The lock of released documents refuses every other change.)
     /// </summary>
     [Fact]
     public async Task ReleasedDocument_UpdatedAgain_KeepsItsNumber_AndTheCounter()
     {
         await WithTenantAsync("relagain", async (repository, database, _) =>
         {
-            var counterId = await InsertReleaseCounterAsync(repository);
+            var counter = await NewReleaseCounterAsync(repository, ["Released", "Cancelled"], changeable: ["Title"]);
+            await ApplyAsync(repository, Insert(counter));
+            var counterId = counter.RtId;
             var released = Invoice(Released);
             await ApplyAsync(repository, Insert(released));
             var number = (await AttributesAsync(database, released.RtId))["number"].AsString;
@@ -202,6 +205,7 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
             await ApplyAsync(repository,
                 EntityUpdateInfo<RtEntity>.CreateUpdate(releasedAgain.ToRtEntityId(), releasedAgain));
             var replacement = Invoice(Released, released.RtId);
+            replacement.SetAttributeRawValue("Title", "retitled");
             await ApplyAsync(repository,
                 EntityUpdateInfo<RtEntity>.CreateReplace(replacement.ToRtEntityId(), replacement));
 
@@ -310,7 +314,7 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
     }
 
     private static async Task<RtAutoIncrement> NewReleaseCounterAsync(ITenantRepository repository,
-        List<string> releasedValues, string stateAttribute = StateAttribute)
+        List<string> releasedValues, string stateAttribute = StateAttribute, List<string>? changeable = null)
     {
         var counter = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
         counter.RtId = OctoObjectId.GenerateNewId();
@@ -323,7 +327,8 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
         counter.Release = new RtNumberRangeReleaseRecord
         {
             StateAttribute = stateAttribute,
-            ReleasedValues = new AttributeStringValueList(releasedValues)
+            ReleasedValues = new AttributeStringValueList(releasedValues),
+            ChangeableAttributes = changeable == null ? null : new AttributeStringValueList(changeable)
         };
         return counter;
     }
@@ -456,7 +461,7 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>Invoice and LegacyDoc, each with Title, the enum DocumentState and a String Number from its own counter.</summary>
-    private static CkCompiledModelRoot DocumentModel(CkModelId system)
+    internal static CkCompiledModelRoot DocumentModel(CkModelId system)
     {
         var id = new CkModelId("ReleaseTest-1.0.0");
         var stateEnumId = new CkId<CkEnumId>(id, new CkEnumId("DocumentStates-1"));

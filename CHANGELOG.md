@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- AB#9759 Test: the lock of released documents (engine `ReleasedDocumentLock`) against a real MongoDB. Every write path
+  of the tenant repository (`ApplyChanges`, update/replace/delete by id and by filter, archive, insert with a stored id)
+  and the RT import (`ImportTextAsync` Upsert and Insert, `ImportModelAsync` as used by the blueprint seed and re-apply)
+  is refused on a released document with message 168, the raw BSON document stays the same, and a `Denied` audit entry
+  is written although the refused transaction is aborted; drafts are written as before; an import of the stored content
+  is a no-op; an import of a new released document keeps the number of the file and leaves the counter; a tenant dump
+  restored with mongorestore and attached brings documents, counter and audit entries back, and the next released
+  document gets the next number. `AutoIncrementReleaseTests` (re-update of a released document) now changes only an
+  attribute the range keeps changeable. Tests: `ReleasedDocumentLockIntegrationTests`.
+
 - AB#9758 New: a number range with a release configuration (`System/AutoIncrement.Release`, System 2.9.0) numbers a
   document only when it reaches a released state. `AutoIncrementModifier` gives a document of such a range its number
   in the write that puts its `StateAttribute` to one of the `ReleasedValues`: an insert directly in that state, a
