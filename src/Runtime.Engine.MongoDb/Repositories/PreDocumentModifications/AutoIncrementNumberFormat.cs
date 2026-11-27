@@ -187,6 +187,110 @@ public sealed partial class AutoIncrementNumberFormat
         return sb.ToString();
     }
 
+    /// <summary>
+    ///     Reads numbers of this format back into their counter value, for the numbers of one fiscal year
+    ///     (<paramref name="fiscalYear" />, needed only when the format shows it). The reader accepts exactly the texts
+    ///     <see cref="Format" /> writes: a text is read only when formatting the value it carries gives the same text
+    ///     again, so a number written with other padding, another year or another prefix is not read.
+    /// </summary>
+    public AutoIncrementNumberReader CreateReader(int? fiscalYear)
+    {
+        var prefix = new StringBuilder();
+        var pattern = new StringBuilder("^");
+        if (_parts != null)
+        {
+            var beforeCounter = true;
+            foreach (var part in _parts)
+            {
+                var text = part.Kind switch
+                {
+                    PartKind.Literal => part.Text!,
+                    PartKind.Year4 => RequireFiscalYear(fiscalYear).ToString("D4", CultureInfo.InvariantCulture),
+                    PartKind.Year2 => (RequireFiscalYear(fiscalYear) % 100).ToString("D2", CultureInfo.InvariantCulture),
+                    _ => null
+                };
+                if (text == null)
+                {
+                    beforeCounter = false;
+                    pattern.Append(CounterPattern);
+                    continue;
+                }
+
+                if (beforeCounter)
+                {
+                    prefix.Append(text);
+                }
+
+                pattern.Append(Regex.Escape(text));
+            }
+        }
+        else if (_legacyFormat != null)
+        {
+            AppendLegacyPattern(_legacyFormat, prefix, pattern);
+        }
+        else
+        {
+            pattern.Append(CounterPattern);
+        }
+
+        pattern.Append('$');
+        return new AutoIncrementNumberReader(this, fiscalYear, prefix.ToString(),
+            new Regex(pattern.ToString(), RegexOptions.CultureInvariant));
+    }
+
+    private const string CounterPattern = "([0-9]+)";
+
+    /// <summary>
+    ///     A legacy <c>string.Format</c> format: escaped braces are literal text, every placeholder (only <c>{0}</c>
+    ///     and <c>{0:...}</c> pass <see cref="TryParse" />) is the counter. A specifier that writes something other
+    ///     than digits (e.g. <c>N0</c> with a group separator) is not read; the round trip of the reader refuses it.
+    /// </summary>
+    private static void AppendLegacyPattern(string format, StringBuilder prefix, StringBuilder pattern)
+    {
+        var beforeCounter = true;
+        var literal = new StringBuilder();
+        for (var i = 0; i < format.Length; i++)
+        {
+            var c = format[i];
+            if ((c == '{' || c == '}') && i + 1 < format.Length && format[i + 1] == c)
+            {
+                literal.Append(c);
+                i++;
+                continue;
+            }
+
+            if (c == '{')
+            {
+                var end = format.IndexOf('}', i);
+                FlushLiteral();
+                beforeCounter = false;
+                pattern.Append(CounterPattern);
+                i = end < 0 ? format.Length : end;
+                continue;
+            }
+
+            literal.Append(c);
+        }
+
+        FlushLiteral();
+
+        void FlushLiteral()
+        {
+            if (literal.Length == 0)
+            {
+                return;
+            }
+
+            if (beforeCounter)
+            {
+                prefix.Append(literal);
+            }
+
+            pattern.Append(Regex.Escape(literal.ToString()));
+            literal.Clear();
+        }
+    }
+
     private static int RequireFiscalYear(int? fiscalYear) =>
         fiscalYear ?? throw new InvalidOperationException(
             "The number format shows the fiscal year, but the range has no fiscal-year period.");

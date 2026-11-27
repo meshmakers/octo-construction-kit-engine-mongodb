@@ -897,7 +897,7 @@ public class AutoIncrementModifier(
         throw new InvalidOperationException(
             $"Counter '{counter.RtId}' has no period {fiscalYear} after it was incremented.");
 
-    private static long? TryGetPeriodCurrentValue(RtAutoIncrement counter, int fiscalYear)
+    internal static long? TryGetPeriodCurrentValue(RtAutoIncrement counter, int fiscalYear)
     {
         var period = counter.Periods?.FirstOrDefault(p => ToLong(p.FiscalYear) == fiscalYear);
         return period == null ? null : ToLong(period.CurrentValue);

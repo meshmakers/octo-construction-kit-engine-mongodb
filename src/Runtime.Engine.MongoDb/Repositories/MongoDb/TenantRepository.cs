@@ -15,6 +15,7 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Secrets;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
@@ -1586,6 +1587,16 @@ internal class TenantRepository(
         {
             throw OperationFailedException.UpdateAutoCompleteTextsFailed(ckTypeId, attributeName, e);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<NumberRangeGapReport?> GetNumberRangeGapReportAsync(IOctoSession session, string numberRange,
+        int? fiscalYear, CancellationToken cancellationToken = default)
+    {
+        var ckCacheService = await GetCkCacheServiceAsync().ConfigureAwait(false);
+        var query = new NumberRangeGapReportQuery(TenantId, ckCacheService, mongoDbRepositoryDataSource,
+            typeGraph => CreateSecurityFilterAsync(session, typeGraph));
+        return await query.RunAsync(session, numberRange, fiscalYear, cancellationToken).ConfigureAwait(false);
     }
 
     #endregion Advanced functionality

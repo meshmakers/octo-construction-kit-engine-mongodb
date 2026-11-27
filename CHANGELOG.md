@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- AB#9763 New: `ITenantRepository.GetNumberRangeGapReportAsync(session, numberRange, fiscalYear)` - the gap report of a
+  number range per fiscal year: the counter values from `StartValue` (or 1) to the fiscal year's current value (of the
+  range without periods) that no released document carries (as intervals), the values more than one document carries
+  with every document id, and numbers outside the interval or without the range's format. Read-only, in the caller's
+  session with the caller's data-permission read filter (a hidden document counts as missing); one aggregation per
+  numbered type through the index on the number attribute the document model declares (anchored prefix of the fiscal
+  year; explain plan in the tests), drafts are not read. `AutoIncrementNumberFormat.CreateReader` reads a number back
+  into its counter value. Interface change: `ITenantRepository` gains the method. Docs:
+  `docs/number-range-gap-report.md`. Tests: `NumberRangeGapReportTests`, `AutoIncrementNumberReaderTests`.
 - AB#9762 New: `AutoIncrementModifier` writes a `Release` entry of the document audit trail (`System/DocumentAuditEntry`)
   for every number a document gets on release - document, the caller's subject, the UTC time of the numbering, the
   number as written, the fiscal year and the counter value - in the session of the write, so an aborted transaction

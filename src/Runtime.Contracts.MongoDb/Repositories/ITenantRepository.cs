@@ -532,5 +532,22 @@ public interface ITenantRepository : IRuntimeRepository
     Task UpdateAutoCompleteTexts(IOctoSession session, CkId<CkTypeId> ckTypeId, string attributeName,
         IEnumerable<object> autoCompleteValues);
 
+    /// <summary>
+    ///     The gap report of the number range <paramref name="numberRange" /> (the well-known name of a
+    ///     <c>System/AutoIncrement</c>) for <paramref name="fiscalYear" />: the counter values from the range's start
+    ///     value to the current value of that fiscal year's period (of the range, for a range without periods) that no
+    ///     released document carries, and those more than one document carries. Read-only. The documents of every CK
+    ///     type whose attribute names the range are read with the caller's data-permission read filter (the session's
+    ///     security context), through an index on the number attribute that the document model declares; a document the
+    ///     caller may not read is not counted, so its number shows as missing.
+    /// </summary>
+    /// <param name="session">Octo session of the caller</param>
+    /// <param name="numberRange">Well-known name of the range</param>
+    /// <param name="fiscalYear">The fiscal year; required for a range with fiscal-year periods, refused for one without</param>
+    /// <param name="cancellationToken">Cancels the read</param>
+    /// <returns>The report, or null when there is no such range or the caller may not read it</returns>
+    Task<NumberRangeGapReport?> GetNumberRangeGapReportAsync(IOctoSession session, string numberRange,
+        int? fiscalYear, CancellationToken cancellationToken = default);
+
     #endregion Advanced functionality
 }
