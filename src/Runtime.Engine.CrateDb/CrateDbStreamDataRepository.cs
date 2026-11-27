@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -153,10 +155,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             Client.CrateDatabaseClient.BuildConflictGuard(precedence, userColumnNames);
         }
 
-        var resolvedColumns = snapshot.RollupAggregations is { } aggs
+        var resolvedColumns = WithCurrentComputedColumnNames(snapshot, snapshot.RollupAggregations is { } aggs
             ? RollupColumnTypeResolver.Resolve(snapshot.Columns, aggs)
             : ArchivePathTypeResolver.Resolve(
-                _ckCacheService, _tenantId, snapshot.TargetCkTypeId, snapshot.Columns);
+                _ckCacheService, _tenantId, snapshot.TargetCkTypeId, snapshot.Columns));
 
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
         var shape = snapshot.RollupAggregations is not null ? "rollup"
@@ -212,6 +214,38 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup: false);
             await _platformColumns.EnsureOriginColumnsAsync(snapshot.RtId.ToString(), CancellationToken.None);
         }
+    }
+
+    /// <summary>
+    /// The provisioning DDL of the computed columns under the physical names the read and write paths use - the
+    /// active name (<c>{base}__v{N}</c> after a formula change) and, during a formula change, the pending one. The
+    /// resolvers name a computed column by its base, which is the active name only until its first formula change; a table
+    /// provisioned for a restored definition whose formula changed would otherwise lack the column its values live in.
+    /// </summary>
+    private static IReadOnlyList<ArchiveColumnDdl> WithCurrentComputedColumnNames(
+        ArchiveSnapshot snapshot, IReadOnlyList<ArchiveColumnDdl> resolved)
+    {
+        var computed = snapshot.Columns.Where(c => c.IsComputed && !string.IsNullOrWhiteSpace(c.Name)).ToList();
+        if (computed.All(c => c.ComputedVersion == 0 && !c.HasPendingFormula))
+        {
+            return resolved;
+        }
+
+        var bases = computed.Select(ComputedColumnNaming.Base).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // A computed column's DDL has no path (ComputedColumnDdl); ingested and aggregate columns keep theirs.
+        var result = resolved
+            .Where(d => !(string.IsNullOrEmpty(d.Path) && bases.Contains(ArchiveDdlGenerator.ResolveColumnName(d))))
+            .ToList();
+        foreach (var column in computed)
+        {
+            result.Add(ComputedColumnDdl.Build(column, ComputedColumnNaming.Active(column)));
+            if (column.HasPendingFormula)
+            {
+                result.Add(ComputedColumnDdl.Build(column, ComputedColumnNaming.Pending(column)));
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -2224,8 +2258,88 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // A rollup has a generation map next to its data table; every other archive never touches one.
             snapshot.RollupAggregations is not null ? tableName + "__genmap" : null,
             // AB#9141: a dump never carries the values of a column that reaches a Hidden attribute.
-            FindHiddenColumnExclusion(snapshot, includeRecorded: true) is { } exclusion ? exclusion.Excludes : null);
+            FindHiddenColumnExclusion(snapshot, includeRecorded: true) is { } exclusion ? exclusion.Excludes : null,
+            // Nor the derived values of columns the definition no longer owns (removed computed columns).
+            BuildColumnOwnership(snapshot, archiveRtId));
     }
+
+    /// <summary>
+    /// The columns the definition of <paramref name="snapshot"/> owns and the evidence that tells a leftover of a computed
+    /// column from other columns (<see cref="ArchiveColumnOwnership"/>): the standard and platform columns, the
+    /// ingested or aggregate columns and the active and pending names of the computed columns; and the physical names of
+    /// the attribute paths of the archive's CK type - none for a rollup, whose columns are all derived, and <c>null</c>
+    /// when the type cannot be read.
+    /// </summary>
+    private ArchiveColumnOwnership BuildColumnOwnership(ArchiveSnapshot snapshot, OctoObjectId archiveRtId)
+    {
+        var (_, userColumns) = ResolveTableAndColumns(snapshot, archiveRtId);
+        var owned = StandardColumnNames
+            .Concat(ArchiveRowOriginColumns.Names)
+            .Concat(ArchiveRowOriginColumns.RollupColumns.Select(c => c.Name))
+            .Concat(userColumns);
+        var computed = snapshot.Columns
+            .Where(c => c.IsComputed && !string.IsNullOrWhiteSpace(c.Name))
+            .Select(c => (ComputedColumnNaming.Base(c), (IReadOnlySet<string>)new HashSet<string>(
+                c.HasPendingFormula
+                    ? [ComputedColumnNaming.Active(c), ComputedColumnNaming.Pending(c)]
+                    : [ComputedColumnNaming.Active(c)], StringComparer.OrdinalIgnoreCase)))
+            .ToList();
+        var attributes = snapshot.RollupAggregations is not null
+            ? new HashSet<string>()
+            : AttributeColumnNames(snapshot);
+        return new ArchiveColumnOwnership(owned, computed, attributes);
+    }
+
+    /// <summary>
+    /// The physical column names of every attribute path of the archive's CK type (records followed, a record itself
+    /// included); <c>null</c> when the type or one of its records cannot be read.
+    /// </summary>
+    private IReadOnlySet<string>? AttributeColumnNames(ArchiveSnapshot snapshot)
+    {
+        try
+        {
+            if (!_ckCacheService.TryGetRtCkType(_tenantId, snapshot.TargetCkTypeId, out var type) || type is null)
+            {
+                return null;
+            }
+
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return Collect(type.AllAttributesByName.Values, prefix: string.Empty, depth: 0) ? names : null;
+
+            bool Collect(IEnumerable<CkTypeAttributeGraph> attributes, string prefix, int depth)
+            {
+                foreach (var attribute in attributes)
+                {
+                    var path = prefix + attribute.AttributeName;
+                    names.Add(ColumnNameMapper.PathToColumnName(path));
+                    if (attribute.ValueType is not (AttributeValueTypesDto.Record or AttributeValueTypesDto.RecordArray) ||
+                        depth >= MaxRecordDepth)
+                    {
+                        continue; // a record nested deeper than any archive path reaches is not followed (no cycle)
+                    }
+
+                    if (attribute.ValueCkRecordId is null ||
+                        !_ckCacheService.TryGetCkRecord(_tenantId, attribute.ValueCkRecordId, out var nested) || nested is null ||
+                        !Collect(nested.AllAttributesByName.Values, path + ".", depth + 1))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogWarning(ex,
+                "Archive {ArchiveRtId} of tenant {TenantId}: the attributes of its CK type could not be read; only the names of " +
+                "computed columns tell their leftovers apart", snapshot.RtId, _tenantId);
+            return null;
+        }
+    }
+
+    /// <summary>How deep <see cref="AttributeColumnNames"/> follows nested records.</summary>
+    private const int MaxRecordDepth = 8;
 
     /// <inheritdoc />
     public Task<StagingCopyReadiness> CheckStagingCopyReadinessAsync(CancellationToken cancellationToken = default)

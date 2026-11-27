@@ -134,6 +134,12 @@ These rules bind new and changed code. Known exceptions in existing code are nam
   cannot be read, and not yet recorded, can still end up in a backup
   ([docs/streamdata-write-path.md](docs/streamdata-write-path.md), "Backups leave Hidden columns out";
   `HiddenColumnExclusionTests`, `ArchiveHiddenColumnBackupIntegrationTests`).
+- **A dump carries only columns the archive definition owns, or columns the restore refuses.** The leftovers of computed
+  columns (a removed computed column, an earlier formula version) are left out through `ArchiveColumnOwnership`. A column
+  is a leftover only on positive evidence; every other unowned column stays in the dump, so the restore still refuses it.
+  Provisioning names computed columns by their active and pending versions
+  ([docs/streamdata-write-path.md](docs/streamdata-write-path.md), "Backups leave the leftovers of computed columns out";
+  `ArchiveColumnOwnershipTests`, `ArchiveComputedColumnLeftoverBackupIntegrationTests`).
 - **The physical table of an activated archive only grows.** Reconciliation adds declared columns and never drops or
   retypes one. A column added to an activated raw or time-range archive goes through the engine's
   `IArchiveLifecycleService.AddArchiveColumnAsync` (from a seed through `ArchiveDefinitionGuard.TakeColumnAdditions`),
