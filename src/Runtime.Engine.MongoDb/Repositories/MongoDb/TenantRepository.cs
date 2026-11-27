@@ -84,6 +84,12 @@ internal class TenantRepository(
     }
 
     /// <summary>
+    ///     The key count a read hands to the runtime read guard: the number of ids only when the list has entries.
+    ///     <c>AddIdFilter</c> ignores an empty list, so a read with an empty key list is not limited by it (AB#9824).
+    /// </summary>
+    internal static int? KeyCount<TId>(IReadOnlyCollection<TId>? ids) => ids is { Count: > 0 } ? ids.Count : null;
+
+    /// <summary>
     ///     Reports a multiple-origin read (entities summed over the origins) to the <see cref="ReadGuard" /> (AB#9824)
     ///     and returns its result unchanged.
     /// </summary>
@@ -824,7 +830,7 @@ internal class TenantRepository(
         if (graphDirection != GraphDirections.Any)
         {
             return ObserveMultipleOriginRead(await RunAsync(graphDirection), RuntimeReadKinds.AssociationTargets,
-                associationCkTypeId, take, targetRtIds?.Count);
+                associationCkTypeId, take, KeyCount(targetRtIds));
         }
 
         // Any = Inbound | Outbound. Associations are stored directed (originRtId -> targetRtId), so a
@@ -836,7 +842,7 @@ internal class TenantRepository(
         var inboundResult = await RunAsync(GraphDirections.Inbound);
         var outboundResult = await RunAsync(GraphDirections.Outbound);
         return ObserveMultipleOriginRead(MergeAssociationResultSets(inboundResult, outboundResult),
-            RuntimeReadKinds.AssociationTargets, associationCkTypeId, take, targetRtIds?.Count);
+            RuntimeReadKinds.AssociationTargets, associationCkTypeId, take, KeyCount(targetRtIds));
     }
 
     private static IMultipleOriginResultSet<TTargetEntity> MergeAssociationResultSets<TTargetEntity>(
@@ -945,7 +951,7 @@ internal class TenantRepository(
             DataSecurityFilterRenderer.Build<TTargetEntity>(await CreateSecurityFilterAsync(session, targetTypeGraph)));
 
         return ObserveMultipleOriginRead(await hierarchicalRtQuery.ExecuteQuery(session, skip, take),
-            RuntimeReadKinds.IndirectAssociationTargets, targetCkTypeId.ToString(), take, rtIds?.Count);
+            RuntimeReadKinds.IndirectAssociationTargets, targetCkTypeId.ToString(), take, KeyCount(rtIds));
     }
 
     public async Task<IMultipleOriginResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session,
@@ -977,7 +983,7 @@ internal class TenantRepository(
             DataSecurityFilterRenderer.Build<RtEntity>(await CreateSecurityFilterAsync(session, targetTypeGraph)));
 
         return ObserveMultipleOriginRead(await hierarchicalRtQuery.ExecuteQuery(session, skip, take),
-            RuntimeReadKinds.IndirectAssociationTargets, targetCkTypeId.ToString(), take, targetRtIds?.Count);
+            RuntimeReadKinds.IndirectAssociationTargets, targetCkTypeId.ToString(), take, KeyCount(targetRtIds));
     }
 
     public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session,

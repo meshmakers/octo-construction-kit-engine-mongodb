@@ -290,6 +290,53 @@ public sealed class RuntimeReadGuardTests : IDisposable
     }
 
     /// <summary>
+    ///     A logger that throws on every call - also on the debug log of the guard's own failure - never makes
+    ///     Observe throw, so a successful read is never lost to its report.
+    /// </summary>
+    [Fact]
+    public void Observe_LoggerThrows_AlsoOnTheFailureReport_NeverThrows()
+    {
+        var guard = new RuntimeReadGuard(() => _options, new RuntimeReadGuardMetrics(_meterFactory),
+            new ThrowingLogger(), _time);
+
+        guard.Observe(Tenant, "ByType", CkType, null, null, 7);
+        using (RuntimeReadScope.BeginExecution(new RuntimeReadExecution(Tenant, "p", null, "f", "e")))
+        using (RuntimeReadScope.BeginNode("GetRtEntitiesByType@1", "GetRtEntitiesByType@1", "0:node"))
+        {
+            guard.Observe(Tenant, "ByType", CkType, null, null, 7);
+        }
+    }
+
+    /// <summary>
+    ///     A full unknown-caller table keeps the throttle of its active keys: a new key is left out (counted as
+    ///     dropped) instead of clearing the table, so the active keys do not warn again within the hour; once keys
+    ///     expire, they are pruned and a new key is reported.
+    /// </summary>
+    [Fact]
+    public void Observe_UnknownCallerTableFull_KeepsActiveKeys_AndDropsTheNewKey()
+    {
+        for (var i = 0; i < RuntimeReadGuard.MaxUnknownCallerKeys; i++)
+        {
+            _guard.Observe(Tenant, "ByType", "Test-1.0.0/T" + i, null, null, 1);
+        }
+
+        Assert.Equal(RuntimeReadGuard.MaxUnknownCallerKeys, _logger.Warnings.Count);
+
+        _guard.Observe(Tenant, "ByType", "Test-1.0.0/New", null, null, 1);
+        _guard.Observe(Tenant, "ByType", "Test-1.0.0/T0", null, null, 1);
+
+        Assert.Equal(RuntimeReadGuard.MaxUnknownCallerKeys, _logger.Warnings.Count);
+        Assert.Equal(1, _guard.DroppedUnknownCallerReports);
+
+        _time.Advance(RuntimeReadGuard.UnknownCallerInterval);
+        _guard.Observe(Tenant, "ByType", "Test-1.0.0/New", null, null, 1);
+
+        Assert.Equal(RuntimeReadGuard.MaxUnknownCallerKeys + 1, _logger.Warnings.Count);
+        Assert.Equal("Test-1.0.0/New", _logger.Warnings[^1].State["CkTypeId"]);
+        Assert.Equal(1, _guard.DroppedUnknownCallerReports);
+    }
+
+    /// <summary>
     ///     Lease invariant (AB#9824, pooled adapters): the throttle is the guard's only tenant-keyed state; forgetting
     ///     tenant A drops exactly A's entries, so nothing of A outlives its lease and B is untouched.
     /// </summary>
@@ -423,6 +470,17 @@ public sealed class RuntimeReadGuardTests : IDisposable
         public override DateTimeOffset GetUtcNow() => _now;
 
         public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private sealed class ThrowingLogger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("logger down");
     }
 
     private sealed record LogEntry(LogLevel Level, EventId EventId, Dictionary<string, object?> State);

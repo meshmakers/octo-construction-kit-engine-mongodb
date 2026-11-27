@@ -135,6 +135,64 @@ public sealed class RuntimeReadGuardIntegrationTests(SampleRtModelDataFixture fi
         Assert.Equal((long)targets.Values.Sum(r => r.Items.Count()), warnings[1]["ReturnedCount"]);
     }
 
+    /// <summary>
+    ///     An empty target id list adds no id filter (<c>AddIdFilter</c> ignores it), so an association read returns
+    ///     the same targets as without a key list: it is unbounded and reported, not counted as bounded by zero keys.
+    ///     A by-id read with an empty list returns nothing before it reads, so it is not reported.
+    /// </summary>
+    [Fact]
+    public async Task EmptyKeyList_IsNoFilter_AndTheAssociationReadIsReported()
+    {
+        var repository = CreateRepository();
+        using var session = await repository.GetSessionAsync();
+        using var execution = Execution();
+
+        IResultSet<RtEntity> byId;
+        using (Node("EmptyIds@1", 0))
+        {
+            byId = await repository.GetRtEntitiesByIdAsync(session, TestCkIds.RtCkStateOrProvinceTypeId,
+                new List<OctoObjectId>(), RtEntityQueryOptions.Create());
+        }
+
+        var states = await repository.GetRtEntitiesByTypeAsync(session, TestCkIds.RtCkStateOrProvinceTypeId,
+            RtEntityQueryOptions.Create(), 0, 10);
+        var originIds = states.Items.Select(s => s.RtId).ToList();
+        IMultipleOriginResultSet<RtEntity> unfiltered;
+        using (RuntimeReadScope.Suppress())
+        {
+            unfiltered = await repository.GetRtAssociationTargetsAsync(session, originIds,
+                TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, TestCkIds.RtCkDistrictTypeId,
+                GraphDirections.Inbound, null, RtEntityQueryOptions.Create());
+        }
+
+        IMultipleOriginResultSet<RtEntity> targets;
+        using (Node("EmptyTargetIds@1", 1))
+        {
+            targets = await repository.GetRtAssociationTargetsAsync(session, originIds,
+                TestCkIds.RtCkStateOrProvinceTypeId, SystemCkIds.RtCkParentChildRoleId, TestCkIds.RtCkDistrictTypeId,
+                GraphDirections.Inbound, new List<OctoObjectId>(), RtEntityQueryOptions.Create());
+        }
+
+        var expected = unfiltered.Values.Sum(r => r.Items.Count());
+        Assert.Empty(byId.Items);
+        Assert.True(expected > 0);
+        Assert.Equal(expected, targets.Values.Sum(r => r.Items.Count()));
+        var warnings = UnboundedWarnings;
+        Assert.Single(warnings);
+        Assert.Equal("EmptyTargetIds@1", warnings[0]["NodeType"]);
+        Assert.Equal(RuntimeReadKinds.AssociationTargets, warnings[0]["ReadKind"]);
+        Assert.Equal((long)expected, warnings[0]["ReturnedCount"]);
+    }
+
+    [Fact]
+    public void KeyCount_IsTheNumberOfIds_OnlyWhenTheListHasEntries()
+    {
+        Assert.Null(TenantRepository.KeyCount<OctoObjectId>(null));
+        Assert.Null(TenantRepository.KeyCount(new List<OctoObjectId>()));
+        Assert.Equal(2, TenantRepository.KeyCount(new List<OctoObjectId> { OctoObjectId.GenerateNewId(),
+            OctoObjectId.GenerateNewId() }));
+    }
+
     [Fact]
     public async Task ModeOff_ReportsNothing()
     {

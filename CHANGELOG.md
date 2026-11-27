@@ -21,8 +21,10 @@
   whose cross-tenant guard reads the registry first - is reported for its own read. The stream-data archive and
   rollup archive enumerations (series resolution of a downsampling query, stream-data hosted services) and the
   recompute-job reads of the computed-column backfill drain run suppressed too, so a `GetQueryById@1` node is not
-  reported for the engine's `RollupArchive` read and the drain gives no hourly `unknown` warning. Docs:
-  `docs/runtime-read-guard.md`.
+  reported for the engine's `RollupArchive` read and the drain gives no hourly `unknown` warning. An empty target id list
+  (association and indirect association targets) adds no id filter and so counts as no key list, not as a bound of 0. The throttle table of the `unknown` caller (at most 10,000 tenant and CK type pairs) drops only expired
+  pairs when full; while it stays full a new pair is not reported, so active pairs do not warn again. A logger that
+  throws while the guard reports its own failure no longer escapes into the read. Docs: `docs/runtime-read-guard.md`.
 
 - AB#9837 Fix: a native dump of an archive whose table still holds the leftovers of computed columns now restores. A
   removed computed column leaves its physical column in the table, with the `{base}__v{N}` versions of its formula

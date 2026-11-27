@@ -24,7 +24,11 @@ internal sealed class RuntimeReadGuard
     /// <summary>How often a read without execution is reported per tenant and CK type.</summary>
     internal static readonly TimeSpan UnknownCallerInterval = TimeSpan.FromHours(1);
 
-    /// <summary>The largest number of remembered unknown-caller keys; the oldest are dropped beyond it.</summary>
+    /// <summary>
+    ///     The largest number of remembered unknown-caller keys. When the table is full, expired keys are dropped; while
+    ///     it is still full, a new key is not remembered and its read not reported (counted in
+    ///     <see cref="DroppedUnknownCallerReports" />), so the active keys keep their throttle.
+    /// </summary>
     internal const int MaxUnknownCallerKeys = 10_000;
 
     private const string Unknown = "unknown";
@@ -38,6 +42,13 @@ internal sealed class RuntimeReadGuard
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<(string Tenant, string CkType), DateTimeOffset> _unknownCallerReported = new();
     private readonly ConcurrentDictionary<string, byte> _reportedConfigurationErrors = new();
+    private long _droppedUnknownCallerReports;
+
+    /// <summary>
+    ///     How many reads without execution were not reported because the unknown-caller table was full of active
+    ///     keys (<see cref="MaxUnknownCallerKeys" />).
+    /// </summary>
+    internal long DroppedUnknownCallerReports => Interlocked.Read(ref _droppedUnknownCallerReports);
 
     public RuntimeReadGuard(IOptionsMonitor<RuntimeReadGuardOptions> options, RuntimeReadGuardMetrics metrics,
         ILogger<RuntimeReadGuard> logger)
@@ -209,9 +220,16 @@ internal sealed class RuntimeReadGuard
         }
         catch (Exception e)
         {
-            // Observability only: a failure here must never fail the read.
-            _logger.LogDebug(e, "Runtime read guard failed for CK type {CkTypeId} in tenant {TenantId}", ckTypeId,
-                tenantId);
+            // Observability only: a failure here must never fail the read - also not the report of the failure.
+            try
+            {
+                _logger.LogDebug(e, "Runtime read guard failed for CK type {CkTypeId} in tenant {TenantId}", ckTypeId,
+                    tenantId);
+            }
+            catch
+            {
+                // Nothing left to report to.
+            }
         }
     }
 
@@ -243,7 +261,14 @@ internal sealed class RuntimeReadGuard
 
             if (_unknownCallerReported.Count >= MaxUnknownCallerKeys)
             {
-                PruneUnknownCallers(now);
+                PruneExpiredUnknownCallers(now);
+                if (_unknownCallerReported.Count >= MaxUnknownCallerKeys)
+                {
+                    // Full of active keys: keep their throttle (clearing them would report every one of them again)
+                    // and leave the new key out.
+                    Interlocked.Increment(ref _droppedUnknownCallerReports);
+                    return false;
+                }
             }
 
             if (_unknownCallerReported.TryAdd(key, now))
@@ -276,19 +301,14 @@ internal sealed class RuntimeReadGuard
         }
     }
 
-    private void PruneUnknownCallers(DateTimeOffset now)
+    private void PruneExpiredUnknownCallers(DateTimeOffset now)
     {
         foreach (var (key, last) in _unknownCallerReported)
         {
             if (now - last >= UnknownCallerInterval)
             {
-                _unknownCallerReported.TryRemove(key, out _);
+                _unknownCallerReported.TryRemove(new KeyValuePair<(string Tenant, string CkType), DateTimeOffset>(key, last));
             }
-        }
-
-        if (_unknownCallerReported.Count >= MaxUnknownCallerKeys)
-        {
-            _unknownCallerReported.Clear();
         }
     }
 

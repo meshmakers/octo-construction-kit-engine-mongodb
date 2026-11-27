@@ -26,8 +26,12 @@ The caller comes from the ambient `RuntimeReadScope` (`Runtime.Contracts`, octo-
 runtime (octo-communication-sdk) opens an execution scope (tenant, pipeline, data flow, execution id) and a node scope
 (node type, node path, node key) around every node. Inside an execution the guard reports **one warning and one count
 per execution and node**, however often the node runs (a `ForEach` over 500 items is one report). A read outside an
-execution (the host's own reads) is reported with caller `unknown`, at most once per tenant, CK type and hour. Reads
-inside `RuntimeReadScope.Suppress()` are deliberate batch work and not reported.
+execution (the host's own reads) is reported with caller `unknown`, at most once per tenant, CK type and hour. The
+guard remembers at most 10,000 tenant and CK type pairs for this throttle; when the table is full it drops the expired
+pairs, and while it is still full of active pairs a new pair is neither remembered nor reported (counted internally as
+dropped), so the active pairs keep their throttle and do not warn again within the hour. Reads inside
+`RuntimeReadScope.Suppress()` are deliberate batch work and not reported. A failure of the guard itself - also of the
+logger it reports the failure to - never reaches the read.
 
 **Tenant state and leases.** The per-execution marks live on the execution scope, not on the guard. The guard's only
 tenant-keyed state is the hourly throttle of the `unknown` caller; `ISystemContext.InvalidateTenantResolveImportGuards`
@@ -55,7 +59,9 @@ cannot be bound, is logged once per value as a warning (event 41002, `RuntimeRea
 the invalid and the valid values) and the guard runs as `Warn` - with the configured `MaxTake` for an invalid `Mode`,
 with the default limit for a section that cannot be bound; a misconfiguration never turns the guard off silently. A
 `take` of `int.MaxValue` always counts as unbounded, whatever `MaxTake` is - unless a key list of at most `MaxTake` ids
-bounds it (reads by id). Engine-internal lookups run suppressed and are never attributed to a node: the registry reads
+bounds it (reads by id). An empty target id list does not bound an association read: the repository adds no id
+filter for it, so the read returns every target and counts as a read without key list (a read by id with an empty list
+returns nothing before it reads). Engine-internal lookups run suppressed and are never attributed to a node: the registry reads
 `ISystemContext.GetAllTenantsAsync`, `GetChildTenantsAsync` and `GetDirectChildTenantsAsync`, the tenant lookups
 behind `TryGetChildTenantAsync` and the platform-wide tenant lookup, the tenant configuration reads
 (`GetConfigurationAsync`, the read in `SetConfigurationAsync`), the stream-data archive and rollup archive
@@ -75,6 +81,11 @@ data-policy table load. The mesh adapter chart sets the section from `runtimeRea
   meter `Meshmakers.Octo.MongoDb`, labels `tenant`, `ck_type`, `node_type` (`unknown` outside a node) and `mode`. It is
   observable: a new series is exported as 0 at the first collection after its first hit and with its value from the
   next one, so the first hit is an increase. At most 2000 series; further combinations count under `other`.
+  Known limitation: the "0 first" mark is shared by all metric readers of the process. The mesh adapter registers a
+  Prometheus exporter and an OTLP exporter, but the Prometheus endpoint is served only with
+  `Observability:PrometheusPort` above 0 (chart default 0; the mesh adapter sets none), so in the clusters only the OTLP
+  reader collects. A host that is scraped by Prometheus and exports OTLP at the same time may see the 0 in only one of
+  them and miss the first hit there.
 
 Dash0 (logs of the mesh adapters): filter the log body for `Unbounded runtime-entity read` and group by the
 attributes `TenantId`, `PipelineId` and `NodeType`; metric: `increase(octo_engine_runtime_read_unbounded_total[1h])` by
