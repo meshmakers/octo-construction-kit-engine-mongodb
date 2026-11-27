@@ -157,7 +157,7 @@ to hide a stall. Details: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.
 **Container CPU limits and bounded parallelism.** Every Testcontainer also has a CPU limit (Docker `NanoCpus`:
 mongod 4 CPUs, every CrateDB container 2 CPUs; measured peaks 1.9 and 2.4 CPUs without a limit) and the CrateDB heap is set
 explicitly for all three CrateDB fixtures (1 GB, the stress container 512 MB), all in `Fixtures/TestContainerLimits.cs`
-(`Resources(memory, cpus)`, pinned by `TestContainerLimitsValueTests`, `TestContainerLimitsTests` and `CrateTestContainerLimitsTests`). `xunit.runner.json`
+(`Resources(memory, cpus)`, pinned by `TestContainerLimitsValueTests` and `TestContainerLimitsTests`). `xunit.runner.json`
 sets `maxParallelThreads: 8` (the xUnit default is the number of logical CPUs: 22 collections started at once on a developer
 laptop; the CI agents already ran 8). Sum of the limits: 18 GiB / 8 CPUs for the CI suite, 21 GiB / 10 CPUs with the stress
 container; a local Windows run needs a Docker Desktop VM of at least 20 GiB and 12 CPUs (`.wslconfig`). The two CrateDB tests

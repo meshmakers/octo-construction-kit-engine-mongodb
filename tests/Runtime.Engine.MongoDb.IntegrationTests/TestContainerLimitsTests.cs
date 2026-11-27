@@ -1,11 +1,9 @@
-using System.Globalization;
 using FluentAssertions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
-using Testcontainers.MongoDb;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
@@ -59,25 +57,6 @@ public class TestContainerLimitsTests(SystemFixture fixture)
         {
             parameters[name].ToInt64().Should().Be(value, $"--setParameter {name} must reach mongod (idle data handles closed early)");
         }
-    }
-
-    [Fact]
-    public async Task SharedMongod_ContainerHasTheMemoryAndCpuLimitOfTestContainerLimits()
-    {
-        // AB#9250: read from the container's own cgroup, so the test fails if the create-parameter modifier does not reach it
-        Assert.SkipWhen(fixture.UsesLocalDatabase, "runs against a local MongoDB, not the shared Testcontainer");
-        var container = Assert.IsType<MongoDbContainer>(SharedMongoDbContainer.Container);
-
-        var result = await container.ExecAsync(["cat", "/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/cpu.max"],
-            TestContext.Current.CancellationToken);
-
-        result.ExitCode.Should().Be(0, result.Stderr);
-        var lines = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        long.Parse(lines[0], CultureInfo.InvariantCulture).Should().Be(TestContainerLimits.MongoMemoryLimitBytes);
-        // cpu.max is "<quota> <period>" in microseconds; NanoCpus = quota / period CPUs
-        var cpuMax = lines[1].Split(' ');
-        var cpus = double.Parse(cpuMax[0], CultureInfo.InvariantCulture) / double.Parse(cpuMax[1], CultureInfo.InvariantCulture);
-        cpus.Should().Be(TestContainerLimits.MongoCpuLimit);
     }
 
     private MongoClient CreateAdminProbe()

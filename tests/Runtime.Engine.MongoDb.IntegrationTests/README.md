@@ -10,8 +10,8 @@ Every Testcontainer of the suite has a memory **and** a CPU limit, and xUnit run
 full run takes a bounded share of the machine and stays predictable next to other work (other agent lanes, Docker
 builds, a local kind cluster). Values in `Fixtures/TestContainerLimits.cs` (with the measurements behind them); all four
 fixtures apply them through one modifier, `TestContainerLimits.Resources(memory, cpus)`. Pinned by
-`TestContainerLimitsValueTests` (the modifier and the sums, no Docker), `TestContainerLimitsTests` (the cgroup limits
-mongod runs under) and `CrateTestContainerLimitsTests` (heap and processors the staging copy CrateDB sees):
+`TestContainerLimitsValueTests` (the modifier and the sums, no Docker) and `TestContainerLimitsTests` (the WiredTiger cache,
+memory limit and file-handle parameters mongod reports):
 
 | Container | Fixture (collection) | Memory limit | CPU limit | JVM heap / cache |
 |---|---|---|---|---|
