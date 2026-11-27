@@ -185,7 +185,7 @@ public sealed class AutoIncrementRangeSettings
             return false;
         }
 
-        // AB#9758: a release configuration needs a state attribute and at least one released value.
+        // A release configuration needs a state attribute and at least one released value.
         if (!NumberRangeRelease.TryCreate(counter, out _, out var releaseError))
         {
             error = releaseError;

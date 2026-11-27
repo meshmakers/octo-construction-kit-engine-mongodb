@@ -26,7 +26,7 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.AutoIncrement;
 
 /// <summary>
-///     AB#9758 against a real MongoDB, in throwaway child tenants: a number range with a release configuration
+///     Numbering on release against a real MongoDB, in throwaway child tenants: a number range with a release configuration
 ///     (<c>AutoIncrement.Release</c>, <c>StateAttribute = DocumentState</c>, <c>ReleasedValues = [Released, Cancelled]</c>)
 ///     numbers a document only when it reaches a released state, in the write that releases it; a range without release
 ///     configuration numbers on insert exactly as before. Model: Invoice (<c>Number</c> from "InvoiceNumber") and
@@ -571,7 +571,7 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
         return new CkCompiledModelRoot
         {
             ModelId = id,
-            Description = "AB#9758 numbering on release",
+            Description = "numbering on release",
             Dependencies = [system],
             Attributes =
             [

@@ -33,7 +33,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 ///     </list>
 ///     Every entity of a mixed batch is handled; an entity or type without auto-increment attributes is skipped.
 ///     <para>
-///         Numbering on release (AB#9758, design note D8): a range with a release configuration
+///         Numbering on release (design note D8): a range with a release configuration
 ///         (<c>AutoIncrement.Release</c>) numbers a document only when it is in one of the <c>ReleasedValues</c> of its
 ///         <c>StateAttribute</c>: a draft is inserted without a number and the counter stays unchanged, so deleting a
 ///         draft leaves no gap. The number is taken by the write that moves the document into a released state - an
@@ -51,7 +51,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 ///         handed out in batch order (the entity rule engine keeps the order of the input).
 ///     </para>
 ///     <para>
-///         Fiscal-year ranges (AB#9754, <c>PeriodKind = FiscalYear</c>): every entity's fiscal year is taken from the
+///         Fiscal-year ranges (<c>PeriodKind = FiscalYear</c>): every entity's fiscal year is taken from the
 ///         time it is numbered (the injected clock) read in the range's <c>ReferenceTimeZone</c> - its creation time on a
 ///         range without release configuration, its release time on a range with one (D2) -, and the counter of that
 ///         year in <c>Periods</c> is advanced - one atomic statement per counter, fiscal year and batch, so a batch
@@ -159,11 +159,11 @@ public class AutoIncrementModifier(
                     }
 
                     // Stored without a number (a draft of a range with release configuration): numbered only if the
-                    // replace releases it (AB#9758); a range without release configuration leaves it as it is.
+                    // replace releases it; a range without release configuration leaves it as it is.
                     kind = NumberRequestKind.Stored;
                 }
 
-                // The time of this write decides the fiscal year (AB#9754, D2); read once per entity (and only when it
+                // The time of this write decides the fiscal year (D2); read once per entity (and only when it
                 // needs a number), so a batch that runs across the start of a fiscal year numbers each entity in its
                 // own year, and all numbers of one entity are in the same year.
                 numberedAt ??= _timeProvider.GetUtcNow();
@@ -182,7 +182,7 @@ public class AutoIncrementModifier(
     }
 
     /// <summary>
-    ///     Numbers the documents a partial update releases (AB#9758): an update that sets the <c>StateAttribute</c> of a
+    ///     Numbers the documents a partial update releases: an update that sets the <c>StateAttribute</c> of a
     ///     range with release configuration to one of its <c>ReleasedValues</c> gives a document that has no number yet
     ///     the next number of the range, written by the same update statement. An update that does not set the state
     ///     attribute, that leaves the document in a draft state, or of a document that already has a number takes no
@@ -438,7 +438,7 @@ public class AutoIncrementModifier(
     /// <summary>
     ///     Allocates and writes the numbers of the requests of one counter. A block of only new entities first tries the
     ///     one statement of a range without periods and without release configuration (no read, exactly as before
-    ///     AB#9758); otherwise the range is read once (or taken from <paramref name="counter" />) to decide which
+    ///     the numbering on release); otherwise the range is read once (or taken from <paramref name="counter" />) to decide which
     ///     requests take a number: on a range with release configuration those whose document is released, on a range
     ///     without it only the new entities.
     /// </summary>
@@ -452,13 +452,13 @@ public class AutoIncrementModifier(
 
         if (counter == null && requests.All(r => r.Kind == NumberRequestKind.New))
         {
-            // A range without periods and without release configuration: exactly the AB#9753 statement, no read.
+            // A range without periods and without release configuration: exactly the one atomic statement, no read.
             var allocated = await AllocateWithoutPeriodsAsync(session, mongoCollection, reference, requests.Count,
                 withoutRelease: true);
             if (allocated != null)
             {
                 // The range rules are checked after the statement (it reads nothing before). A range that is not
-                // valid - e.g. a legacy format stored before System 2.9.0 that string.Format cannot format (AB#9755) -
+                // valid - e.g. a legacy format stored before System 2.9.0 that string.Format cannot format -
                 // is refused naming the range; the block it took stays unused. The counter is never set back: another
                 // request may have taken the next block meanwhile, so a gap is accepted, a duplicate never.
                 AssignBlock(requests, GetValidSettings(allocated, reference), allocated, null);
@@ -476,7 +476,7 @@ public class AutoIncrementModifier(
                 throw InvalidAttributeException.AutoIncrementReferenceNotFound(requestingCkTypeId, reference);
             }
 
-            // Only stored documents without a number: as before AB#9758 they need no counter.
+            // Only stored documents without a number: as before the numbering on release they need no counter.
             return;
         }
 
@@ -752,7 +752,7 @@ public class AutoIncrementModifier(
         };
         if (withoutRelease)
         {
-            // AB#9758: a range with release configuration numbers only released documents; the caller reads it first.
+            // A range with release configuration numbers only released documents; the caller reads it first.
             filters.Add(new BsonDocument(ReleaseField, BsonNull.Value));
         }
 
