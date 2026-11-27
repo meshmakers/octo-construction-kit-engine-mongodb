@@ -44,6 +44,7 @@ public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixt
     private const int Released = 1;
 
     private static readonly RtCkId<CkTypeId> InvoiceTypeId = new("ReleaseTest/Invoice");
+    private static readonly RtCkId<CkTypeId> AutoIncrementTypeId = new("System/AutoIncrement");
 
     public static TheoryData<string> RepositoryWritePaths =>
     [
@@ -295,6 +296,166 @@ public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixt
         }
     }
 
+    public static TheoryData<string> RefusedRangeChanges =>
+    [
+        "removes Release", "changes StateAttribute", "changes StornoCkTypeId", "removes a released value",
+        "adds a changeable attribute", "deletes the range"
+    ];
+
+    /// <summary>
+    ///     D11: after the first number of a range with a release configuration, every change that would unlock its
+    ///     documents is refused with message 168 on the repository, the range stays byte for byte the same, and a Denied
+    ///     entry names the range.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(RefusedRangeChanges))]
+    public async Task NumberedRange_RefusesTheChange(string change)
+    {
+        await WithTenantAsync("relrange", async (repository, database) =>
+        {
+            var rangeId = await InsertRangeAsync(repository, changeable: ["Title"], storno: "ReleaseTest/LegacyDoc");
+            await InsertInvoiceAsync(repository, Released);
+            var before = await RawAsync(database, rangeId);
+
+            var exception = await Record.ExceptionAsync(() => WriteRangeAsync(repository, rangeId, change));
+
+            var refused = Assert.IsType<ReleasedDocumentLockedException>(exception);
+            Assert.Equal(168, Assert.Single(refused.OperationResult.Messages).MessageNumber);
+            Assert.Equal(before, await RawAsync(database, rangeId));
+            Assert.Single(await DeniedEntriesAsync(database, rangeId));
+        });
+    }
+
+    /// <summary>D11: before the first number the release configuration stays freely configurable.</summary>
+    [Theory]
+    [MemberData(nameof(RefusedRangeChanges))]
+    public async Task RangeBeforeTheFirstNumber_TakesEveryChange(string change)
+    {
+        await WithTenantAsync("relfree", async (repository, database) =>
+        {
+            var rangeId = await InsertRangeAsync(repository, changeable: ["Title"], storno: "ReleaseTest/LegacyDoc");
+            await InsertInvoiceAsync(repository, Draft);
+            var before = await RawAsync(database, rangeId);
+
+            await WriteRangeAsync(repository, rangeId, change);
+
+            Assert.NotEqual(before, await TryRawAsync(database, rangeId));
+        });
+    }
+
+    /// <summary>D11: adding a released value and removing a changeable attribute lock more and are written.</summary>
+    [Fact]
+    public async Task NumberedRange_TakesChangesThatLockMore()
+    {
+        await WithTenantAsync("relmore", async (repository, database) =>
+        {
+            var rangeId = await InsertRangeAsync(repository, changeable: ["Title"], storno: "ReleaseTest/LegacyDoc");
+            await InsertInvoiceAsync(repository, Released);
+
+            await UpdateReleaseAsync(repository, rangeId,
+                Release(["Released", "Cancelled", "Draft"], [], "ReleaseTest/LegacyDoc"));
+
+            var release = (await RawAsync(database, rangeId))["attributes"]["release"]["attributes"].AsBsonDocument;
+            Assert.Equal(3, release["releasedValues"].AsBsonArray.Count);
+        });
+    }
+
+    /// <summary>
+    ///     D11 on the import path: a seed re-apply or <c>importrt</c> Upsert of a numbered range that carries no release
+    ///     configuration and a reset counter keeps the tenant's (the attributes are TenantOwned), and nothing is refused.
+    /// </summary>
+    [Fact]
+    public async Task ImportOfANumberedRange_KeepsTheTenantsReleaseConfiguration()
+    {
+        await WithTenantAsync("relrimp", async (repository, database) =>
+        {
+            var rangeId = await InsertRangeAsync(repository, changeable: ["Title"]);
+            await InsertInvoiceAsync(repository, Released);
+            var before = (await RawAsync(database, rangeId))["attributes"].AsBsonDocument;
+
+            await ImportTextAsync(repository, RangeYaml(rangeId), ImportStrategy.Upsert);
+
+            var after = (await RawAsync(database, rangeId))["attributes"].AsBsonDocument;
+            Assert.Equal(before["release"], after["release"]);
+            Assert.Equal(before["currentValue"], after["currentValue"]);
+            Assert.Equal(before["periods"], after["periods"]);
+            Assert.Empty(await DeniedEntriesAsync(database, rangeId));
+        });
+    }
+
+    private static string RangeYaml(OctoObjectId rangeId) => $$"""
+        $schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+        dependencies:
+          - System-2.9.0
+        entities:
+          - rtId: {{rangeId}}
+            ckTypeId: System/AutoIncrement
+            rtWellKnownName: InvoiceNumber
+            attributes:
+              - id: System/AutoIncrement.End
+                value: 99999
+              - id: System/AutoIncrement.CurrentValue
+                value: 0
+        """;
+
+    private static async Task WriteRangeAsync(ITenantRepository repository, OctoObjectId rangeId, string change)
+    {
+        const string storno = "ReleaseTest/LegacyDoc";
+        switch (change)
+        {
+            case "removes Release":
+                await UpdateReleaseAsync(repository, rangeId, null);
+                break;
+            case "changes StateAttribute":
+                await UpdateReleaseAsync(repository, rangeId, Release(["Released", "Cancelled"], ["Title"], storno,
+                    "Title"));
+                break;
+            case "changes StornoCkTypeId":
+                await UpdateReleaseAsync(repository, rangeId, Release(["Released", "Cancelled"], ["Title"],
+                    "ReleaseTest/Invoice"));
+                break;
+            case "removes a released value":
+                await UpdateReleaseAsync(repository, rangeId, Release(["Released"], ["Title"], storno));
+                break;
+            case "adds a changeable attribute":
+                await UpdateReleaseAsync(repository, rangeId, Release(["Released", "Cancelled"],
+                    ["Title", "DocumentState"], storno));
+                break;
+            case "deletes the range":
+                using (var session = await repository.GetSessionAsync())
+                {
+                    session.StartTransaction();
+                    await repository.DeleteOneRtEntityByRtIdAsync(session, AutoIncrementTypeId, rangeId,
+                        DeleteOptions.Erase);
+                    await session.CommitTransactionAsync();
+                }
+
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(change), change, null);
+        }
+    }
+
+    private static async Task UpdateReleaseAsync(ITenantRepository repository, OctoObjectId rangeId,
+        RtNumberRangeReleaseRecord? release)
+    {
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+        var update = new RtEntity(AutoIncrementTypeId, rangeId);
+        update.SetAttributeRawValue("Release", release);
+        await repository.UpdateOneRtEntityByIdAsync(session, AutoIncrementTypeId, rangeId, update);
+        await session.CommitTransactionAsync();
+    }
+
+    private static RtNumberRangeReleaseRecord Release(List<string> releasedValues, List<string> changeable,
+        string? storno, string stateAttribute = StateAttribute) => new()
+    {
+        StateAttribute = stateAttribute,
+        ReleasedValues = new AttributeStringValueList(releasedValues),
+        ChangeableAttributes = new AttributeStringValueList(changeable),
+        StornoCkTypeId = storno
+    };
+
     private static async Task WriteAsync(ITenantRepository repository, string path, OctoObjectId rtId)
     {
         using var session = await repository.GetSessionAsync();
@@ -391,7 +552,7 @@ public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixt
         """;
 
     private static async Task<OctoObjectId> InsertRangeAsync(ITenantRepository repository,
-        List<string>? changeable = null)
+        List<string>? changeable = null, string? storno = null)
     {
         var counter = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
         counter.RtId = OctoObjectId.GenerateNewId();
@@ -405,7 +566,8 @@ public class ReleasedDocumentLockIntegrationTests(CkModelImportGuardFixture fixt
         {
             StateAttribute = StateAttribute,
             ReleasedValues = new AttributeStringValueList(["Released", "Cancelled"]),
-            ChangeableAttributes = changeable == null ? null : new AttributeStringValueList(changeable)
+            ChangeableAttributes = changeable == null ? null : new AttributeStringValueList(changeable),
+            StornoCkTypeId = storno
         };
         await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateInsert(counter));
         return counter.RtId;

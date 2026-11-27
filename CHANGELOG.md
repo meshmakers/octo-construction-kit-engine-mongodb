@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- AB#9759 Test: D11 against a real MongoDB - once a range with `Release` has handed out a number, removing `Release`,
+  changing `StateAttribute` or `StornoCkTypeId`, removing a released value, adding a changeable attribute and deleting
+  the range are refused with message 168 and a Denied entry, the range unchanged; before the first number every change
+  is written; changes that lock more are written; an `importrt` Upsert of the range keeps the tenant's configuration and
+  counter (TenantOwned). The container limit checks of CrateDB and mongod are removed (AB#8676).
+
 - AB#9759 Test: the lock of released documents (engine `ReleasedDocumentLock`) against a real MongoDB. Every write path
   of the tenant repository (`ApplyChanges`, update/replace/delete by id and by filter, archive, insert with a stored id)
   and the RT import (`ImportTextAsync` Upsert and Insert, `ImportModelAsync` as used by the blueprint seed and re-apply)
