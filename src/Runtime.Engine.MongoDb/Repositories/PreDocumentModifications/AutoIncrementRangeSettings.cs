@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Globalization;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
@@ -181,6 +182,13 @@ public sealed class AutoIncrementRangeSettings
             error = $"the range was numbered without fiscal-year periods up to CurrentValue {currentValue}; as a " +
                     $"FiscalYear range its first fiscal year would issue numbers from {startValue ?? 1} on again. " +
                     $"Set StartValue above {currentValue}.";
+            return false;
+        }
+
+        // AB#9758: a release configuration needs a state attribute and at least one released value.
+        if (!NumberRangeRelease.TryCreate(counter, out _, out var releaseError))
+        {
+            error = releaseError;
             return false;
         }
 

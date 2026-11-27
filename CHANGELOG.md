@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- AB#9758 New: a number range with a release configuration (`System/AutoIncrement.Release`, System 2.9.0) numbers a
+  document only when it reaches a released state. `AutoIncrementModifier` gives a document of such a range its number
+  in the write that puts its `StateAttribute` to one of the `ReleasedValues`: an insert directly in that state, a
+  replace, or a partial update (the modifier now also implements the engine hook `IPreDocumentUpdateModification`,
+  registered by `AddMongoDbRuntimeRepository`; the number goes out with the update statement). A draft is written without
+  a number and the counter is not touched, so deleting a draft leaves no gap; a document that already has a number keeps
+  it and does not advance the counter. The fiscal year of a fiscal-year range is that of the release time in the range's
+  `ReferenceTimeZone`. A range without release configuration numbers on insert exactly as before (one allocation
+  statement, which now matches only ranges without `Release`); a partial update of a document of an auto-increment type
+  reads its counters once per batch to tell. The range rules refuse a `Release` without `StateAttribute` or
+  `ReleasedValues` when the range is configured, and a `StateAttribute` that the document type does not have when a
+  document is numbered. Tests: `AutoIncrementReleaseTests`.
+
 - AB#9837 Fix: a native dump of an archive whose table still holds the leftovers of computed columns now restores. A
   removed computed column leaves its physical column in the table, with the `{base}__v{N}` versions of its formula
   changes, and a formula change leaves the earlier version behind. The dump copied them, and the restore refused the
