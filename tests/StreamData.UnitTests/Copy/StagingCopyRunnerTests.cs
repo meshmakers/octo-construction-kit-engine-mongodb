@@ -389,8 +389,59 @@ public class StagingCopyRunnerTests
         Assert.Equal(["timestamp", "rtid", "value", "note"],
             plan.Tables.Single(t => t.Table == ArchiveCopyTable.Data).Columns.Select(c => c.Name));
         Assert.Equal(17, plan.TotalRows);
-        Assert.Equal(["timestamp", "rtid", "value", "note"], StagingCopyRunner.DumpedColumns(target, plan));
-        Assert.Null(StagingCopyRunner.DumpedColumns(SourceTarget, plan));
+        var table = await Runner().DescribeAsync(target, ArchiveCopyTable.Data, Small, Ct);
+        Assert.Equal(["timestamp", "rtid", "value", "note"], StagingCopyRunner.DumpedColumns(target, plan, table.Columns));
+        Assert.Equal(["timestamp", "rtid", "value", "note"], StagingCopyRunner.DumpedColumns(target, plan, null));
+        Assert.Null(StagingCopyRunner.DumpedColumns(SourceTarget, plan, table.Columns));
+    }
+
+    [Fact]
+    public async Task CopyTo_AnOwnedTableWithoutLeftovers_DumpsTheWholeRow_SoTheLoadAppliesColumnDefaults()
+    {
+        // AB#9932: a column list writes a NULL as an explicit null that COPY FROM keeps; the whole row leaves it out and
+        // the load gives the column its DEFAULT (rtcreationdatetime, was_updated; AB#5490, AB#6647).
+        WithData();
+        _crate.ColumnTypes["value"] = "double precision";
+        var target = SourceTarget with
+        {
+            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid", "value"], [], new HashSet<string> { "value" })
+        };
+        var runner = Runner();
+        var plan = await runner.PlanAsync(target, Small, Ct);
+
+        var results = await Collect(runner.CopyToAsync(target, plan, Location, Small, Ct));
+
+        Assert.All(results, r => Assert.True(r.IsSuccess));
+        var copies = _crate.Executed.Where(s => s.StartsWith("COPY", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(copies);
+        Assert.All(copies, c => Assert.DoesNotContain("json_object", c));
+        Assert.All(copies, c => Assert.StartsWith($"COPY {target.QualifiedTable} WHERE", c));
+    }
+
+    [Fact]
+    public async Task CopyTo_AnOwnedTableWithLeftovers_NamesTheColumnsItCopies()
+    {
+        // AB#9837 stays: the leftovers of computed columns are left out, so the dump names the columns it copies.
+        WithData();
+        _crate.SourceColumns = ["timestamp", "rtid", "value", "tripled", "doubled__v1"];
+        _crate.ColumnTypes["value"] = "double precision";
+        _crate.ColumnTypes["tripled"] = "double precision";
+        _crate.ColumnTypes["doubled__v1"] = "double precision";
+        var target = SourceTarget with
+        {
+            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid", "value"], [], new HashSet<string> { "value" })
+        };
+        var runner = Runner();
+        var plan = await runner.PlanAsync(target, Small, Ct);
+
+        var results = await Collect(runner.CopyToAsync(target, plan, Location, Small, Ct));
+
+        Assert.All(results, r => Assert.True(r.IsSuccess));
+        var copies = _crate.Executed.Where(s => s.StartsWith("COPY", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(copies);
+        Assert.All(copies, c => Assert.StartsWith($"COPY {target.QualifiedTable} (\"timestamp\", \"rtid\", \"value\") WHERE", c));
+        Assert.All(copies, c => Assert.Contains("json_object", c));
+        Assert.All(copies, c => Assert.DoesNotContain("tripled", c));
     }
 
     [Fact]
