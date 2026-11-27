@@ -12,7 +12,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 ///     <para>
 ///         Units are curly-brace annotations (like <c>CrateDbDiagnostics</c>), which the Prometheus exporter does not
 ///         append to the name: the series are <c>octo_ck_embedded_import_skipped_total</c>,
-///         <c>octo_ck_explicit_import_downgraded_total</c>, <c>octo_ck_explicit_import_refused_total</c> (AB#9325), <c>octo_ck_restore_system_model_refused_total</c> and
+///         <c>octo_ck_explicit_import_downgraded_total</c>, <c>octo_ck_explicit_import_refused_total</c>, <c>octo_ck_restore_system_model_refused_total</c> and
 ///         <c>octo_ck_restore_system_model_raised_total</c> and
 ///         <c>octo_ck_model_revalidated_total</c> (D-G1-2; with
 ///         <c>unit: "count"</c> they were exported as <c>…_count_total</c>).

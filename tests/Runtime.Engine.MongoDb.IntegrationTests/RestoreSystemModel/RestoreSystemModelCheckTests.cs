@@ -73,7 +73,9 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
     {
         "writeAccess removed from the element rows",
         "model row changed",
-        "element row filed under another model"
+        "element row filed under another model",
+        "model row of another id named System.Identity",
+        "extra inheritance row"
     };
 
     [Theory]
@@ -88,9 +90,9 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
 
         var result = await Sys.RestoreTenantAsync(target, target, archive);
 
-        var expectedReason = manipulation == "element row filed under another model"
-            ? "inconsistent_rows"
-            : "content_differs";
+        var expectedReason = manipulation is "writeAccess removed from the element rows" or "model row changed"
+            ? "content_differs"
+            : "inconsistent_rows";
         await AssertRefusedAndNothingLeftAsync(result, target, expectedReason);
         Assert.True(counters.Sum(CkModelImportDiagnostics.RestoreSystemModelRefusedCounterName,
             ("reason", expectedReason)) >= 1);
@@ -129,6 +131,25 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
 
         await AssertRefusedAndNothingLeftAsync(result, target, reason);
         Assert.Contains($"{IdentityName}-{version}", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FakeVersion_RestoredOverAnExistingTenantWithoutDrop_IsRefused_AndTheTenantStaysAsItWas()
+    {
+        var existing = await SourceTenantAsync("fakekeep", await fixture.Catalog.LoadAsync(Identity380));
+        var before = await SnapshotAsync(existing, IdentityName);
+        var fake = await SourceTenantAsync("fakekeepsrc",
+            await fixture.Catalog.LoadAsync(new CkModelId(IdentityName, "3.99.0"), WithoutWriteAccess));
+        var archive = await DumpAsync(fake);
+
+        var result = await Sys.RestoreTenantAsync(existing, existing, archive, sourceDatabaseName: fake,
+            dropExistingTenant: false);
+
+        Assert.False(result.Success);
+        Assert.StartsWith(RestoreSystemModelGuard.RefusalCode, result.Error, StringComparison.Ordinal);
+        Assert.Contains("(unknown_version)", result.Error, StringComparison.Ordinal);
+        Assert.True(await TenantExistsAsync(existing));
+        Assert.Equal(before, await SnapshotAsync(existing, IdentityName));
     }
 
     [Fact]
@@ -295,7 +316,23 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         Assert.False(await TenantExistsAsync(target), "a refused restore must not attach the tenant");
         Assert.False(await Sys.IsDatabaseExistingAsync(target), "a refused restore must not leave its database");
         Assert.False(await UserExistsAsync(target), "a refused restore must not leave a database user");
-        Assert.DoesNotContain(await ListDatabasesAsync(), n => n.Contains("restorecheck_", StringComparison.Ordinal));
+        // Restores of other test collections share the MongoDB container and may hold their own scratch database for a
+        // moment; a scratch database this restore leaked never goes away.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        List<string> scratch;
+        do
+        {
+            scratch = (await ListDatabasesAsync())
+                .Where(n => n.Contains("restorecheck_", StringComparison.Ordinal)).ToList();
+            if (scratch.Count == 0)
+            {
+                break;
+            }
+
+            await Task.Delay(500, TestContext.Current.CancellationToken);
+        } while (DateTime.UtcNow < deadline);
+
+        Assert.Empty(scratch);
     }
 
     private async Task AssertGenericUserWriteRefusedAsync(ITenantContext tenant)
@@ -391,6 +428,22 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
 
                 copy["ckModelId"] = (await SystemIdAsync(tenantId)).FullName;
                 await types.InsertOneAsync(copy, cancellationToken: ct);
+                break;
+            case "model row of another id named System.Identity":
+                // The by-name lookups of the import guard read ModelId: a row under another id that names
+                // System.Identity would make every later embedded import of it skip as "newer installed".
+                var modelRows = database.GetCollection<BsonDocument>("CkModel");
+                var foreignModel = (await modelRows.Find(Builders<BsonDocument>.Filter.Eq("_id", Identity380.FullName))
+                    .FirstAsync(ct)).DeepClone().AsBsonDocument;
+                Assert.Equal(IdentityName, foreignModel["modelId"].AsString);
+                foreignModel["_id"] = "Custom-3.99.0";
+                await modelRows.InsertOneAsync(foreignModel, cancellationToken: ct);
+                break;
+            case "extra inheritance row":
+                var inheritances = database.GetCollection<BsonDocument>("CkTypeInheritance");
+                var extra = (await inheritances.Find(identityRows).FirstAsync(ct)).DeepClone().AsBsonDocument;
+                extra["_id"] = ObjectId.GenerateNewId();
+                await inheritances.InsertOneAsync(extra, cancellationToken: ct);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(manipulation), manipulation, null);

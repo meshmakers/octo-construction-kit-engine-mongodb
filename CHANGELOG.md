@@ -8,7 +8,8 @@
   dump's `Ck*` collections in a scratch database before anything destructive, and once on the restored database before
   the attach. Refused, with an error starting with `RESTORE_SYSTEM_MODEL_REFUSED` that names model, version and reason:
   content that differs from the published model of the same id (also for an older version), an unpublished version, a
-  higher major than published, an unknown model name, element rows filed under another model, two versions of one model,
+  higher major than published, an unknown model name, a model row whose id and `ModelId` differ, element or link rows that
+  the compared form does not hold (filed under another model, without a model row, extra link rows), two versions of one model,
   a version below the security floor (System.Identity 3.6.0), and an unreadable catalog or system tenant (fail closed).
   A genuine older model is raised to the platform's version (the system tenant's, which must be published with identical
   content) through the guarded system import with migrations, while the database is still unattached

@@ -169,7 +169,7 @@ internal sealed class RestoreSystemModelGuard(
             var dataSource = systemContext.CreateAdminDataSourceForRestore(databaseName, tenantId.NormalizeString());
             dumpModels = await DatabaseCkModelRepository.ReadServiceManagedModelsAsync(dataSource);
             foreignRows = await DatabaseCkModelRepository.FindForeignServiceManagedElementRowsAsync(dataSource,
-                dumpModels.Select(m => m.Row.Id).ToList());
+                dumpModels);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -186,7 +186,7 @@ internal sealed class RestoreSystemModelGuard(
                 RestoreSystemModelRefusalReason.InconsistentRows, finding));
         }
 
-        foreach (var group in dumpModels.GroupBy(m => m.Row.Id.Name, StringComparer.OrdinalIgnoreCase)
+        foreach (var group in dumpModels.GroupBy(m => m.Row.ModelId, StringComparer.OrdinalIgnoreCase)
                      .Where(g => g.Count() > 1))
         {
             refusals.Add(RestoreSystemModelDecision.Refuse(group.First().Row.Id,
@@ -258,6 +258,7 @@ internal sealed class RestoreSystemModelGuard(
 
         var platform = platformModels
             .Where(m => string.Equals(m.Row.Id.Name, name, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(m.Row.ModelId, m.Row.Id.Name, StringComparison.Ordinal) &&
                         m.Row.ModelState != ModelState.Importing)
             .OrderByDescending(m => m.Row.Id.Version)
             .Select(m => ((CkModel Row, CkCompiledModelRoot Compiled)?)m)

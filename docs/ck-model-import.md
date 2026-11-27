@@ -431,18 +431,25 @@ twice:
    refused dump drops no existing tenant, writes nothing into the target and leaves no database behind. A process that
    dies during the pre-check can leave a scratch database; it holds only CK collections and is safe to drop.
 2. **Check and raise, after mongorestore and before the attach**, on the restored target (also for `attachTenant: false`).
+   A refusal here (a raise that does not complete, a catalog or system tenant that cannot be read any more) comes after
+   `dropExistingTenant` dropped an existing tenant: that tenant is then gone, like after any restore that fails after
+   the drop, and a failed tenant-deleted notification is named in the result's `Output`.
 
-What is compared: every `CkModel` row whose name is service-managed (`ServiceManagedCkModels.IsServiceManaged`), in any
-state, is read back with its element rows the way the runtime CK cache reads it
+What is compared: every `CkModel` row that names a service-managed model (`ServiceManagedCkModels.IsServiceManaged`) in
+its id or in its `ModelId` (the field the by-name lookups of the import guard read), in any state, is read back with its element rows the way the runtime CK cache reads it
 (`DatabaseCkModelRepository.ReadServiceManagedModelsAsync`, the builder of `TryLookupCkModelAsync`) and compared in
 canonical form (`CkCompiledModelCanonicalizer`, shared with the round-trip gate of the tests) with the catalog's model of
 the same id (`ICatalogService`: the configured catalogs, including the host's embedded models; the bot host embeds no
 System.Identity, so its reference comes from the published catalog). Not compared: the members of
 `CkCompiledModelCanonicalizer.IgnoredPaths` (never persisted), and values a tenant added to an extensible enum
 (`IsExtension`). Attribute default values are converted to their value type on both sides, like the import does
-(a `TimeSpan` default is stored as ticks). Element rows that touch a service-managed model but do not belong to its model
-row (an element of System.Identity filed under another model, element rows without a model row) are refused
-(`DatabaseCkModelRepository.FindForeignServiceManagedElementRowsAsync`), and so is a dump with two versions of one model.
+(a `TimeSpan` default is stored as ticks). Refused as `inconsistent_rows`
+(`DatabaseCkModelRepository.FindForeignServiceManagedElementRowsAsync`): a model row whose id and `ModelId` name
+different models (a row `Custom-3.99.0` named `System.Identity` would make every later embedded import of System.Identity
+skip as "newer installed"), element rows that touch a service-managed model but do not belong to its model row (an
+element of System.Identity filed under another model, element rows without a model row), and link rows (inheritance,
+associations, interface implementations) of a service-managed model that its compared form does not use - the data source
+reads every link row, the read-back one per element. A dump with two versions of one model is refused too.
 
 The platform's version of a model is the one installed in the system tenant (every service imports its embedded models
 there). `RestoreSystemModelDecider` (pure) decides per model:

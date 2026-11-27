@@ -385,8 +385,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         ICkMongoDbRepositoryDataSource dataSource)
     {
         using var session = await dataSource.CreateSessionAsync();
+        // A model row carries its name twice: in its id and in ModelId, which the by-name lookups of the import guard
+        // use. A row that names a service-managed model in either is read, so a row whose two names differ is seen.
         var rows = (await dataSource.CkModels.FindManyAsync(session, _ => true))
-            .Where(m => ServiceManagedCkModels.IsServiceManaged(m.Id.Name))
+            .Where(m => ServiceManagedCkModels.IsServiceManaged(m.Id.Name) ||
+                        ServiceManagedCkModels.IsServiceManaged(m.ModelId))
             .ToList();
         var result = new List<(CkModel, CkCompiledModelRoot)>(rows.Count);
         foreach (var row in rows)
@@ -398,18 +401,43 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     }
 
     /// <summary>
-    ///     Element rows that touch a service-managed model but do not belong to it: a row whose model id or own element id
-    ///     names a service-managed model must carry the same model id in both, and that model must have a model row in
-    ///     <paramref name="modelRows" />. Such rows would reach the runtime CK cache beside the model the restore check
-    ///     compared (an element of System.Identity filed under another model, or element rows of a model without a model
-    ///     row). Returns one line per row (collection and ids, never content).
+    ///     Rows that touch a service-managed model but are not part of the compiled form the restore check compares:
+    ///     <list type="bullet">
+    ///         <item>a model row whose id and <c>ModelId</c> name different models (the by-name lookups use
+    ///         <c>ModelId</c>);</item>
+    ///         <item>an element row whose model id or own element id names a service-managed model but does not carry the
+    ///         same model id in both, or whose model has no model row in <paramref name="models" />;</item>
+    ///         <item>link rows (type and record inheritance, type associations, interface implementations) of such a model
+    ///         that its compiled form does not consume - the data source reads every link row, the read-back keeps one per
+    ///         element.</item>
+    ///     </list>
+    ///     Such rows would reach the runtime CK cache beside the model the check compared. Returns one line per finding
+    ///     (collection and ids, never content).
     /// </summary>
     internal static async Task<IReadOnlyList<string>> FindForeignServiceManagedElementRowsAsync(
-        ICkMongoDbRepositoryDataSource dataSource, IReadOnlyCollection<CkModelId> modelRows)
+        ICkMongoDbRepositoryDataSource dataSource,
+        IReadOnlyCollection<(CkModel Row, CkCompiledModelRoot Compiled)> models)
     {
         using var session = await dataSource.CreateSessionAsync();
-        var known = modelRows.ToHashSet();
+        var known = models.Select(m => m.Row.Id).ToHashSet();
         var findings = new List<string>();
+        foreach (var (row, _) in models)
+        {
+            if (!string.Equals(row.ModelId, row.Id.Name, StringComparison.Ordinal))
+            {
+                findings.Add($"CkModel row '{row.Id}' names the model '{row.ModelId}'");
+            }
+        }
+
+        var linkRows = new Dictionary<(string Collection, CkModelId Model), int>();
+
+        void CountLink(string collection, CkModelId rowModel)
+        {
+            if (ServiceManagedCkModels.IsServiceManaged(rowModel.Name))
+            {
+                linkRows[(collection, rowModel)] = linkRows.GetValueOrDefault((collection, rowModel)) + 1;
+            }
+        }
 
         void Check(string collection, CkModelId rowModel, CkModelId elementModel, string elementId)
         {
@@ -462,21 +490,46 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         foreach (var r in await dataSource.CkTypeInheritances.FindManyAsync(session, _ => true))
         {
             Check("CkTypeInheritance", r.CkModelId, r.InheritorCkTypeId.ModelId, r.InheritorCkTypeId.FullName);
+            CountLink("CkTypeInheritance", r.CkModelId);
         }
 
         foreach (var r in await dataSource.CkTypeAssociations.FindManyAsync(session, _ => true))
         {
             Check("CkTypeAssociation", r.CkModelId, r.OriginCkTypeId.ModelId, r.OriginCkTypeId.FullName);
+            CountLink("CkTypeAssociation", r.CkModelId);
         }
 
         foreach (var r in await dataSource.CkRecordInheritances.FindManyAsync(session, _ => true))
         {
             Check("CkRecordInheritance", r.CkModelId, r.InheritorCkRecordId.ModelId, r.InheritorCkRecordId.FullName);
+            CountLink("CkRecordInheritance", r.CkModelId);
         }
 
         foreach (var r in await dataSource.CkTypeInterfaceImplementations.FindManyAsync(session, _ => true))
         {
             Check("CkTypeInterfaceImplementation", r.CkModelId, r.CkTypeId.ModelId, r.CkTypeId.FullName);
+            CountLink("CkTypeInterfaceImplementation", r.CkModelId);
+        }
+
+        // Every link row of a compared model must be one its compiled form consumed.
+        foreach (var (row, compiled) in models)
+        {
+            var types = compiled.Types ?? [];
+            var expected = new Dictionary<string, int>
+            {
+                ["CkTypeInheritance"] = types.Count(t => t.DerivedFromCkTypeId != null),
+                ["CkTypeAssociation"] = types.Sum(t => t.Associations?.Count ?? 0),
+                ["CkRecordInheritance"] = (compiled.Records ?? []).Count(r => r.DerivedFromCkRecordId != null),
+                ["CkTypeInterfaceImplementation"] = types.Sum(t => t.Implements?.Count ?? 0)
+            };
+            foreach (var (collection, count) in expected)
+            {
+                var stored = linkRows.GetValueOrDefault((collection, row.Id));
+                if (stored != count)
+                {
+                    findings.Add($"{collection} holds {stored} rows of model '{row.Id}', its compiled form uses {count}");
+                }
+            }
         }
 
         return findings;

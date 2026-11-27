@@ -159,8 +159,8 @@ public class TenantContext : ITenantContext
     {
         try
         {
-            await _serviceProvider.GetRequiredService<IAdminRepositoryAccess>().GetRepositoryClient(databaseName)
-                .DropRepositoryAsync(databaseName);
+            // This context's admin client: a client per scratch name would stay in the client cache for the process.
+            await _adminRepositoryClient.DropRepositoryAsync(databaseName);
         }
         catch (Exception ex)
         {
@@ -2793,7 +2793,7 @@ public class TenantContext : ITenantContext
     {
         foreach (var key in _serviceManagedCkModelsAttempted.Keys)
         {
-            // Keys are "{TenantId}:{modelName}" — compare only the tenant segment.
+            // Keys are "{TenantId}:{RegistrationKey}:{modelName}" — compare only the tenant segment.
             var separatorIndex = key.IndexOf(':');
             if (separatorIndex > 0 &&
                 key.AsSpan(0, separatorIndex).Equals(tenantId, StringComparison.OrdinalIgnoreCase))
