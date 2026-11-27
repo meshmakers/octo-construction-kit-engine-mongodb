@@ -18,7 +18,10 @@
   always unbounded, whatever `MaxTake` is, unless a key list of at most `MaxTake` ids bounds it (reads by id). The
   registry reads (`GetAllTenantsAsync`, `GetChildTenantsAsync`, `GetDirectChildTenantsAsync`, the tenant lookups) and
   the tenant configuration reads run suppressed (`RuntimeReadScope.Suppress()`), so a cross-tenant node - also one
-  whose cross-tenant guard reads the registry first - is reported for its own read. Docs:
+  whose cross-tenant guard reads the registry first - is reported for its own read. The stream-data archive and
+  rollup archive enumerations (series resolution of a downsampling query, stream-data hosted services) and the
+  recompute-job reads of the computed-column backfill drain run suppressed too, so a `GetQueryById@1` node is not
+  reported for the engine's `RollupArchive` read and the drain gives no hourly `unknown` warning. Docs:
   `docs/runtime-read-guard.md`.
 
 - AB#9750 Fix: the count-only form of a nested association query (`GetRtAssociationTargetsAsync` with `take: 0`, the

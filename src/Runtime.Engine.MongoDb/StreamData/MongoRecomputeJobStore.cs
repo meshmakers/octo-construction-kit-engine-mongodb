@@ -4,6 +4,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 
@@ -91,7 +92,8 @@ public sealed class MongoRecomputeJobStore : IRecomputeJobStore
         // every tick while it is queued, and the job history of a tenant only grows.
         var options = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtRecomputeJob.ArchiveRtId), FieldFilterOperator.Equals, archiveId);
-        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRecomputeJob>(session, options);
+        var result = await EngineInternalRead.RunAsync(() =>
+            _tenantRepository.GetRtEntitiesByTypeAsync<RtRecomputeJob>(session, options));
 
         return result.Items
             .Where(e => e.RtState != RtState.Archived

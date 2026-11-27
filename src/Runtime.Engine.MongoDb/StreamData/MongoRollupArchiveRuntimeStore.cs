@@ -5,6 +5,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 
@@ -238,7 +239,8 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
     {
         var session = await _tenantRepository.GetSessionAsync();
         var queryOptions = RtEntityQueryOptions.Create();
-        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRollupArchive>(session, queryOptions);
+        var result = await EngineInternalRead.RunAsync(() =>
+            _tenantRepository.GetRtEntitiesByTypeAsync<RtRollupArchive>(session, queryOptions));
 
         foreach (var entity in result.Items)
         {
@@ -327,7 +329,8 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         // source) so this is fine; revisit if it ever shows up in a hot path.
         var session = await _tenantRepository.GetSessionAsync();
         var queryOptions = RtEntityQueryOptions.Create();
-        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRollupArchive>(session, queryOptions);
+        var result = await EngineInternalRead.RunAsync(() =>
+            _tenantRepository.GetRtEntitiesByTypeAsync<RtRollupArchive>(session, queryOptions));
 
         var count = 0;
         foreach (var entity in result.Items)

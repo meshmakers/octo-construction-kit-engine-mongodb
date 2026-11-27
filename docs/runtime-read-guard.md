@@ -58,7 +58,11 @@ with the default limit for a section that cannot be bound; a misconfiguration ne
 bounds it (reads by id). Engine-internal lookups run suppressed and are never attributed to a node: the registry reads
 `ISystemContext.GetAllTenantsAsync`, `GetChildTenantsAsync` and `GetDirectChildTenantsAsync`, the tenant lookups
 behind `TryGetChildTenantAsync` and the platform-wide tenant lookup, the tenant configuration reads
-(`GetConfigurationAsync`, the read in `SetConfigurationAsync`) and the data-policy table load. The mesh adapter chart sets the section from `runtimeReadGuard.mode` / `runtimeReadGuard.maxTake`.
+(`GetConfigurationAsync`, the read in `SetConfigurationAsync`), the stream-data archive and rollup archive
+enumerations (`MongoArchiveRuntimeStore.EnumerateAsync`, `MongoRollupArchiveRuntimeStore.EnumerateAsync` and
+`CountActiveRollupsForSourceAsync`, read by series resolution and the stream-data hosted services), the recompute
+jobs of an archive (`MongoRecomputeJobStore`, read by the computed-column backfill drain every tick) and the
+data-policy table load. The mesh adapter chart sets the section from `runtimeReadGuard.mode` / `runtimeReadGuard.maxTake`.
 
 ## Warning and metric
 

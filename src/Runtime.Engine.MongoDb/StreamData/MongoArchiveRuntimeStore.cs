@@ -5,6 +5,7 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.RuntimeQueries;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 
@@ -348,7 +349,8 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
     {
         var session = await _tenantRepository.GetSessionAsync();
         var queryOptions = RtEntityQueryOptions.Create();
-        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtArchive>(session, queryOptions);
+        var result = await EngineInternalRead.RunAsync(() =>
+            _tenantRepository.GetRtEntitiesByTypeAsync<RtArchive>(session, queryOptions));
 
         foreach (var entity in result.Items)
         {

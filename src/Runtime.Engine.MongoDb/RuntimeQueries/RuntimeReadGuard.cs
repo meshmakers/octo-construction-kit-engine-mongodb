@@ -61,8 +61,9 @@ internal sealed class RuntimeReadGuard
     /// <summary>
     ///     The effective mode and limit. A configuration that names no <see cref="RuntimeReadGuardMode" />, or that
     ///     cannot be bound at all, is logged once per distinct value as a warning (event 41002) and the guard runs as
-    ///     <see cref="RuntimeReadGuardMode.Warn" /> with the default limit: a misconfiguration never silently turns
-    ///     the guard off. Never throws.
+    ///     <see cref="RuntimeReadGuardMode.Warn" />: with the configured limit for an invalid mode, with the default
+    ///     limit for a section that cannot be bound. A misconfiguration never silently turns the guard off. Never
+    ///     throws.
     /// </summary>
     internal (RuntimeReadGuardMode Mode, int MaxTake) ResolveSettings()
     {
