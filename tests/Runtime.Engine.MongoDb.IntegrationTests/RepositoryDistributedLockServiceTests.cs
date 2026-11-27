@@ -21,6 +21,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// Covers the invariants introduced by the recent SysLock changes:
 /// owner-token fencing, TTL index, holder-info diagnostics, stale-lock reclaim,
 /// concurrent acquire mutual-exclusion, lock-lost signalling, and acquire cancellation.
+/// The tests with real contention and wall-clock bounds (concurrent acquire, heartbeat loss, cancellation while
+/// polling) are Category=Stress and LoadSensitive: the service waits with Task.Delay and has no TimeProvider, so
+/// they cannot run on fakes and stay out of the normal run.
 /// </summary>
 [Collection(SystemCollection.Name)]
 public class RepositoryDistributedLockServiceTests
@@ -134,6 +137,8 @@ public class RepositoryDistributedLockServiceTests
     }
 
     [Fact]
+    [Trait("Category", "Stress")]
+    [Trait("Category", "LoadSensitive")]
     public async Task ConcurrentAcquire_SecondInstanceWaitsThenAcquiresAfterRelease()
     {
         var lockId = NewLockId("test_concurrent");
@@ -201,6 +206,8 @@ public class RepositoryDistributedLockServiceTests
     }
 
     [Fact(Timeout = 60_000)]
+    [Trait("Category", "Stress")]
+    [Trait("Category", "LoadSensitive")]
     public async Task Heartbeat_DetectsStolenLockAndSignalsLockLostToken()
     {
         // xUnit1069: a test with a Timeout must reference TestContext.Current.CancellationToken directly.
@@ -358,6 +365,8 @@ public class RepositoryDistributedLockServiceTests
     }
 
     [Fact]
+    [Trait("Category", "Stress")]
+    [Trait("Category", "LoadSensitive")]
     public async Task Acquire_HonorsCancellationTokenWhilePolling()
     {
         var lockId = NewLockId("test_cancel");
