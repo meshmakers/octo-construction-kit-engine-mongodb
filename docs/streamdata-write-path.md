@@ -111,7 +111,8 @@ ever removed a computed column, or changed the formula of one, could not be rest
 
 - **What the dump leaves out.** `ResolveCopyTargetAsync` sets `ArchiveCopyTarget.Ownership`
   (`Copy/ArchiveColumnOwnership`), and `StagingCopyRunner.PlanAsync` drops its leftovers from the data table's description
-  (= the manifest; a warning names them) and copies the data slices with a column list, like the Hidden columns. A column
+  (= the manifest; a warning names them) and copies the data slices with a column list, like the Hidden columns, but
+  only when the source table really holds a leftover (AB#9932, next item). A column
   is a leftover only on positive evidence. It is not owned (standard and platform columns, the ingested or aggregate
   columns, the active and pending names of the computed columns), its type is one a computed column has (`boolean`,
   `integer`, `bigint`, `double precision`, `timestamp with time zone`), and one of these holds:
@@ -120,6 +121,15 @@ ever removed a computed column, or changed the formula of one, could not be rest
   - it has a versioned name (`{base}__v{N}`), or it is the base of such a column in the same table;
   - the archive's CK type is known and no attribute path of it (records followed) maps to the name. For a rollup this check
     always holds, because all its columns are derived.
+- **The whole row unless a column is left out (AB#9932).** A column list makes `COPY TO` write `json_object` lines
+  that name every listed column, a NULL as an explicit `null`, and `COPY FROM` keeps that NULL. The whole row leaves a
+  NULL out, and the load gives the column its DEFAULT: a NULL `rtcreationdatetime` comes back as `CURRENT_TIMESTAMP`, a
+  NULL `was_updated` (the replica defect of CrateDB before 5.10.12, AB#6647) as `FALSE`. That is the documented
+  behaviour of the native copy (AB#5490; `CrateVersionMatrixCases.Format2_ANullInAColumnWithADefault_…` in
+  `octo-asset-repo-services` pins it). So `StagingCopyRunner.DumpedColumns` names columns only when the target excludes
+  Hidden columns or the source table holds leftovers (`ArchiveColumnOwnership.FindLeftovers` over the table, read once
+  per dump); otherwise the dump copies the whole row, as before AB#9837. Known limit: an archive with a Hidden column or a
+  leftover is dumped with a column list, so a NULL in a column with a DEFAULT stays NULL on its restore.
 - **What the dump keeps.** Every other column stays in the manifest, so the restore still refuses it before loading
   anything. That covers a plain column named like an attribute path of the type (ingested data the definition no longer
   declares), unless a computed column of the definition explains it, as well as a column of another type (`text`, `object`, arrays), and a plain unknown column when the CK type cannot be read.
