@@ -151,6 +151,11 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
         => Assert.Equal((await ColumnsAsync(source)).Except(leftOut).Order(StringComparer.Ordinal),
             Described(dump).Order(StringComparer.Ordinal));
 
+    /// <summary>The value of the column Value in a query row (the key's case follows the read path).</summary>
+    private static double ValueOf(IReadOnlyDictionary<string, object?> values)
+        => Convert.ToDouble(Assert.Single(values, kv => kv.Key.Equals("Value", StringComparison.OrdinalIgnoreCase)).Value
+                            ?? throw new InvalidOperationException("Value is null"));
+
     private async Task AssertRestoredAsync(Lane target, ArchiveCopyDumpResult dump, ArchiveCopyStagingLocation location)
     {
         var load = await target.Repository.LoadArchiveFromStagingAsync(target.Archive, dump.Plan, location, null, Ct);
@@ -160,6 +165,8 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
             StreamDataQueryOptions.Create().WithCkTypeId(SensorType).WithColumns(["Value"])
                 .WithTimeRange(FirstRow, FirstRow.AddDays(3)));
         Assert.Equal(Rows, history.Rows.Count);
+        Assert.Equal(Enumerable.Range(0, Rows).Select(i => i * 1.5),
+            history.Rows.Select(r => ValueOf(r.Values)).Order());
 
         // The restored table takes new rows (every computed column of the definition has its physical column).
         await target.Repository.InsertAsync(target.Archive, new StreamDataPoint
@@ -246,9 +253,9 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
             StreamDataQueryOptions.Create().WithCkTypeId(SensorType).WithColumns(["Value", "doubled"])
                 .WithTimeRange(FirstRow, FirstRow.AddHours(Rows)));
         Assert.Equal(Rows, restored.Rows.Count);
-        Assert.All(restored.Rows, r => Assert.Equal(
-            Convert.ToDouble(r.Values.First(kv => kv.Key.Equals("Value", StringComparison.OrdinalIgnoreCase)).Value) * 3,
-            Convert.ToDouble(r.Values["doubled"]), 6));
+        Assert.Equal(Enumerable.Range(0, Rows).Select(i => i * 1.5), restored.Rows.Select(r => ValueOf(r.Values)).Order());
+        Assert.All(restored.Rows, r => Assert.NotNull(r.Values["doubled"]));
+        Assert.All(restored.Rows, r => Assert.Equal(ValueOf(r.Values) * 3, Convert.ToDouble(r.Values["doubled"]), 6));
     }
 
     [Fact]
@@ -280,6 +287,8 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
         Assert.True(load.IsSuccess, string.Join("; ", load.Slices.Select(s => s.Message)));
         Assert.True(load.RowCountVerified);
         Assert.Equal(Rows, await fixture.CountAsync($"SELECT count(*) FROM {target.Table}"));
+        var restored = await fixture.QueryAsync($"SELECT \"value\" FROM {target.Table} ORDER BY \"timestamp\"");
+        Assert.Equal(Enumerable.Range(0, Rows).Select(i => i * 1.5), restored.Select(r => Convert.ToDouble(r["value"])));
     }
 
     [Fact]

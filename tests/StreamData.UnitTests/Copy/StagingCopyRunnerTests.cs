@@ -374,18 +374,22 @@ public class StagingCopyRunnerTests
     public async Task Plan_LeavesTheLeftoversOfComputedColumnsOut_AndTheDumpNamesTheColumnsItCopies()
     {
         WithData();
-        _crate.SourceColumns = ["timestamp", "rtid", "value"];
+        _crate.SourceColumns = ["timestamp", "rtid", "value", "tripled", "doubled__v1", "note"];
+        _crate.ColumnTypes["value"] = "double precision";
+        _crate.ColumnTypes["tripled"] = "double precision";
+        _crate.ColumnTypes["doubled__v1"] = "double precision";
         var target = SourceTarget with
         {
-            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid"], [], new HashSet<string>())
+            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid", "value"], [], new HashSet<string> { "value" })
         };
 
         var plan = await Runner().PlanAsync(target, Small, Ct);
 
-        // The simulated table describes 'value' as text: no computed column has that type, so it stays.
-        Assert.Equal(["timestamp", "rtid", "value"],
+        // 'tripled' maps to no attribute, 'doubled__v1' is a versioned name: both are left out. 'note' is text and stays.
+        Assert.Equal(["timestamp", "rtid", "value", "note"],
             plan.Tables.Single(t => t.Table == ArchiveCopyTable.Data).Columns.Select(c => c.Name));
-        Assert.Equal(["timestamp", "rtid", "value"], StagingCopyRunner.DumpedColumns(target, plan));
+        Assert.Equal(17, plan.TotalRows);
+        Assert.Equal(["timestamp", "rtid", "value", "note"], StagingCopyRunner.DumpedColumns(target, plan));
         Assert.Null(StagingCopyRunner.DumpedColumns(SourceTarget, plan));
     }
 

@@ -19,8 +19,8 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
 /// <c>timestamp with time zone</c>), and either it carries the name of a computed column of the definition (its base or
 /// a stored version other than the active and the pending one), or it carries a versioned name (<c>{base}__v{N}</c>,
 /// or the base of such a column in the same table), or the archive's CK type is known and no attribute path of it maps
-/// to the name. A column named like an attribute path of the type is ingested data the definition no longer declares,
-/// never a leftover.</para>
+/// to the name. A plain column named like an attribute path of the type is ingested data the definition no longer
+/// declares, never a leftover - unless a computed column of the definition explains it as one of its stored versions.</para>
 /// </remarks>
 internal sealed class ArchiveColumnOwnership
 {
@@ -76,17 +76,18 @@ internal sealed class ArchiveColumnOwnership
             return false;
         }
 
-        if (_attributeColumns is { } attributes && attributes.Contains(name))
-        {
-            return false; // ingested data of the type that the definition no longer declares
-        }
-
-        // A stored version of a computed column the definition still has (its base or {base}__v{N}).
+        // A stored version of a computed column the definition still has (its base or {base}__v{N}): the definition
+        // itself explains the column, also when the computed column carries the name of an attribute of the type.
         if (_computed.Any(c => !c.Current.Contains(name) &&
                                (string.Equals(name, c.Base, StringComparison.OrdinalIgnoreCase) ||
                                 CrateDbStreamDataRepository.IsStoredVersionOf(name, c.Base))))
         {
             return true;
+        }
+
+        if (_attributeColumns is { } attributes && attributes.Contains(name))
+        {
+            return false; // ingested data of the type that the definition no longer declares
         }
 
         // A versioned name is made only by a formula change: {base}__v{N}, and {base} when one of its versions is there.

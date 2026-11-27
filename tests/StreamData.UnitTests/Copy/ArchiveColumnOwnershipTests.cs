@@ -78,6 +78,23 @@ public class ArchiveColumnOwnershipTests
         Assert.Empty(Ownership().FindLeftovers(Table(Double("spare"))));
     }
 
+    [Fact]
+    public void TheEarlierVersionOfAComputedColumnNamedLikeAnAttribute_IsALeftover()
+    {
+        // The type has an attribute Spare the archive does not ingest; a computed column of the same name changed its formula.
+        var ownership = Ownership(owned: ["value", "spare__v1"], computed: [("spare", Set("spare__v1"))]);
+
+        Assert.Equal(["spare"], ownership.FindLeftovers(Table(Double("spare"), Double("spare__v1"))));
+    }
+
+    [Fact]
+    public void ARemovedComputedColumnNamedLikeAnAttribute_KeepsItsFirstVersion_AndLeavesItsVersionsOut()
+    {
+        var leftovers = Ownership().FindLeftovers(Table(Double("spare"), Double("spare__v1")));
+
+        Assert.Equal(["spare__v1"], leftovers);
+    }
+
     [Theory]
     [InlineData("text")]
     [InlineData("object")]
