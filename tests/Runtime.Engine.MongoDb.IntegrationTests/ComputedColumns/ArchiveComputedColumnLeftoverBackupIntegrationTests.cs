@@ -420,4 +420,52 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
         Assert.True(load.IsSuccess, string.Join("; ", load.Slices.Select(s => s.Message)));
         Assert.True(load.RowCountVerified);
     }
+
+    [Fact]
+    public async Task ArchiveWithoutLeftovers_DumpsTheWholeRow_AndTheRestoreGivesANullTheColumnDefault()
+    {
+        // AB#9932: without a column left out the dump copies the whole row, which leaves a NULL out; the load then gives the
+        // column its DEFAULT (rtcreationdatetime: CURRENT_TIMESTAMP), as documented for the native copy (AB#5490, AB#6647).
+        // A column list would write an explicit null that the load keeps.
+        var cache = SensorCache(() => false);
+        var source = await NewSourceAsync(cache, "Value");
+        await fixture.SqlAsync($"UPDATE {source.Table} SET \"rtcreationdatetime\" = NULL WHERE \"value\" < 15");
+        await fixture.SqlAsync($"REFRESH TABLE {source.Table}");
+        Assert.Equal(10, await fixture.CountAsync($"SELECT count(*) FROM {source.Table} WHERE \"rtcreationdatetime\" IS NULL"));
+
+        var (dump, location, staged) = await DumpAsync(source);
+
+        await AssertDumpsEveryColumnButAsync(source, dump);
+        Assert.DoesNotContain("\"rtcreationdatetime\":null", staged, StringComparison.Ordinal);
+        var target = await NewTargetAsync(source, cache);
+        await AssertRestoredAsync(target, dump, location);
+        Assert.Equal(0, await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtcreationdatetime\" IS NULL"));
+    }
+
+    [Fact]
+    public async Task ArchiveWithALeftover_NamesTheColumnsItDumps_AndStillLeavesTheLeftoverOut()
+    {
+        // AB#9837 stays with AB#9932: a leftover of a computed column is left out, so the dump names the columns it copies.
+        var cache = SensorCache(() => false);
+        var source = await NewSourceAsync(cache, "Value");
+        await source.Lifecycle.AddComputedColumnAsync(source.Archive, "doubled", "value * 2", FormulaResultType.Double,
+            indexed: false);
+        await source.Lifecycle.RemoveComputedColumnAsync(source.Archive, "doubled");
+        await fixture.SqlAsync($"UPDATE {source.Table} SET \"rtcreationdatetime\" = NULL WHERE \"value\" < 15");
+        await fixture.SqlAsync($"REFRESH TABLE {source.Table}");
+
+        var (dump, location, staged) = await DumpAsync(source);
+
+        AssertStagedWithout(staged, "doubled");
+        // The column list (json_object) writes a NULL as an explicit null - the whole row would leave it out.
+        Assert.Contains("\"rtcreationdatetime\":null", staged, StringComparison.Ordinal);
+        var target = await NewTargetAsync(source, cache);
+        Assert.DoesNotContain("doubled", await ColumnsAsync(target));
+        var load = await target.Repository.LoadArchiveFromStagingAsync(target.Archive, dump.Plan, location, null, Ct);
+        Assert.True(load.IsSuccess, string.Join("; ", load.Slices.Select(s => s.Message)));
+        Assert.True(load.RowCountVerified);
+        // The known limit of a dump with a column list (docs/streamdata-write-path.md): the explicit null stays NULL.
+        await fixture.SqlAsync($"REFRESH TABLE {target.Table}");
+        Assert.Equal(10, await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtcreationdatetime\" IS NULL"));
+    }
 }

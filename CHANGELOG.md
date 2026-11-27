@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- AB#9932 Fix: a native dump of an archive without Hidden columns or leftovers of computed columns copies the whole row
+  again, so the restore gives a NULL in a column with a DEFAULT its default (`rtcreationdatetime`, `was_updated`;
+  AB#5490, AB#6647). Since AB#9837 every dump named its columns (`format = 'json_object'`), which writes a NULL as an
+  explicit `null` that `COPY FROM` keeps. That turned the CrateDB version matrix of `octo-asset-repo-services` red
+  (`Format2_ANullInAColumnWithADefault_IsRestoredWithTheDefault`). `StagingCopyRunner.DumpedColumns` now names columns
+  only when the target excludes Hidden columns or the source table really holds leftovers; the AB#9837 rules are
+  unchanged. Tests: `StagingCopyRunnerTests`, `ArchiveComputedColumnLeftoverBackupIntegrationTests`. Docs:
+  `docs/streamdata-write-path.md`.
 - AB#9837 Fix: a native dump of an archive whose table still holds the leftovers of computed columns now restores. A
   removed computed column leaves its physical column in the table, with the `{base}__v{N}` versions of its formula
   changes, and a formula change leaves the earlier version behind. The dump copied them, and the restore refused the
