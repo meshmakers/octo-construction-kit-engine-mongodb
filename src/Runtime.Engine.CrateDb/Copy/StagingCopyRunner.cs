@@ -239,6 +239,9 @@ internal sealed class StagingCopyRunner(
         options.Validate();
         EnsurePlanFits(target, plan, mustBeSameArchive: true);
         await JobLogFilterGuard.EnsureFilteredAsync(client, tenantId, options, target.ArchiveRtId, cancellationToken);
+        var dumpedColumns = plan.Slices.Any(s => s.Table == ArchiveCopyTable.Data)
+            ? await DumpedColumnsAsync(target, plan, options, cancellationToken)
+            : null;
 
         // The generation map first, the data after it (concept §6): rows a recompute adds in between are of a
         // version the copied map does not name yet, and the version the map names is still in the table because
@@ -246,7 +249,7 @@ internal sealed class StagingCopyRunner(
         foreach (var slice in plan.Slices.OrderBy(s => s.Table == ArchiveCopyTable.GenerationMap ? 0 : 1))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var result = await CopySliceToAsync(target, plan, slice, location, options, cancellationToken);
+            var result = await CopySliceToAsync(target, plan, slice, location, dumpedColumns, options, cancellationToken);
             yield return result;
             if (!result.IsSuccess)
             {
@@ -257,7 +260,7 @@ internal sealed class StagingCopyRunner(
 
     private async Task<ArchiveCopySliceResult> CopySliceToAsync(
         ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopySlice slice, ArchiveCopyStagingLocation location,
-        ArchiveCopyOptions options, CancellationToken cancellationToken)
+        IReadOnlyList<string>? dumpedColumns, ArchiveCopyOptions options, CancellationToken cancellationToken)
     {
         var sliceLocation = location.WithSubPath(slice.GetStagingPath(plan.ArchiveRtId));
         CopyStatement statement;
@@ -270,7 +273,7 @@ internal sealed class StagingCopyRunner(
         else
         {
             statement = CopyStatement.CopyTo(target.QualifiedTable, target.TimeColumn,
-                slice.FromUtc!.Value, slice.ToUtc!.Value, sliceLocation, DumpedColumns(target, plan));
+                slice.FromUtc!.Value, slice.ToUtc!.Value, sliceLocation, dumpedColumns);
         }
 
         var started = Stopwatch.GetTimestamp();
@@ -296,11 +299,36 @@ internal sealed class StagingCopyRunner(
     }
 
     /// <summary>
+    /// The columns the data slices of a dump copy (see <see cref="DumpedColumns"/>); for a target with an ownership but no
+    /// Hidden columns, the table is described once to tell whether the plan leaves any of its columns out.
+    /// </summary>
+    private async Task<IReadOnlyList<string>?> DumpedColumnsAsync(
+        ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyOptions options, CancellationToken cancellationToken)
+    {
+        IReadOnlyCollection<string>? tableColumns = null;
+        if (target.ExcludedColumns is null && target.Ownership is not null)
+        {
+            tableColumns = (await DescribeAsync(target, ArchiveCopyTable.Data, options, cancellationToken)).Columns
+                .Select(c => TopLevelColumn(c.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return DumpedColumns(target, plan, tableColumns);
+    }
+
+    /// <summary>
     /// AB#9141: the columns a data slice copies when the target leaves columns out - the columns of the plan's data table
     /// without the excluded ones (also for a plan made elsewhere) - or <c>null</c> for every column of the table. Never
     /// empty: a plan whose data table describes no column has no data slice.
     /// </summary>
-    internal static IReadOnlyList<string>? DumpedColumns(ArchiveCopyTarget target, ArchiveCopyPlan plan)
+    /// <remarks>
+    /// The whole-row form (<c>null</c>) leaves a NULL out of a row's JSON object, so the load applies the column's DEFAULT
+    /// (<c>rtcreationdatetime</c>, <c>rtchangeddatetime</c>), and the read path never meets such a NULL. A column list
+    /// (<c>json_object</c>) writes the NULL, and the load keeps it. A target without Hidden columns therefore copies whole rows
+    /// unless its plan leaves a column of <paramref name="tableColumns"/> (the top-level columns of the table now) out, the
+    /// leftovers of computed columns.
+    /// </remarks>
+    internal static IReadOnlyList<string>? DumpedColumns(
+        ArchiveCopyTarget target, ArchiveCopyPlan plan, IReadOnlyCollection<string>? tableColumns = null)
     {
         if (target.ExcludedColumns is null && target.Ownership is null)
         {
@@ -316,9 +344,18 @@ internal sealed class StagingCopyRunner(
         // Only top-level columns can be named: a sub-column (obj['member']) is copied with its object column.
         var columns = data.Columns.Select(c => TopLevelColumn(c.Name)).Distinct(StringComparer.Ordinal)
             .Where(c => !excluded(c)).ToList();
-        return columns.Count > 0
-            ? columns
-            : throw new InvalidOperationException($"The plan of archive '{target.ArchiveRtId}' leaves no column to copy.");
+        if (columns.Count == 0)
+        {
+            throw new InvalidOperationException($"The plan of archive '{target.ArchiveRtId}' leaves no column to copy.");
+        }
+
+        if (target.ExcludedColumns is null && tableColumns is not null &&
+            tableColumns.All(c => columns.Contains(c, StringComparer.OrdinalIgnoreCase)))
+        {
+            return null; // nothing of the table is left out: whole rows, as a dump without an ownership copies them
+        }
+
+        return columns;
     }
 
     /// <summary>The top-level column of an <c>information_schema</c> column name: <c>obj</c> for <c>obj['member']</c>.</summary>

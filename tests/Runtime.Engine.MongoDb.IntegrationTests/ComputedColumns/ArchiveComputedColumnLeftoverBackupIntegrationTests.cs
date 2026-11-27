@@ -178,6 +178,57 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
         Assert.Equal(Rows + 1, await fixture.CountAsync($"SELECT count(*) FROM {target.Table}"));
     }
 
+    private const int NullCreationRows = 10;
+
+    /// <summary>Sets <c>rtcreationdatetime</c> (a column with a DEFAULT) to NULL in the first <see cref="NullCreationRows" /> rows.</summary>
+    private async Task NullTheCreationTimeAsync(Lane lane)
+    {
+        await fixture.SqlAsync($"UPDATE {lane.Table} SET \"rtcreationdatetime\" = NULL " +
+                               $"WHERE \"timestamp\" < '{FirstRow.AddHours(NullCreationRows):yyyy-MM-ddTHH:mm:ss}Z'");
+        await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
+        Assert.Equal(NullCreationRows,
+            await fixture.CountAsync($"SELECT count(*) FROM {lane.Table} WHERE \"rtcreationdatetime\" IS NULL"));
+    }
+
+    [Fact]
+    public async Task ADumpThatLeavesNothingOut_CopiesWholeRows_SoANullInAColumnWithADefaultIsRestoredWithTheDefault()
+    {
+        var cache = SensorCache(() => false);
+        var source = await NewSourceAsync(cache, "Value");
+        await NullTheCreationTimeAsync(source);
+
+        var (dump, location, staged) = await DumpAsync(source);
+
+        // The whole-row form leaves a NULL out of the JSON object; a column list (json_object) would write it as null.
+        Assert.DoesNotContain("\"rtcreationdatetime\":null", staged, StringComparison.Ordinal);
+        await AssertDumpsEveryColumnButAsync(source, dump);
+        var target = await NewTargetAsync(source, cache);
+        await AssertRestoredAsync(target, dump, location);
+        Assert.Equal(0, await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtcreationdatetime\" IS NULL"));
+    }
+
+    [Fact]
+    public async Task ADumpThatLeavesALeftoverOut_CopiesWithAColumnList_AndKeepsANullInAColumnWithADefault()
+    {
+        var cache = SensorCache(() => false);
+        var source = await NewSourceAsync(cache, "Value");
+        await source.Lifecycle.AddComputedColumnAsync(source.Archive, "doubled", "value * 2", FormulaResultType.Double,
+            indexed: false);
+        await source.Lifecycle.RemoveComputedColumnAsync(source.Archive, "doubled");
+        await NullTheCreationTimeAsync(source);
+
+        var (dump, location, staged) = await DumpAsync(source);
+
+        // Known limit, shared with the Hidden columns: a column list writes the NULL, so the load keeps it (no DEFAULT).
+        Assert.Contains("\"rtcreationdatetime\":null", staged, StringComparison.Ordinal);
+        var target = await NewTargetAsync(source, cache);
+        var load = await target.Repository.LoadArchiveFromStagingAsync(target.Archive, dump.Plan, location, null, Ct);
+        Assert.True(load.IsSuccess, string.Join("; ", load.Slices.Select(s => s.Message)));
+        Assert.True(load.RowCountVerified);
+        Assert.Equal(NullCreationRows,
+            await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtcreationdatetime\" IS NULL"));
+    }
+
     [Fact]
     public async Task RemovedComputedColumn_IsLeftOutOfTheDump_AndTheRestoreLoadsEveryRow()
     {

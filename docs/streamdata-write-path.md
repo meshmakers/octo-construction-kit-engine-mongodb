@@ -111,7 +111,12 @@ ever removed a computed column, or changed the formula of one, could not be rest
 
 - **What the dump leaves out.** `ResolveCopyTargetAsync` sets `ArchiveCopyTarget.Ownership`
   (`Copy/ArchiveColumnOwnership`), and `StagingCopyRunner.PlanAsync` drops its leftovers from the data table's description
-  (= the manifest; a warning names them) and copies the data slices with a column list, like the Hidden columns. A column
+  (= the manifest; a warning names them). When it drops one, the data slices are copied with a column list, like the
+  Hidden columns. A dump that leaves nothing out still copies whole rows (`StagingCopyRunner.DumpedColumns`; the table is
+  described once per dump). This matters for NULLs in columns with a DEFAULT (`rtcreationdatetime`,
+  `rtchangeddatetime`): whole rows leave a NULL out of the JSON object, so the load applies the DEFAULT, and the read path
+  casts these columns without a null check. A column list (`json_object`) writes the NULL, and the load keeps it. Known
+  limit, shared with the Hidden columns: an archive whose dump leaves a column out restores such NULLs as NULL. A column
   is a leftover only on positive evidence. It is not owned (standard and platform columns, the ingested or aggregate
   columns, the active and pending names of the computed columns), its type is one a computed column has (`boolean`,
   `integer`, `bigint`, `double precision`, `timestamp with time zone`), and one of these holds:

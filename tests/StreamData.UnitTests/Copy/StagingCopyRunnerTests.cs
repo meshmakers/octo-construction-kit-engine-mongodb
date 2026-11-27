@@ -391,6 +391,47 @@ public class StagingCopyRunnerTests
         Assert.Equal(17, plan.TotalRows);
         Assert.Equal(["timestamp", "rtid", "value", "note"], StagingCopyRunner.DumpedColumns(target, plan));
         Assert.Null(StagingCopyRunner.DumpedColumns(SourceTarget, plan));
+        // The table holds columns the plan leaves out: a column list.
+        Assert.Equal(["timestamp", "rtid", "value", "note"], StagingCopyRunner.DumpedColumns(target, plan, _crate.SourceColumns));
+    }
+
+    [Fact]
+    public async Task CopyTo_APlanThatLeavesNothingOut_CopiesWholeRows_SoTheLoadAppliesColumnDefaultsToNulls()
+    {
+        WithData();
+        var target = SourceTarget with
+        {
+            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid", "value"], [], new HashSet<string> { "value" })
+        };
+        var plan = await Runner().PlanAsync(target, Small, Ct);
+
+        await Collect(Runner().CopyToAsync(target, plan, Location, Small, Ct));
+
+        var dumps = _crate.Executed.Where(s => s.StartsWith("COPY", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(dumps);
+        Assert.All(dumps, d => Assert.DoesNotContain("json_object", d));
+        Assert.All(dumps, d => Assert.StartsWith($"COPY {target.QualifiedTable} WHERE", d));
+        Assert.Null(StagingCopyRunner.DumpedColumns(target, plan, ["timestamp", "rtid", "value"]));
+    }
+
+    [Fact]
+    public async Task CopyTo_APlanThatLeavesALeftoverOut_CopiesWithAColumnList()
+    {
+        WithData();
+        _crate.SourceColumns = ["timestamp", "rtid", "value", "tripled"];
+        _crate.ColumnTypes["tripled"] = "double precision";
+        var target = SourceTarget with
+        {
+            Ownership = new ArchiveColumnOwnership(["timestamp", "rtid", "value"], [], new HashSet<string> { "value" })
+        };
+        var plan = await Runner().PlanAsync(target, Small, Ct);
+
+        await Collect(Runner().CopyToAsync(target, plan, Location, Small, Ct));
+
+        var dumps = _crate.Executed.Where(s => s.StartsWith("COPY", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(dumps);
+        Assert.All(dumps, d => Assert.Contains("json_object", d));
+        Assert.All(dumps, d => Assert.DoesNotContain("tripled", d));
     }
 
     [Fact]

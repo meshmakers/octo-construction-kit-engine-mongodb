@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- AB#9837 Fix (regression of the entry below): a native dump that leaves no column out copies whole rows again
+  (`COPY ... TO` without a column list). The fix below copied every dump with a column list (`format = 'json_object'`).
+  That form writes a NULL into the row's JSON object, so the load no longer applied the column DEFAULT to a NULL in
+  `rtcreationdatetime` / `rtchangeddatetime`, as documented for format 2. The asset repository's CrateDB version matrix
+  test `Format2_ANullInAColumnWithADefault_IsRestoredWithTheDefault` failed. Now the column list is used only when the plan
+  leaves a column of the table out, either a Hidden column or a leftover of a computed column (`StagingCopyRunner.DumpedColumns`,
+  the table is described once per dump). Known limit, as for Hidden columns before: such an archive restores these NULLs as
+  NULL. Tests: `ArchiveComputedColumnLeftoverBackupIntegrationTests.ADumpThatLeavesNothingOut_*` (it fails without the
+  fix) and `ADumpThatLeavesALeftoverOut_*`, and the `StagingCopyRunnerTests.CopyTo_APlanThatLeaves*` tests.
+
 - AB#9837 Fix: a native dump of an archive whose table still holds the leftovers of computed columns now restores. A
   removed computed column leaves its physical column in the table, with the `{base}__v{N}` versions of its formula
   changes, and a formula change leaves the earlier version behind. The dump copied them, and the restore refused the
