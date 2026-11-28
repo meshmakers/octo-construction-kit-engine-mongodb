@@ -352,7 +352,10 @@ public class TenantContext : ITenantContext
 
             BlueprintApplicationResult result;
             // A blueprint install reads and writes whole types: no runtime query time limit (batch path).
+            // The new tenant's registry entry is still in the caller's uncommitted transaction: the scope lets the
+            // blueprint resolve exactly this tenant to its new database in this flow (AB#10060).
             using (RuntimeQueryTimeLimit.Disable())
+            using (CreatingTenantScope.Begin(tenantId, databaseName))
             {
                 result = await blueprintService.ApplyBlueprintAsync(tenantId, blueprintId);
             }

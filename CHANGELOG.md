@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- AB#10060 Fix: creating a child tenant with a blueprint in one call (`CreateChildTenantAsync` with a `BlueprintId`,
+  POST tenants with `blueprintId`) failed for every blueprint with "Tenant '<id>' not found; cannot install CK model": the
+  tenant's registry entry is still in the caller's uncommitted transaction (AB#8796) while the blueprint's CK install
+  resolves the tenant in its own session. `CreatingTenantScope` now makes exactly that tenant id resolve to its new
+  database in the creating async flow while the blueprint is applied; the transaction boundary is unchanged.
 - AB#9326 New: a tenant restore can no longer bring in a manipulated or outdated service-managed CK model (System,
   System.*). `TenantBackupService.RestoreTenantAsync` compares every such model of the dump (model row and element rows,
   read back like the CK cache reads them) in canonical form with the catalog's model of the same id. It runs once on the
