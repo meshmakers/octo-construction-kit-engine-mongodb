@@ -607,39 +607,44 @@ internal class TenantBackupService(
             // The tenant-created notification is published here, after the commit: the services set the tenant up
             // when they receive it and must find it registered. A failed publish does not fail the restore (the data is
             // restored and attached); it is reported on the result, so the caller can surface it.
-            using var session = await systemContext.GetAdminSessionAsync();
-            using var notification = TenantNotificationScope.Begin(session);
+            var attached = false;
             try
             {
+                using var session = await systemContext.GetAdminSessionAsync();
+                using var notification = TenantNotificationScope.Begin(session);
                 session.StartTransaction();
                 await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
                 await session.CommitTransactionAsync();
+                attached = true;
+
+                logger.LogInformation(
+                    "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
+                    tenantId, databaseName);
+
+                try
+                {
+                    await notification.PublishAsync();
+                }
+                catch (Exception ex)
+                {
+                    var warning =
+                        $"Tenant '{tenantId}' was restored and attached to database '{databaseName}', but the " +
+                        $"tenant-created notification failed ({ex.Message}). The services have not set the tenant up: " +
+                        "run ClearCache for the tenant.";
+                    logger.LogWarning(ex, "Restore of tenant '{TenantId}': {Warning}", tenantId, warning);
+                    result.TenantCreatedNotificationFailed = true;
+                    result.Output = string.IsNullOrEmpty(result.Output)
+                        ? warning
+                        : result.Output + Environment.NewLine + warning;
+                }
             }
-            catch when (keptCreatedDatabaseUser && systemContext is TenantContext engineSystemContext)
+            catch when (!attached && keptCreatedDatabaseUser && systemContext is TenantContext engineSystemContext)
             {
-                // The check created the tenant database user for its raise and kept it for the attach; the attach
-                // failed, so the database stays unattached and the user must not outlive the restore (review of #290).
+                // The check created the tenant database user for its raise and kept it for the attach; the attach did
+                // not commit (also when the session could not be opened), so the database stays unattached and the
+                // user must not outlive the restore (review of #290). An attached tenant keeps its user.
                 await engineSystemContext.DropTenantDatabaseUserForRestoreAsync(databaseName);
                 throw;
-            }
-
-            logger.LogInformation(
-                "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
-                tenantId, databaseName);
-
-            try
-            {
-                await notification.PublishAsync();
-            }
-            catch (Exception ex)
-            {
-                var warning =
-                    $"Tenant '{tenantId}' was restored and attached to database '{databaseName}', but the " +
-                    $"tenant-created notification failed ({ex.Message}). The services have not set the tenant up: " +
-                    "run ClearCache for the tenant.";
-                logger.LogWarning(ex, "Restore of tenant '{TenantId}': {Warning}", tenantId, warning);
-                result.TenantCreatedNotificationFailed = true;
-                result.Output = string.IsNullOrEmpty(result.Output) ? warning : result.Output + Environment.NewLine + warning;
             }
         }
 
@@ -760,8 +765,12 @@ internal class TenantBackupService(
                     $"namespaces in the archive matched.{archiveInfo}"));
             }
 
+            // The CK cache is keyed by tenant id: the live tenant's cache must not serve the raise's migrations, and the
+            // staging models the raise loads must not serve the live tenant longer than the raise.
+            engineSystemContext.UnloadCkCacheForRestore(tenantId);
             var check = await systemModelGuard.EnforceAsync(engineSystemContext, tenantId, stagingDatabaseName,
                 keepDatabaseUser: false, cancellationToken);
+            engineSystemContext.UnloadCkCacheForRestore(tenantId);
             if (check.IsRefused)
             {
                 return StagedRestore.Failed(check.Message(tenantId) +
@@ -769,6 +778,9 @@ internal class TenantBackupService(
             }
 
             stagedArchive = Path.Combine(Path.GetTempPath(), $"restorestage-{Guid.NewGuid():N}.archive");
+            logger.LogInformation(
+                "Restore of tenant '{TenantId}': the checked staging database is dumped into temp archive '{Archive}'",
+                tenantId, stagedArchive);
             var dump = await repositoryOpsService.ExecuteMongoDumpAsync(
                 MongoDumpOptions.ForArchive(stagingDatabaseName, stagedArchive), timeout, cancellationToken);
             if (!dump.Success)

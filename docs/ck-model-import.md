@@ -440,15 +440,21 @@ staged, so a check or raise that fails at run time never leaves the tenant dropp
    check, raise or catalog read runs after the drop.
 
 Whatever the outcome, the staging database is dropped again, the database user the raise created for it is dropped
-(the staged check never keeps it), this process's CK cache of the tenant id is unloaded (the raise ran under that id,
-the next access loads the attached tenant's own models) and the temp archive is deleted. A refusal or failure in steps 1-3
+(the staged check never keeps it) and the temp archive is deleted. This process's CK cache of the tenant id is unloaded
+right before and right after the check and raise, and again at the end: the cache is keyed by tenant id, so the live
+tenant's cache must not serve the raise's migrations, and the staging models the raise loads must not serve the live
+tenant (the next access loads the attached tenant's own models). Known limit: a request for the live tenant in the same
+process while the raise runs can still load either model set into that cache for the duration of the raise. A refusal or failure in steps 1-3
 leaves the existing tenant attached and unchanged; its message ends with "The existing tenant '...' was not changed."
 What can still fail after the drop is the restore of the local temp archive or the attach, as for every restore (a
 failed tenant-deleted notification is named in the result's `Output`). The staged flow needs disk space for a second
 archive in the temp folder and moves the data three times (staging restore, dump, target restore); the caller's
-`timeout` applies to each mongorestore/mongodump call. A process that dies in steps 1-3 can leave a staging database
-and a temp archive: both are safe to drop, the database name is in the INFO line "Restore of tenant ...: the restore
-replaces the existing tenant; restoring and checking the dump in staging database ...". While the raise runs, the
+`timeout` applies to each mongorestore/mongodump call. A process that dies in steps 1-3 can leave a staging database,
+the tenant database user of that staging database (the configured `DatabaseUser` format with the staging name, in the
+authentication database; it carries the shared tenant database password) and a temp archive. All three are safe to
+drop: the database name is in the INFO line "Restore of tenant ...: the restore replaces the existing tenant; restoring
+and checking the dump in staging database ...", the archive path in "... the checked staging database is dumped into
+temp archive ..."; drop the user with `dropUser` in the authentication database. While the raise runs, the
 import publishes pre/post tenant-update notifications for the tenant id: other services unload their cache of the
 still attached tenant and load it again from its own database.
 

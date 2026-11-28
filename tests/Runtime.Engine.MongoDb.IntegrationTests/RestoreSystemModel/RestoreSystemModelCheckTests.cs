@@ -749,11 +749,15 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
             Assert.False(await UserExistsAsync(staging), $"the database user of staging database '{staging}' is left");
         }
 
-        Assert.DoesNotContain(Directory.GetFiles(Path.GetTempPath(), "restorestage-*.archive"),
-            f => File.GetLastWriteTimeUtc(f) > _startedUtc);
+        // Only the temp archives of this tenant's restores: other collections restore over tenants in parallel.
+        foreach (var line in fixture.Logs.Find(Microsoft.Extensions.Logging.LogLevel.Information,
+                     $"Restore of tenant '{tenantId}': the checked staging database is dumped into temp archive"))
+        {
+            var archive = System.Text.RegularExpressions.Regex.Match(line, "temp archive '([^']+)'").Groups[1].Value;
+            Assert.Contains("restorestage-", archive, StringComparison.Ordinal);
+            Assert.False(File.Exists(archive), $"the staged restore left its temp archive '{archive}'");
+        }
     }
-
-    private readonly DateTime _startedUtc = DateTime.UtcNow;
 
     private async Task AssertRefusedAndNothingLeftAsync(CommandResult result, string target, string reason)
     {
