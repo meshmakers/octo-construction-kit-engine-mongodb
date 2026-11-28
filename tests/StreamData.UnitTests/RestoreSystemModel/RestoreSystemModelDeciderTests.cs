@@ -146,6 +146,34 @@ public class RestoreSystemModelDeciderTests
         Assert.Null(decision.Target);
     }
 
+    [Fact]
+    public void GenuineContent_WithAnUnpublishedClosureEntry_IsRefused_AlsoWhenItWouldBeRaised()
+    {
+        var unpublished = new[] { new CkModelId("System-2.99.0") };
+        var kept = RestoreSystemModelDecider.Decide(Genuine("System.UI-2.12.0", "System.UI-2.12.0") with
+        {
+            UnpublishedClosureEntries = unpublished
+        });
+        var older = RestoreSystemModelDecider.Decide(Genuine("System.Identity-3.7.0", "System.Identity-3.8.0",
+            floor: IdentityFloor) with { UnpublishedClosureEntries = unpublished });
+
+        Assert.Equal(RestoreSystemModelRefusalReason.DependencyUnpublished, kept.Reason);
+        Assert.Equal(RestoreSystemModelRefusalReason.DependencyUnpublished, older.Reason);
+        Assert.Contains("'System-2.99.0'", kept.Detail, StringComparison.Ordinal);
+        Assert.Equal("dependency_unpublished", RestoreSystemModelGuard.ReasonTag(kept.Reason!.Value));
+    }
+
+    [Fact]
+    public void ContentThatDiffers_IsContentDiffers_EvenWithAnUnpublishedClosureEntry()
+    {
+        var decision = RestoreSystemModelDecider.Decide(Genuine("System.UI-2.12.0", null) with
+        {
+            ContentEqualsCatalog = false, UnpublishedClosureEntries = [new CkModelId("System-2.99.0")]
+        });
+
+        Assert.Equal(RestoreSystemModelRefusalReason.ContentDiffers, decision.Reason);
+    }
+
     [Theory]
     [InlineData("System.Identity", "3.6.0")]
     [InlineData("system.identity", "3.6.0")]

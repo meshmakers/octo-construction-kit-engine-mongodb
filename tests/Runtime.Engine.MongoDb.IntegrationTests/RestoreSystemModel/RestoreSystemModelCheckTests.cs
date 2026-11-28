@@ -1,5 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
@@ -305,6 +307,236 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         Assert.Null(await provider.GetRepositoryAsync(restoring, TestContext.Current.CancellationToken));
     }
 
+    // ---- resolved dependency closure (AB#10061) ------------------------------------------------------------------
+
+    /// <summary>
+    ///     Regression test of AB#10061: a genuine dump of a fresh tenant with every service-managed model this repository
+    ///     can install - System, the engine's embedded System.StreamData, System.Identity, and the published System.UI,
+    ///     System.Notification and System.Files files - restores unchanged although each model's resolved dependency
+    ///     closure (the services' build: the tenant's System) differs from the catalog's (its first publish: System-2.8.0,
+    ///     System.Files System-2.5.0), exactly the skew of the published catalog. Fails at ac936506 (content_differs for
+    ///     every one of them).
+    /// </summary>
+    [Fact]
+    public async Task GenuineDumpOfAFreshTenant_ClosuresOfAnotherBuildThanThePublishedOnes_RestoresUnchanged()
+    {
+        await WithPublishedClosureSkewAsync(async (source, names) =>
+        {
+            var archive = await DumpAsync(source);
+            var target = NewTenantId("skewrt");
+
+            var result = await Sys.RestoreTenantAsync(target, target, archive);
+
+            Assert.True(result.Success, result.Error);
+            Assert.Equal((await ModelIdsAsync(source)).Order(), (await ModelIdsAsync(target)).Order());
+            foreach (var name in names)
+            {
+                Assert.Equal(await SnapshotAsync(source, name), await SnapshotAsync(target, name));
+            }
+
+            await AssertGenericUserWriteRefusedAsync(await ResolveAsync(target));
+        });
+    }
+
+    public static TheoryData<string, string> ClosureManipulations => new()
+    {
+        { "closure entry of an unpublished version inside the range", "dependency_unpublished" },
+        { "closure entry of another major", "content_differs" },
+        { "closure entry added", "content_differs" },
+        { "declared floor lowered", "content_differs" },
+        { "writeAccess removed next to a moved closure", "content_differs" }
+    };
+
+    [Theory]
+    [MemberData(nameof(ClosureManipulations))]
+    public async Task DumpWithAManipulatedClosureOrContent_IsRefused_AndLeavesNothingBehind(string manipulation,
+        string reason)
+    {
+        await WithPublishedClosureSkewAsync(async (source, _) =>
+        {
+            await ManipulateClosureAsync(source, manipulation);
+            var archive = await DumpAsync(source);
+            var target = NewTenantId("skewbad");
+
+            var result = await Sys.RestoreTenantAsync(target, target, archive);
+
+            await AssertRefusedAndNothingLeftAsync(result, target, reason);
+            if (reason == "dependency_unpublished")
+            {
+                Assert.Contains("'System-2.99.0'", result.Error, StringComparison.Ordinal);
+            }
+        });
+    }
+
+    [Fact]
+    public async Task GenuineOlderDump_WithTheClosureOfAnotherBuild_IsRaisedToThePlatformsVersion()
+    {
+        var older = await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess);
+        var source = NewTenantId("skewold");
+        await CreateTenantAsync(source);
+        await InstallAsync(source, WithClosureOf(older, await SystemIdAsync(source)));
+        var archive = await DumpAsync(source);
+        var target = NewTenantId("skewoldrt");
+
+        var result = await Sys.RestoreTenantAsync(target, target, archive);
+
+        Assert.True(result.Success, result.Error);
+        var models = await ModelIdsAsync(target);
+        Assert.Contains(Identity380.FullName, models);
+        Assert.DoesNotContain(Identity370.FullName, models);
+        await AssertGenericUserWriteRefusedAsync(await ResolveAsync(target));
+    }
+
+    [Fact]
+    public async Task GenuineOlderDump_WhenThePlatformsVersionHasAnUnpublishedClosureEntry_IsRefused_NotRaised()
+    {
+        var source = await SourceTenantAsync("skewtgt", await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess));
+        var archive = await DumpAsync(source);
+        var target = NewTenantId("skewtgtrt");
+        var systemModels = Database(Sys.DatabaseName).GetCollection<BsonDocument>("CkModel");
+        var platformRow = Builders<BsonDocument>.Filter.Eq("_id", Identity380.FullName);
+        var closure = (await systemModels.Find(platformRow).FirstAsync(TestContext.Current.CancellationToken))["dependencies"];
+        CommandResult result;
+        await systemModels.UpdateOneAsync(platformRow,
+            Builders<BsonDocument>.Update.Set("dependencies", new BsonArray { "System-2.99.0" }),
+            cancellationToken: TestContext.Current.CancellationToken);
+        try
+        {
+            result = await Sys.RestoreTenantAsync(target, target, archive);
+        }
+        finally
+        {
+            await systemModels.UpdateOneAsync(platformRow, Builders<BsonDocument>.Update.Set("dependencies", closure),
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        await AssertRefusedAndNothingLeftAsync(result, target, "target_not_published");
+    }
+
+    /// <summary>
+    ///     Runs <paramref name="test" /> with a source tenant whose service-managed models carry the closure of a service
+    ///     build (the tenant's own System), while the test catalog publishes them with the closures of the real catalog;
+    ///     the catalog is put back afterwards. Passes the names of the service-managed models of the source tenant.
+    /// </summary>
+    private async Task WithPublishedClosureSkewAsync(Func<string, IReadOnlyList<string>, Task> test)
+    {
+        var withdraw = new List<CkModelId>();
+        try
+        {
+            var source = NewTenantId("skew");
+            await CreateTenantAsync(source);
+            var system = await SystemIdAsync(source);
+
+            // The engine's embedded System.StreamData, installed as the service embeds it (built against the tenant's
+            // System) and published with the closure of the real catalog.
+            var catalogService = fixture.GetService<ICatalogService>();
+            var found = await catalogService.IsExistingAsync(new CkModelIdVersionRange("System.StreamData", "0.0.1"));
+            Assert.True(found is { Exists: true, ModelId: not null }, "the engine embeds System.StreamData");
+            var streamData = await catalogService.GetAsync(found.ModelId!, new OperationResult());
+            Assert.NotNull(streamData);
+            Assert.True(streamData.IsRangeRetaining, "System.StreamData must be range-retaining like the published one");
+            Assert.Equal([system], streamData.Dependencies);
+            fixture.Catalog.PublishFile(streamData.ModelId, await JsonOfAsync(streamData),
+                m => m.Dependencies = [new CkModelId("System-2.8.0")]);
+            withdraw.Add(streamData.ModelId);
+            await InstallAsync(source, streamData);
+
+            // The published files of System.UI, System.Notification and System.Files (and System.Identity), installed
+            // as a service build of today would: with the tenant's System in the closure.
+            foreach (var (file, closure) in new[]
+                     {
+                         ("ck-system.ui-2.12.0.json", "System-2.8.0"), ("ck-system.notification-2.7.0.json", "System-2.8.0"),
+                         ("ck-system.files-1.1.0.json", "System-2.5.0")
+                     })
+            {
+                var json = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "testData",
+                    "publishedSystemModels", file));
+                var published = await DeserializeAsync(json);
+                Assert.Equal([new CkModelId(closure)], published.Dependencies);
+                fixture.Catalog.PublishFile(published.ModelId, json);
+                withdraw.Add(published.ModelId);
+                await InstallAsync(source, WithClosureOf(published, system));
+            }
+
+            await InstallAsync(source, WithClosureOf(await fixture.Catalog.LoadAsync(Identity380), system));
+
+            var names = (await ModelIdsAsync(source)).Select(i => new CkModelId(i).Name).ToList();
+            Assert.Equal(["System", "System.Files", IdentityName, "System.Notification", "System.StreamData", "System.UI"],
+                names.Order(StringComparer.Ordinal));
+            await test(source, names);
+        }
+        finally
+        {
+            foreach (var id in withdraw)
+            {
+                fixture.Catalog.Withdraw(id);
+            }
+        }
+    }
+
+    private static CkCompiledModelRoot WithClosureOf(CkCompiledModelRoot model, CkModelId system)
+    {
+        Assert.NotEqual([system], model.Dependencies);
+        model.Dependencies = [system];
+        return model;
+    }
+
+    private async Task ManipulateClosureAsync(string tenantId, string manipulation)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = Database(tenantId);
+        var models = database.GetCollection<BsonDocument>("CkModel");
+        var ui = Builders<BsonDocument>.Filter.Eq("_id", "System.UI-2.12.0");
+        var row = await models.Find(ui).FirstAsync(ct);
+        Assert.Equal((await SystemIdAsync(tenantId)).FullName, Assert.Single(row["dependencies"].AsBsonArray).AsString);
+        UpdateDefinition<BsonDocument> update;
+        switch (manipulation)
+        {
+            case "closure entry of an unpublished version inside the range":
+                update = Builders<BsonDocument>.Update.Set("dependencies", new BsonArray { "System-2.99.0" });
+                break;
+            case "closure entry of another major":
+                update = Builders<BsonDocument>.Update.Set("dependencies", new BsonArray { "System-3.0.0" });
+                break;
+            case "closure entry added":
+                update = Builders<BsonDocument>.Update.Push("dependencies", "System.Identity-3.8.0");
+                break;
+            case "declared floor lowered":
+                Assert.Equal("2.5.0", row["dependencyRanges"].AsBsonArray.Single()["floor"].AsString);
+                update = Builders<BsonDocument>.Update.Set("dependencyRanges.0.floor", "2.0.0");
+                break;
+            case "writeAccess removed next to a moved closure":
+                var types = await database.GetCollection<BsonDocument>("CkType").UpdateManyAsync(
+                    Builders<BsonDocument>.Filter.Eq("ckModelId", Identity380.FullName),
+                    Builders<BsonDocument>.Update.Unset("writeAccess"), cancellationToken: ct);
+                Assert.True(types.ModifiedCount > 0, "the dump must hold restricted identity types");
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(manipulation), manipulation, null);
+        }
+
+        Assert.Equal(1, (await models.UpdateOneAsync(ui, update, cancellationToken: ct)).ModifiedCount);
+    }
+
+    private async Task<string> JsonOfAsync(CkCompiledModelRoot model)
+    {
+        using var stream = new MemoryStream();
+        await using (var writer = new StreamWriter(stream, leaveOpen: true))
+        {
+            await fixture.GetService<ICkJsonSerializer>().SerializeAsync(writer, model);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private async Task<CkCompiledModelRoot> DeserializeAsync(string json)
+    {
+        var result = new OperationResult();
+        var model = await fixture.GetService<ICkJsonSerializer>().DeserializeCompiledModelRootAsync(json, "test", result);
+        Assert.False(result.HasErrors, string.Join("; ", result.Messages));
+        return model;
+    }
+
     // ---- helpers -------------------------------------------------------------------------------------------------
 
     private async Task AssertRefusedAndNothingLeftAsync(CommandResult result, string target, string reason)
@@ -358,15 +590,17 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
     private async Task<string> SourceTenantAsync(string prefix, CkCompiledModelRoot identity)
     {
         var tenantId = NewTenantId(prefix);
-        using (var session = await Sys.GetAdminSessionAsync())
-        {
-            session.StartTransaction();
-            await Sys.CreateChildTenantAsync(session, tenantId, tenantId);
-            await session.CommitTransactionAsync();
-        }
-
+        await CreateTenantAsync(tenantId);
         await InstallAsync(tenantId, identity);
         return tenantId;
+    }
+
+    private async Task CreateTenantAsync(string tenantId)
+    {
+        using var session = await Sys.GetAdminSessionAsync();
+        session.StartTransaction();
+        await Sys.CreateChildTenantAsync(session, tenantId, tenantId);
+        await session.CommitTransactionAsync();
     }
 
     private async Task InstallAsync(string tenantId, CkCompiledModelRoot model) =>

@@ -21,7 +21,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RestoreSystemM
 ///     service's embedded import does), and a CK catalog of exactly two catalogs: the engine's embedded models (System and
 ///     the test models) and <see cref="TestSystemIdentityCatalog" />, which publishes System.Identity 3.8.0 (the real
 ///     published file) and 3.7.0 (the same content without the write restriction, standing in for a genuine published
-///     version below the platform's). No network catalog takes part, so every catalog answer is known.
+///     version below the platform's). Tests may publish further models from their own compiled files
+///     (<see cref="TestSystemIdentityCatalog.PublishFile" />, e.g. the published System.UI of AB#10061) and withdraw them
+///     again. No network catalog takes part, so every catalog answer is known.
 /// </summary>
 // ReSharper disable once ClassNeverInstantiated.Global
 public class RestoreSystemModelFixture : SystemFixture
@@ -80,6 +82,7 @@ public class RestoreSystemModelCollection : ICollectionFixture<RestoreSystemMode
 public sealed class TestSystemIdentityCatalog : ICatalog
 {
     private readonly ConcurrentDictionary<CkModelId, Action<CkCompiledModelRoot>?> _published = new();
+    private readonly ConcurrentDictionary<CkModelId, string> _files = new();
     private ICkJsonSerializer? _serializer;
     private string _publishedJson = string.Empty;
 
@@ -104,13 +107,29 @@ public sealed class TestSystemIdentityCatalog : ICatalog
 
     public void Publish(CkModelId modelId, Action<CkCompiledModelRoot>? change = null) => _published[modelId] = change;
 
-    public void Withdraw(CkModelId modelId) => _published.TryRemove(modelId, out _);
+    /// <summary>Publishes <paramref name="modelId" /> with the compiled file <paramref name="json" /> (and a change).</summary>
+    public void PublishFile(CkModelId modelId, string json, Action<CkCompiledModelRoot>? change = null)
+    {
+        _files[modelId] = json;
+        _published[modelId] = change;
+    }
 
-    /// <summary>The published content of <paramref name="modelId" /> (or the 3.8.0 file renamed, with a change).</summary>
+    public void Withdraw(CkModelId modelId)
+    {
+        _published.TryRemove(modelId, out _);
+        _files.TryRemove(modelId, out _);
+    }
+
+    /// <summary>
+    ///     The published content of <paramref name="modelId" />: its own file (<see cref="PublishFile" />), else the 3.8.0
+    ///     file renamed; with a change.
+    /// </summary>
     public async Task<CkCompiledModelRoot> LoadAsync(CkModelId modelId, Action<CkCompiledModelRoot>? change = null)
     {
-        var json = _publishedJson.Replace(RestoreSystemModelFixture.Identity380.FullName, modelId.FullName,
-            StringComparison.Ordinal);
+        var json = _files.TryGetValue(modelId, out var file)
+            ? file
+            : _publishedJson.Replace(RestoreSystemModelFixture.Identity380.FullName, modelId.FullName,
+                StringComparison.Ordinal);
         var result = new OperationResult();
         var model = await _serializer!.DeserializeCompiledModelRootAsync(json, "test", result);
         Assert.False(result.HasErrors, string.Join("; ", result.Messages));

@@ -78,6 +78,7 @@ internal sealed class RestoreSystemModelGuard(
         RestoreSystemModelRefusalReason.SystemTenantUnavailable => "system_tenant_unavailable",
         RestoreSystemModelRefusalReason.ModelUnreadable => "model_unreadable",
         RestoreSystemModelRefusalReason.UpgradeFailed => "upgrade_failed",
+        RestoreSystemModelRefusalReason.DependencyUnpublished => "dependency_unpublished",
         _ => "unknown"
     };
 
@@ -250,10 +251,16 @@ internal sealed class RestoreSystemModelGuard(
 
         var published = await catalogService.IsExistingAsync(dumpModelId);
         var contentEquals = false;
+        IReadOnlyList<CkModelId> unpublishedClosure = [];
         if (published)
         {
             var catalogModel = await GetPublishedAsync(dumpModelId);
-            contentEquals = IsSameContent(restored, catalogModel);
+            var comparison = CompareContent(restored, catalogModel);
+            contentEquals = comparison.IsGenuineContent;
+            if (contentEquals)
+            {
+                unpublishedClosure = await UnpublishedClosureEntriesAsync(comparison);
+            }
         }
 
         var platform = platformModels
@@ -268,11 +275,13 @@ internal sealed class RestoreSystemModelGuard(
         if (platform is { } p && p.Row.Id.Version.Major == dumpModelId.Version.Major &&
             p.Row.Id.Version.CompareTo(dumpModelId.Version) > 0 && await catalogService.IsExistingAsync(p.Row.Id))
         {
-            platformIdentical = IsSameContent(p.Compiled, await GetPublishedAsync(p.Row.Id));
+            var platformComparison = CompareContent(p.Compiled, await GetPublishedAsync(p.Row.Id));
+            platformIdentical = platformComparison.IsGenuineContent &&
+                                (await UnpublishedClosureEntriesAsync(platformComparison)).Count == 0;
         }
 
         return new RestoreSystemModelFacts(dumpModelId, published, contentEquals, highestMajor, platform?.Row.Id,
-            platformIdentical, floor);
+            platformIdentical, floor, unpublishedClosure);
     }
 
     private async Task<CkCompiledModelRoot> GetPublishedAsync(CkModelId modelId)
@@ -292,7 +301,16 @@ internal sealed class RestoreSystemModelGuard(
     ///     a tenant added to an extensible enum of the model (enum customization) are not part of the published content and
     ///     are left out; values of a non-extensible enum and every other member count.
     /// </summary>
-    internal static bool IsSameContent(CkCompiledModelRoot readBack, CkCompiledModelRoot published)
+    internal static bool IsSameContent(CkCompiledModelRoot readBack, CkCompiledModelRoot published) =>
+        CompareContent(readBack, published).IsGenuineContent;
+
+    /// <summary>
+    ///     Compares the model read back from a tenant database with the catalog's model like <see cref="IsSameContent" />
+    ///     and names the entries of a resolved dependency closure that moved within the declared ranges
+    ///     (<see cref="RestoreSystemModelClosure" />); the caller checks that they are published.
+    /// </summary>
+    internal static RestoreSystemModelContentComparison CompareContent(CkCompiledModelRoot readBack,
+        CkCompiledModelRoot published)
     {
         var extensibleEnums = (published.Enums ?? [])
             .Where(e => e.IsExtensible)
@@ -306,8 +324,26 @@ internal sealed class RestoreSystemModelGuard(
             }
         }
 
-        return string.Equals(CkCompiledModelCanonicalizer.ToCanonicalJson(readBack),
-            CkCompiledModelCanonicalizer.ToCanonicalJson(published), StringComparison.Ordinal);
+        return RestoreSystemModelClosure.Compare(readBack, published);
+    }
+
+    /// <summary>
+    ///     The entries of <paramref name="comparison" />'s moved closure that the catalog does not publish: a build of the
+    ///     published model can only have resolved published versions, so such an entry is not a build artefact.
+    /// </summary>
+    private async Task<IReadOnlyList<CkModelId>> UnpublishedClosureEntriesAsync(
+        RestoreSystemModelContentComparison comparison)
+    {
+        var unpublished = new List<CkModelId>();
+        foreach (var entry in comparison.MovedClosureEntries)
+        {
+            if (!await catalogService.IsExistingAsync(entry))
+            {
+                unpublished.Add(entry);
+            }
+        }
+
+        return unpublished;
     }
 
     /// <summary>
