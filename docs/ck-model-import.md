@@ -452,6 +452,48 @@ element of System.Identity filed under another model, element rows without a mod
 associations, interface implementations) of a service-managed model that its compared form does not use - the data source
 reads every link row, the read-back one per element. A dump with two versions of one model is refused too.
 
+**Resolved dependency closure (AB#10061).** The `dependencies` list of a compiled model is the closure the compiler
+resolved, i.e. the dependency versions the build happened to see. The same model version therefore exists with several
+closures: the catalog keeps the closure of its first publish (published System.UI-2.12.0 lists `System-2.8.0`,
+System.Files-1.1.0 `System-2.5.0`), a service built later embeds the same version with `System-2.10.0`, and every tenant
+row carries the closure of the service build that imported it. Comparing it exactly refused every genuine dump of a
+tenant whose services were built after the first publish. Every published System / System.* model is range-retaining
+(`dependencyRanges`, e.g. `System-[2.5,3.0)` floor 2.5.0): its references are major-qualified and bound when the model
+loads, so the declared ranges and floors decide what resolves, never the closure - the engine's publish gate already treats
+such a closure move as no change of the model (`CkClosureMove`, AB#5435). So `RestoreSystemModelClosure` compares the
+model without `dependencies` and validates the closure on its own; the closure is accepted when
+
+- both the restored and the catalog's model are range-retaining (their `dependencyRanges` - ranges, floors,
+  `usedSurface` - are compared exactly with the rest of the model);
+- it names exactly the same models as the catalog's closure, each once;
+- every entry that differs is a concrete version of the same major as the catalog's entry and, where the model declares a
+  range for that name, inside the effective range (range with floor);
+- every entry that differs names a version the catalog publishes, else the restore is refused as
+  `dependency_unpublished`.
+
+Anything else is `content_differs`. A classic model (no `dependencyRanges`) resolves by its exact pins, so its closure is
+compared exactly. Why this is safe: element rows, `writeAccess`, `access`, `visibility`, `derivable` and the declared
+ranges - everything that carries behaviour - are still compared exactly, and the closure of a range-retaining model has
+no effect at run time: resolution and the dependents' requirements use the ranges (`GetResolutionRanges`,
+`DatabaseCkModelRepository.RequirementsOf`), the model graph uses only the closure's names, the upgrade guard reads no
+pin of a range-retaining dependent (`TenantUpgradeGuard.FindPin`), and the surface check reads a pin only for a name
+without a declared range (`CkSurfaceSatisfactionChecker`). The accepted closures are a superset of what a build can write
+(an entry may also move down, and a transitive entry - one without a declared range, e.g. System.Bot in the closure of
+System.Ai - may move anywhere inside its major); every accepted entry is a published version of the same major. Not checked: whether
+the dump's own System satisfies the declared ranges - that is the same question for every genuine tenant and the engine
+answers it when the model loads (a model whose range is not satisfied becomes `ResolveFailed`, which removes its types
+and grants no write).
+
+Which catalog the check reads: `ICatalogService` asks the catalogs by `Order` (embedded models of the host, then the
+local file system catalog, then the private GitHub catalog). The bot host binds no catalog options, so its local catalog
+is the default `~/.octo/local-catalog`, which holds no System models on a shared environment: there the reference is the
+host's embedded copy (the engine's System, System.StreamData and System.Files, and the models the bot itself embeds,
+e.g. System.Notification) or the published private catalog. The
+published catalog shows the same closure skew as the local one (checked 2026-11-28 on the Pages mirror of
+`construction-kit-libraries-build`, `ck-models/v3/s/<Name>/<major>/ck-<name>-<version>.json`: System.UI-2.12.0,
+System.Notification-2.7.0, System.Bot-3.9.0, System.StreamData-1.30.0 list `System-2.8.0`, System.Files-1.1.0 and
+System.Reporting-3.0.0 `System-2.5.0`; services built from main embed `System-2.10.0`).
+
 The platform's version of a model is the one installed in the system tenant (every service imports its embedded models
 there). `RestoreSystemModelDecider` (pure) decides per model:
 
@@ -461,7 +503,8 @@ there). `RestoreSystemModelDecider` (pure) decides per model:
 | major above every published major | refused, `higher_major` |
 | this version not published | refused, `unknown_version` |
 | published id, other content | refused, `content_differs` - also when the version is older: a manipulated model is never raised |
-| genuine, older than the platform's version of the same major | raised to exactly the platform's version, which must itself be published with identical content (else `target_not_published`) |
+| published id, same content, a moved closure entry names an unpublished version | refused, `dependency_unpublished` |
+| genuine, older than the platform's version of the same major | raised to exactly the platform's version, which must itself be published with identical content, closure validated the same way (else `target_not_published`) |
 | genuine, equal to or newer than the platform's, another major, or not held by the system tenant | kept (a restore never downgrades) |
 | kept or raised version below the floor (`ServiceManagedCkModelFloors`: System.Identity 3.6.0) | refused, `below_floor` |
 
@@ -491,8 +534,9 @@ model); each raised model counts `octo.ck.restore_system_model.raised` (tag `mod
 Consequence: a dump that holds an unpublished System version (e.g. from a dev lane) cannot be restored where that version
 is not in the catalog, and a restore needs the catalog to be reachable.
 
-Tests: `RestoreSystemModelDeciderTests`, `RestoreSystemModelContentTests`, `RestoringTenantScopeTests` (unit),
-`RestoreSystemModelCheckTests`, `PublishedSystemModelRoundTripTests` (MongoDB, mongodump/mongorestore).
+Tests: `RestoreSystemModelDeciderTests`, `RestoreSystemModelContentTests`, `RestoreSystemModelClosureTests`,
+`RestoringTenantScopeTests` (unit), `RestoreSystemModelCheckTests` (the closure cases of AB#10061 with the published
+System.UI, System.Notification and System.Files files under `testData/publishedSystemModels`), `PublishedSystemModelRoundTripTests` (MongoDB, mongodump/mongorestore).
 
 ### Service-Managed CK Model Auto-import
 

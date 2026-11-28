@@ -39,7 +39,13 @@ internal enum RestoreSystemModelRefusalReason
     ModelUnreadable,
 
     /// <summary>Raising a genuine older model to the platform's version did not reach that version.</summary>
-    UpgradeFailed
+    UpgradeFailed,
+
+    /// <summary>
+    ///     AB#10061: the model's resolved dependency closure moved within its declared ranges (a build artefact, not
+    ///     compared exactly), but names a dependency version the CK catalog does not publish.
+    /// </summary>
+    DependencyUnpublished
 }
 
 /// <summary>What the restore does with one service-managed model of its dump.</summary>
@@ -59,7 +65,8 @@ internal enum RestoreSystemModelAction
 /// <param name="DumpModelId">The model id the restored database holds.</param>
 /// <param name="PublishedWithSameId">The catalog publishes exactly <paramref name="DumpModelId" />.</param>
 /// <param name="ContentEqualsCatalog">
-///     The restored model (model row and element rows) has the canonical content of the catalog's model of the same id;
+///     The restored model (model row and element rows) has the canonical content of the catalog's model of the same id,
+///     its resolved dependency closure equal or moved within the declared ranges (<see cref="RestoreSystemModelClosure" />);
 ///     meaningful only when <paramref name="PublishedWithSameId" /> holds.
 /// </param>
 /// <param name="HighestPublishedMajor">The highest major the catalog publishes of the model name; null when none.</param>
@@ -68,10 +75,15 @@ internal enum RestoreSystemModelAction
 ///     tenant does not hold it.
 /// </param>
 /// <param name="PlatformModelPublishedIdentical">
-///     The system tenant's model is published with identical content; meaningful only when
+///     The system tenant's model is published with identical content (closure as for
+///     <paramref name="ContentEqualsCatalog" />, every moved entry published); meaningful only when
 ///     <paramref name="PlatformModelId" /> is set.
 /// </param>
 /// <param name="Floor">The platform's security floor of the model name; null when it has none.</param>
+/// <param name="UnpublishedClosureEntries">
+///     The entries of the restored model's moved dependency closure that the catalog does not publish; null or empty when
+///     there are none.
+/// </param>
 internal sealed record RestoreSystemModelFacts(
     CkModelId DumpModelId,
     bool PublishedWithSameId,
@@ -79,7 +91,8 @@ internal sealed record RestoreSystemModelFacts(
     int? HighestPublishedMajor,
     CkModelId? PlatformModelId,
     bool PlatformModelPublishedIdentical,
-    CkVersion? Floor);
+    CkVersion? Floor,
+    IReadOnlyList<CkModelId>? UnpublishedClosureEntries = null);
 
 /// <summary>The decision for one service-managed model of a dump.</summary>
 /// <param name="ModelId">The model id of the dump; null for a refusal that concerns no single model (rows, reads).</param>
@@ -104,7 +117,9 @@ internal sealed record RestoreSystemModelDecision(
 ///     <list type="number">
 ///         <item>Not published with this id: refused (unknown model, higher major than published, or unknown version).</item>
 ///         <item>Published with this id but another content: refused - also when the version is older; a manipulated
-///         model is never raised.</item>
+///         model is never raised. The resolved dependency closure of a range-retaining model is a build artefact and
+///         only has to move within the declared ranges (<see cref="RestoreSystemModelClosure" />).</item>
+///         <item>Genuine content, but a moved closure entry names an unpublished dependency version: refused.</item>
 ///         <item>Genuine and older than the platform's version (system tenant) of the same major: raised to exactly the
 ///         platform's version, which must itself be published with identical content.</item>
 ///         <item>Genuine and equal to or newer than the platform's version, of another major, or not held by the system
@@ -140,6 +155,13 @@ internal static class RestoreSystemModelDecider
         {
             return RestoreSystemModelDecision.Refuse(dump, RestoreSystemModelRefusalReason.ContentDiffers,
                 "its content differs from the published model of the same id");
+        }
+
+        if (facts.UnpublishedClosureEntries is { Count: > 0 } unpublished)
+        {
+            return RestoreSystemModelDecision.Refuse(dump, RestoreSystemModelRefusalReason.DependencyUnpublished,
+                $"its resolved dependencies name {string.Join(", ", unpublished.Select(e => $"'{e}'"))}, which the " +
+                "CK catalog does not publish");
         }
 
         var target = dump;
