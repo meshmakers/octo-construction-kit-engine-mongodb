@@ -394,6 +394,11 @@ internal sealed class StagingCopyRunner(
 
         var dataSlices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).ToList();
         var mapSlices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.GenerationMap).ToList();
+        // AB#9933: only a load into an empty table gives the NULLs of a column-list dump their column default afterwards;
+        // rows that were in the table before keep what they hold.
+        var dataTableWasEmpty = dataSlices.Count > 0 &&
+                                await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable}", options,
+                                    cancellationToken) == 0;
         var previous = await ReadTableSettingsAsync(target, options, cancellationToken);
         var settingsRestored = false;
         var allLoaded = true;
@@ -417,7 +422,7 @@ internal sealed class StagingCopyRunner(
             // Back to the normal settings before the merge, then the merge itself (concept §7, step 6).
             await RestoreSettingsAsync(target, previous, options, CancellationToken.None);
             settingsRestored = true;
-            var dataRows = await FinishLoadAsync(target, plan, options, cancellationToken);
+            var dataRows = await FinishLoadAsync(target, plan, options, dataTableWasEmpty, cancellationToken);
             if (outcome is not null)
             {
                 outcome.DataRows = dataRows;
@@ -775,10 +780,17 @@ internal sealed class StagingCopyRunner(
     }
 
     private async Task<long> FinishLoadAsync(
-        ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyOptions options, CancellationToken cancellationToken)
+        ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyOptions options, bool dataTableWasEmpty,
+        CancellationToken cancellationToken)
     {
         await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"),
             options.CommandTimeout, cancellationToken);
+
+        if (dataTableWasEmpty && await FillColumnDefaultsAsync(target, options, cancellationToken) > 0)
+        {
+            await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"),
+                options.CommandTimeout, cancellationToken);
+        }
 
         if (options.OptimizeAfterLoad)
         {
@@ -846,6 +858,46 @@ internal sealed class StagingCopyRunner(
     /// <summary>The failures of a statement that end one slice (a cancellation is not one of them).</summary>
     private static bool IsStatementFailure(Exception ex)
         => ex is StreamDataCopyStatementException or StreamDataStatementTimeoutException;
+
+    /// <summary>
+    ///     AB#9933: a dump that names its columns (it leaves a Hidden column or a leftover of a computed column out, AB#9932)
+    ///     writes a NULL as an explicit <c>null</c>, which <c>COPY FROM</c> keeps, where a whole-row dump leaves it out and
+    ///     the load gives the column its DEFAULT (<c>rtcreationdatetime</c>, <c>rtchangeddatetime</c>, <c>was_updated</c>;
+    ///     AB#5490, AB#6647). After a load into an empty table every NULL of a column with a DEFAULT is set to that default,
+    ///     so both dump forms restore the same rows. The defaults are read from the table itself. Returns the rows changed.
+    /// </summary>
+    private async Task<long> FillColumnDefaultsAsync(
+        ArchiveCopyTarget target, ArchiveCopyOptions options, CancellationToken cancellationToken)
+    {
+        var columns = await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
+            "SELECT column_name, column_default FROM information_schema.columns " +
+            $"WHERE table_schema = {CopyStatement.Literal(target.Schema)} " +
+            $"AND table_name = {CopyStatement.Literal(target.TableName)} AND column_default IS NOT NULL " +
+            "ORDER BY ordinal_position", returnsRows: true), options.CommandTimeout, cancellationToken);
+
+        long changed = 0;
+        foreach (var row in columns.Rows)
+        {
+            var column = CopyStatement.Identifier(Text(row, "column_name"));
+            var nulls = await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable} WHERE {column} IS NULL", options,
+                cancellationToken);
+            if (nulls == 0)
+            {
+                continue;
+            }
+
+            // The default expression comes from CrateDB's own table definition (information_schema), not from the dump.
+            await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
+                    $"UPDATE {target.QualifiedTable} SET {column} = {Text(row, "column_default")} WHERE {column} IS NULL"),
+                options.CommandTimeout, cancellationToken);
+            logger.LogInformation(
+                "Archive {ArchiveRtId} of tenant {TenantId}: {Rows} restored rows held NULL in column {Column}, which has a " +
+                "default; set to the default.", target.ArchiveRtId, tenantId, nulls, Text(row, "column_name"));
+            changed += nulls;
+        }
+
+        return changed;
+    }
 
     private async Task<long> CountAsync(string sql, ArchiveCopyOptions options, CancellationToken cancellationToken)
     {

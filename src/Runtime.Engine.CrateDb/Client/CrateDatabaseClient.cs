@@ -108,56 +108,68 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
                 continue;
             }
 
-            var dp = new DataPointDto(result.ToDictionary());
-
-            if (result.TryGetValue(Constants.Timestamp, out var timestamp))
-            {
-                dp.Timestamp = (DateTime)timestamp!;
-            }
-            else if (result.TryGetValue("T", out var ts))
-            {
-                dp.Timestamp = (DateTime)ts!;
-            }
-            else if (result.TryGetValue(Constants.WindowEnd, out var winEnd))
-            {
-                // Windowed-storage rows (rollup / time-range) — the query usually aliases
-                // window_end as "timestamp" (see CrateQueryBuilder.UseWindowedTimeAxis) so the
-                // first branch already catches it. This fallback covers queries that select
-                // window_end directly without aliasing.
-                dp.Timestamp = (DateTime)winEnd!;
-            }
-
-            if (result.TryGetValue(Constants.RtId, out var rtIdValue) &&
-                OctoObjectId.TryParse(rtIdValue as string ?? "", out var octoRtId))
-            {
-                dp.RtId = octoRtId;
-            }
-
-            if (result.TryGetValue(Constants.CkTypeId, out var ckTypeIdValue))
-            {
-                var typeId = new RtCkId<CkTypeId>(ckTypeIdValue as string ?? "");
-                dp.CkTypeId = typeId;
-            }
-            
-            if(result.TryGetValue(Constants.RtWellKnownName, out var rtWellKnownName))
-            {
-                dp.RtWellKnownName = rtWellKnownName as string;
-            }
-            
-            if(result.TryGetValue(Constants.RtChangedDateTime, out var rtChangedDateTime))
-            {
-                dp.RtChangedDateTime = (DateTime)rtChangedDateTime!;
-            }
-            
-            if(result.TryGetValue(Constants.RtCreationDateTime, out var rtCreationDateTime))
-            {
-                dp.RtCreationDateTime = (DateTime)rtCreationDateTime!;
-            }
-
-            dataPointDtos.Add(dp);
+            dataPointDtos.Add(ToDataPointDto(result));
         }
 
         return dataPointDtos;
+    }
+
+    /// <summary>
+    ///     One result row as a data point. <c>rtcreationdatetime</c> and <c>rtchangeddatetime</c> may be NULL (a row
+    ///     restored from a dump that named its columns before AB#9933, or written before the column had its default): such
+    ///     a value leaves the property at its default instead of failing the whole read.
+    /// </summary>
+    internal static DataPointDto ToDataPointDto(IDictionary<string, object?> result)
+    {
+        var dp = new DataPointDto(result.ToDictionary());
+
+        if (result.TryGetValue(Constants.Timestamp, out var timestamp))
+        {
+            dp.Timestamp = (DateTime)timestamp!;
+        }
+        else if (result.TryGetValue("T", out var ts))
+        {
+            dp.Timestamp = (DateTime)ts!;
+        }
+        else if (result.TryGetValue(Constants.WindowEnd, out var winEnd))
+        {
+            // Windowed-storage rows (rollup / time-range) — the query usually aliases
+            // window_end as "timestamp" (see CrateQueryBuilder.UseWindowedTimeAxis) so the
+            // first branch already catches it. This fallback covers queries that select
+            // window_end directly without aliasing.
+            dp.Timestamp = (DateTime)winEnd!;
+        }
+
+        if (result.TryGetValue(Constants.RtId, out var rtIdValue) &&
+            OctoObjectId.TryParse(rtIdValue as string ?? "", out var octoRtId))
+        {
+            dp.RtId = octoRtId;
+        }
+
+        if (result.TryGetValue(Constants.CkTypeId, out var ckTypeIdValue))
+        {
+            var typeId = new RtCkId<CkTypeId>(ckTypeIdValue as string ?? "");
+            dp.CkTypeId = typeId;
+        }
+        
+        if(result.TryGetValue(Constants.RtWellKnownName, out var rtWellKnownName))
+        {
+            dp.RtWellKnownName = rtWellKnownName as string;
+        }
+        
+        if (result.TryGetValue(Constants.RtChangedDateTime, out var rtChangedDateTime) &&
+            rtChangedDateTime is DateTime changed)
+        {
+            dp.RtChangedDateTime = changed;
+        }
+
+        if (result.TryGetValue(Constants.RtCreationDateTime, out var rtCreationDateTime) &&
+            rtCreationDateTime is DateTime created)
+        {
+            dp.RtCreationDateTime = created;
+        }
+
+        return dp;
     }
 
     /// <inheritdoc />

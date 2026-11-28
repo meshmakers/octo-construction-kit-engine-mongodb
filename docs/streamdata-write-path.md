@@ -128,8 +128,16 @@ ever removed a computed column, or changed the formula of one, could not be rest
   behaviour of the native copy (AB#5490; `CrateVersionMatrixCases.Format2_ANullInAColumnWithADefault_…` in
   `octo-asset-repo-services` pins it). So `StagingCopyRunner.DumpedColumns` names columns only when the target excludes
   Hidden columns or the source table holds leftovers (`ArchiveColumnOwnership.FindLeftovers` over the table, read once
-  per dump); otherwise the dump copies the whole row, as before AB#9837. Known limit: an archive with a Hidden column or a
-  leftover is dumped with a column list, so a NULL in a column with a DEFAULT stays NULL on its restore.
+  per dump); otherwise the dump copies the whole row, as before AB#9837. An archive with a Hidden column or a leftover is
+  still dumped with a column list; its explicit NULLs are fixed after the load (next item).
+- **Column defaults after the load (AB#9933).** When `StagingCopyRunner.CopyFromAsync` loaded into a table that was empty
+  before the load, `FillColumnDefaultsAsync` sets every NULL of a column with a DEFAULT (read from
+  `information_schema.columns.column_default` of the table itself: `rtcreationdatetime`, `rtchangeddatetime`,
+  `was_updated`) to that default, after the first `REFRESH` and before the row count; an INFO line names the column and
+  the number of rows. So a dump with a column list restores the same rows as a whole-row dump. A load into a table that
+  already held rows leaves every NULL alone (rows it did not write keep what they hold). The read path is null-safe as
+  well: `CrateDatabaseClient.ToDataPointDto` leaves `RtCreationDateTime` / `RtChangedDateTime` at their default for a NULL
+  instead of failing the whole read with an `InvalidCastException` (archives restored before this fix).
 - **What the dump keeps.** Every other column stays in the manifest, so the restore still refuses it before loading
   anything. That covers a plain column named like an attribute path of the type (ingested data the definition no longer
   declares), unless a computed column of the definition explains it, as well as a column of another type (`text`, `object`, arrays), and a plain unknown column when the CK type cannot be read.

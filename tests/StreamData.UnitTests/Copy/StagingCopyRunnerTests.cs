@@ -311,6 +311,52 @@ public class StagingCopyRunnerTests
     }
 
     [Fact]
+    public async Task CopyFrom_IntoAnEmptyTable_SetsTheNullsOfAColumnWithADefaultToItsDefault()
+    {
+        // AB#9933: a dump with a column list writes explicit nulls that COPY FROM keeps; the load gives them the default.
+        var plan = await Dumped();
+        _crate.ColumnDefaults["rtcreationdatetime"] = "_cast(current_timestamp(3), 'timestamp with time zone')";
+        _crate.ColumnDefaults["was_updated"] = "false";
+        _crate.TargetNulls["rtcreationdatetime"] = 4;
+
+        await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
+
+        var update = Assert.Single(_crate.Executed, s => s.StartsWith("UPDATE", StringComparison.Ordinal));
+        Assert.Equal($"UPDATE {RestoreTarget.QualifiedTable} SET \"rtcreationdatetime\" = " +
+                     "_cast(current_timestamp(3), 'timestamp with time zone') WHERE \"rtcreationdatetime\" IS NULL", update);
+        // The fill runs after the data is loaded and refreshed, and the table is refreshed again before it is counted.
+        var executed = _crate.Executed;
+        var updateIndex = executed.IndexOf(update);
+        Assert.Contains(executed.Take(updateIndex), s => s.StartsWith("COPY", StringComparison.Ordinal));
+        Assert.Contains(executed.Skip(updateIndex), s => s.StartsWith("REFRESH TABLE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CopyFrom_IntoATableThatHeldRows_LeavesEveryNullAlone()
+    {
+        var plan = await Dumped();
+        _crate.TargetRows.Add(new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc)); // a row this load did not write
+        _crate.ColumnDefaults["rtcreationdatetime"] = "current_timestamp(3)";
+        _crate.TargetNulls["rtcreationdatetime"] = 1;
+
+        await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
+
+        Assert.DoesNotContain(_crate.Executed, s => s.StartsWith("UPDATE", StringComparison.Ordinal));
+        Assert.DoesNotContain(_crate.Executed, s => s.Contains("column_default", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CopyFrom_WithoutNulls_SendsNoUpdate()
+    {
+        var plan = await Dumped();
+        _crate.ColumnDefaults["rtcreationdatetime"] = "current_timestamp(3)";
+
+        await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
+
+        Assert.DoesNotContain(_crate.Executed, s => s.StartsWith("UPDATE", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task CopyFrom_ADumpedColumnTheTableLacks_StopsBeforeLoadingAndChangesNothing()
     {
         var plan = await Dumped();
