@@ -350,6 +350,7 @@ public class StagingCopyRunnerTests
         _crate.TargetNulls["rtcreationdatetime"] = 4;
         var filled = false;
         var refreshFailed = false;
+        var faulted = false;
         _crate.Fault = statement =>
         {
             var sql = statement.Reveal();
@@ -362,12 +363,14 @@ public class StagingCopyRunnerTests
             refreshFailed |= isFill && failing == "REFRESH" && sql.StartsWith("REFRESH", StringComparison.Ordinal);
             if (isFill && sql.Contains(failing, StringComparison.Ordinal))
             {
+                faulted = true;
                 throw new StreamDataCopyStatementException("UPDATE t", "XX000", "statement failed (test)");
             }
         };
 
         var results = await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
 
+        Assert.True(faulted, $"the '{failing}' statement of the fill must have been sent and failed");
         Assert.NotEmpty(results);
         Assert.All(results, r => Assert.True(r.IsSuccess, r.Message));
     }
