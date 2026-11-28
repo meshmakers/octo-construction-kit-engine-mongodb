@@ -103,7 +103,8 @@ public class AutoIncrementModifier(
         IEnumerable<RtEntity> documents)
     {
         var documentList = documents.ToArray();
-        var autoIncrementTypes = GetAutoIncrementTypes(repositoryDataSource, documentList);
+        var autoIncrementTypes = GetAutoIncrementTypes(repositoryDataSource,
+            documentList.Select(d => d.GetRtCkTypeId()));
         if (autoIncrementTypes.Count == 0)
         {
             return;
@@ -128,6 +129,14 @@ public class AutoIncrementModifier(
             }
 
             storedEntities[autoIncrementType.CkTypeId].TryGetValue(rtEntity.RtId, out var storedEntity);
+            var operation = storedEntity == null ? OperationInsert : OperationReplace;
+            if (storedEntity != null && !IsOfType(storedEntity, autoIncrementType.CkTypeId))
+            {
+                // A replace that names another type of the stored entity's collection turns it into a new document of
+                // the named type: the stored entity's number is neither carried over nor "the stored number".
+                storedEntity = null;
+            }
+
             DateTimeOffset? numberedAt = null;
             foreach (var (ckTypeAttributeGraph, reference) in autoIncrementType.Attributes)
             {
@@ -141,7 +150,7 @@ public class AutoIncrementModifier(
                         !SameNumber(suppliedValue, storedEntity.GetAttributeValueOrDefault(attributeName)))
                     {
                         supplied.Add(new SuppliedCandidate(rtEntity, autoIncrementType, ckTypeAttributeGraph,
-                            reference, storedEntity == null ? OperationInsert : OperationReplace, suppliedValue!));
+                            reference, operation, suppliedValue!));
                     }
 
                     continue;
@@ -191,7 +200,9 @@ public class AutoIncrementModifier(
     public async Task ModifyUpdatesAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
         IReadOnlyList<RtEntity> partialDocuments)
     {
-        var autoIncrementTypes = GetAutoIncrementTypes(repositoryDataSource, partialDocuments);
+        // A partial update keeps the stored entity's type, whatever type of its collection the write names.
+        var storedTypes = await GetStoredTypesAsync(session, repositoryDataSource, partialDocuments);
+        var autoIncrementTypes = GetAutoIncrementTypes(repositoryDataSource, storedTypes.Values);
         if (autoIncrementTypes.Count == 0)
         {
             return;
@@ -201,7 +212,7 @@ public class AutoIncrementModifier(
         var supplied = new List<UpdateCandidate>();
         foreach (var partial in partialDocuments)
         {
-            if (!autoIncrementTypes.TryGetValue(partial.GetRtCkTypeId(), out var autoIncrementType))
+            if (!autoIncrementTypes.TryGetValue(storedTypes[partial], out var autoIncrementType))
             {
                 continue;
             }
@@ -297,12 +308,62 @@ public class AutoIncrementModifier(
         await NumberRequestsAsync(session, repositoryDataSource, requests, counters);
     }
 
-    /// <summary>The CK types of <paramref name="documents" /> that have auto-increment attributes.</summary>
+    /// <summary>
+    ///     The type of the entity every partial update writes to: the stored entity's type when the named type shares its
+    ///     collection with a numbered type (a write that names a sibling type reaches the stored entity all the same),
+    ///     else the named type. Reads only in such a collection.
+    /// </summary>
+    private async Task<Dictionary<RtEntity, RtCkId<CkTypeId>>> GetStoredTypesAsync(IOctoSession session,
+        IRepositoryDataSource repositoryDataSource, IReadOnlyList<RtEntity> partialDocuments)
+    {
+        var types = new Dictionary<RtEntity, RtCkId<CkTypeId>>(ReferenceEqualityComparer.Instance);
+        foreach (var group in partialDocuments.GroupBy(d => d.GetRtCkTypeId().FullName, StringComparer.Ordinal))
+        {
+            var named = group.First().GetRtCkTypeId();
+            var graph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, named);
+            var stored = graph != null && SharesACollectionWithANumberedType(repositoryDataSource.TenantId, graph)
+                ? await StoredRtEntities.GetByRtIdAsync(session, repositoryDataSource, graph, group)
+                : null;
+            foreach (var partial in group)
+            {
+                types[partial] = stored != null && stored.TryGetValue(partial.RtId, out var storedEntity) &&
+                                 storedEntity.CkTypeId != null
+                    ? storedEntity.CkTypeId
+                    : named;
+            }
+        }
+
+        return types;
+    }
+
+    /// <summary>
+    ///     True when the collection of <paramref name="graph" /> holds more than one type and one of them has an
+    ///     auto-increment attribute; a collection root the cache cannot resolve counts as such (fail closed).
+    /// </summary>
+    private bool SharesACollectionWithANumberedType(string tenantId, CkTypeGraph graph)
+    {
+        var rootCkTypeId = graph.IsCollectionRoot ? graph.CkTypeId : graph.DefiningCollectionRootCkTypeId;
+        if (rootCkTypeId == null || !ckCacheService.TryGetCkType(tenantId, rootCkTypeId, out var root) || root == null)
+        {
+            return true;
+        }
+
+        var types = root.GetAllDerivedTypes(true);
+        return types.Count > 1 && types.Any(t => ckCacheService.TryGetCkType(tenantId, t, out var type) &&
+                                                 type != null && type.AllAttributes.Values.Any(a =>
+                                                     !string.IsNullOrEmpty(a.AutoIncrementReference)));
+    }
+
+    private static bool IsOfType(RtEntity stored, RtCkId<CkTypeId> ckTypeId) =>
+        stored.CkTypeId == null ||
+        string.Equals(stored.CkTypeId.FullName, ckTypeId.FullName, StringComparison.Ordinal);
+
+    /// <summary>The CK types of <paramref name="ckTypeIds" /> that have auto-increment attributes.</summary>
     private Dictionary<RtCkId<CkTypeId>, AutoIncrementType> GetAutoIncrementTypes(
-        IRepositoryDataSource repositoryDataSource, IEnumerable<RtEntity> documents)
+        IRepositoryDataSource repositoryDataSource, IEnumerable<RtCkId<CkTypeId>> ckTypeIds)
     {
         var autoIncrementTypes = new Dictionary<RtCkId<CkTypeId>, AutoIncrementType>();
-        foreach (var ckTypeId in documents.Select(d => d.GetRtCkTypeId()).Distinct())
+        foreach (var ckTypeId in ckTypeIds.Distinct())
         {
             var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, ckTypeId);
             if (ckTypeGraph == null)
@@ -405,7 +466,8 @@ public class AutoIncrementModifier(
                     number.SequenceValue is >= int.MinValue and <= int.MaxValue ? (int)number.SequenceValue : null
             };
             entries.Add(DocumentAuditTrail.CreateEntry(auditGraph, caller,
-                new RtEntityId(document.GetRtCkTypeId(), document.RtId), DocumentAuditTrail.ReleaseAction,
+                new RtEntityId(number.Request.CkTypeGraph.CkTypeId.ToRtCkId(), document.RtId),
+                DocumentAuditTrail.ReleaseAction,
                 number.Request.NumberedAt.UtcDateTime, details));
         }
 

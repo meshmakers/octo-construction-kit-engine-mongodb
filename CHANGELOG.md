@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- AB#9758 Fix: `AutoIncrementModifier` judges a partial update by the type of the stored entity (design note D13): an
+  update that names a sibling type of the stored document's collection and releases a stored draft numbers it from the
+  draft's range, and one that supplies its number is refused (message 174); before, the modifier skipped such an update
+  and the draft was released without a number or with one of the caller's choice. A replace that names another type
+  than the stored one neither carries the stored number over nor counts it as the stored one. Reads only in a collection
+  that holds more than one type and a numbered one. Tests: `AutoIncrementReleaseTests.AnUpdateNamingASiblingType_*`.
+
 - AB#9759 Fix: a second `AddMongoDbRuntimeRepository()` (a host or test fixture that registers the runtime repository
   twice) adds no second pre-document modification: `AutoIncrementRangeValidator`, `AutoIncrementModifier` and
   `DisplayNameModifier` are registered with `TryAddEnumerable`. With two number modifiers the second took the number

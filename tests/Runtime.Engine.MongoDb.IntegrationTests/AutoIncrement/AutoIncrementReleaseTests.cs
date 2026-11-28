@@ -470,7 +470,8 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
 
     /// <summary>A throwaway tenant with the Invoice/LegacyDoc model; counters are added by each test.</summary>
     private async Task WithTenantAsync(string prefix,
-        Func<ITenantRepository, IMongoDatabase, MongoDbRepositoryDataSource, Task> body)
+        Func<ITenantRepository, IMongoDatabase, MongoDbRepositoryDataSource, Task> body,
+        Func<CkModelId, CkCompiledModelRoot>? model = null)
     {
         var systemContext = fixture.GetSystemContext();
         var tenantId = $"{prefix}{Guid.NewGuid():N}"[..20];
@@ -491,7 +492,7 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
                 await session.CommitTransactionAsync();
             }
 
-            await tenant.ImportCkModelAsync(DocumentModel(SystemCkIds.CkModelId));
+            await tenant.ImportCkModelAsync((model ?? DocumentModel)(SystemCkIds.CkModelId));
 
             var database = GetTenantDatabase(tenantId);
             var dataSource = new MongoDbRepositoryDataSource(NullLogger<MongoDbRepositoryDataSource>.Instance,
@@ -602,6 +603,142 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
                 DocumentType("Invoice", "InvoiceNumber"),
                 DocumentType("LegacyDoc", "LegacyNumber"),
                 StornoType()
+            ]
+        };
+    }
+
+    private static readonly RtCkId<CkTypeId> SiblingInvoiceTypeId = new("SiblingTest/Invoice");
+    private static readonly RtCkId<CkTypeId> SiblingMemoTypeId = new("SiblingTest/Memo");
+
+    /// <summary>
+    ///     D13 (a): Invoice and its unnumbered sibling Memo share the collection of the abstract root Ledger, and Memo has
+    ///     the same Title, DocumentState and Number attributes. An update that names Memo with the id of a stored Invoice
+    ///     draft writes that Invoice, so the number modifier judges it as the Invoice: a supplied number is refused
+    ///     (174) and nothing is written.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateNamingASiblingType_CannotSupplyTheNumberOfAStoredDraft()
+    {
+        await WithTenantAsync("relsibsup", async (repository, database, _) =>
+        {
+            var counterId = await InsertReleaseCounterAsync(repository);
+            var draft = SiblingInvoice(Draft);
+            await ApplyAsync(repository, Insert(draft));
+            var counterBefore = await CounterDocumentAsync(database, counterId);
+
+            var release = new RtEntity(SiblingMemoTypeId, draft.RtId, new Dictionary<string, object?>
+            {
+                [StateAttribute] = Released, [NumberAttribute] = "RE-2027-00001"
+            });
+            await AssertSuppliedNumberRefusedAsync(() => ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateUpdate(release.ToRtEntityId(), release)), "update");
+
+            var stored = await AttributesAsync(database, draft.RtId);
+            Assert.Equal(Draft, stored["documentState"].ToInt32());
+            Assert.False(stored.Contains("number"));
+            Assert.Equal(counterBefore, await CounterDocumentAsync(database, counterId));
+        }, SiblingModel);
+    }
+
+    /// <summary>
+    ///     D13 (a): the update that releases a stored Invoice draft numbers it from the Invoice range also when it names
+    ///     the sibling Memo; a released Invoice never stays without its number.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateNamingASiblingType_ThatReleasesAStoredDraft_NumbersIt()
+    {
+        await WithTenantAsync("relsibrel", async (repository, database, _) =>
+        {
+            var counterId = await InsertReleaseCounterAsync(repository);
+            var draft = SiblingInvoice(Draft);
+            await ApplyAsync(repository, Insert(draft));
+
+            var release = new RtEntity(SiblingMemoTypeId, draft.RtId,
+                new Dictionary<string, object?> { [StateAttribute] = Released });
+            await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateUpdate(release.ToRtEntityId(), release));
+
+            var stored = await AttributesAsync(database, draft.RtId);
+            Assert.Equal(Released, stored["documentState"].ToInt32());
+            Assert.EndsWith("-00001", stored["number"].AsString);
+            Assert.Equal(1, (await PeriodsAsync(database, counterId)).Values.Single());
+        }, SiblingModel);
+    }
+
+    private static RtEntity SiblingInvoice(int state) => new(SiblingInvoiceTypeId, OctoObjectId.GenerateNewId(),
+        new Dictionary<string, object?> { ["Title"] = "invoice", [StateAttribute] = state });
+
+    /// <summary>
+    ///     The abstract collection root Ledger with two concrete types in its one collection: Invoice (Number from
+    ///     "InvoiceNumber") and Memo (the same attributes, Number without a range).
+    /// </summary>
+    private static CkCompiledModelRoot SiblingModel(CkModelId system)
+    {
+        var id = new CkModelId("SiblingTest-1.0.0");
+        var stateEnumId = new CkId<CkEnumId>(id, new CkEnumId("DocumentStates-1"));
+        var rootId = new CkId<CkTypeId>(id, new CkTypeId("Ledger-1"));
+
+        CkCompiledTypeDto LedgerType(string typeName, string? reference) => new()
+        {
+            TypeId = new CkTypeId($"{typeName}-1"), DerivedFromCkTypeId = rootId,
+            Attributes =
+            [
+                new CkTypeAttributeDto
+                {
+                    CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("Title-1")), AttributeName = "Title",
+                    IsOptional = true
+                },
+                new CkTypeAttributeDto
+                {
+                    CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("DocumentState-1")),
+                    AttributeName = StateAttribute, IsOptional = true
+                },
+                new CkTypeAttributeDto
+                {
+                    CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("DocumentNumber-1")),
+                    AttributeName = NumberAttribute, IsOptional = true, AutoIncrementReference = reference
+                }
+            ]
+        };
+
+        return new CkCompiledModelRoot
+        {
+            ModelId = id,
+            Description = "a numbered type and its unnumbered sibling in one collection",
+            Dependencies = [system],
+            Attributes =
+            [
+                new CkAttributeDto { AttributeId = new CkAttributeId("Title-1"), ValueType = AttributeValueTypesDto.String },
+                new CkAttributeDto
+                {
+                    AttributeId = new CkAttributeId("DocumentState-1"), ValueType = AttributeValueTypesDto.Enum,
+                    ValueCkEnumId = stateEnumId
+                },
+                new CkAttributeDto
+                    { AttributeId = new CkAttributeId("DocumentNumber-1"), ValueType = AttributeValueTypesDto.String }
+            ],
+            Enums =
+            [
+                new CkEnumDto
+                {
+                    EnumId = new CkEnumId("DocumentStates-1"),
+                    Values =
+                    [
+                        new CkEnumValueDto { Key = 0, Name = "Draft" },
+                        new CkEnumValueDto { Key = 1, Name = "Released" },
+                        new CkEnumValueDto { Key = 2, Name = "Cancelled" }
+                    ]
+                }
+            ],
+            Types =
+            [
+                new CkCompiledTypeDto
+                {
+                    TypeId = new CkTypeId("Ledger-1"),
+                    DerivedFromCkTypeId = new CkId<CkTypeId>(system, new CkTypeId("Entity-1")),
+                    IsAbstract = true, IsCollectionRoot = true
+                },
+                LedgerType("Invoice", "InvoiceNumber"),
+                LedgerType("Memo", null)
             ]
         };
     }
