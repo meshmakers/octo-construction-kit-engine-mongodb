@@ -57,11 +57,25 @@ internal static class CkCompiledModelCanonicalizer
         Converters = { new JsonStringEnumConverter() }
     };
 
+    /// <summary>
+    ///     The JSON path of the resolved dependency closure (<see cref="CkCompiledModelRoot.Dependencies" />). Left out only
+    ///     by <see cref="ToCanonicalJson(CkCompiledModelRoot, bool)" /> with <c>withoutResolvedClosure</c>, after the caller
+    ///     validated the closure on its own (<see cref="RestoreSystemModelClosure" />).
+    /// </summary>
+    internal const string ResolvedClosurePath = "$.dependencies";
+
     /// <summary>The canonical JSON node of <paramref name="model" />.</summary>
-    internal static JsonNode? ToCanonicalNode(CkCompiledModelRoot model)
+    internal static JsonNode? ToCanonicalNode(CkCompiledModelRoot model) => ToCanonicalNode(model, false);
+
+    private static JsonNode? ToCanonicalNode(CkCompiledModelRoot model, bool withoutResolvedClosure)
     {
         var node = JsonSerializer.SerializeToNode(model, Options);
         NormalizeAttributeDefaultValues(node);
+        if (withoutResolvedClosure && node is JsonObject root)
+        {
+            root.Remove("dependencies");
+        }
+
         return Canonicalize(node, "$");
     }
 
@@ -128,7 +142,14 @@ internal static class CkCompiledModelCanonicalizer
     };
 
     /// <summary>The canonical JSON text of <paramref name="model" />.</summary>
-    internal static string ToCanonicalJson(CkCompiledModelRoot model) => ToCanonicalNode(model)?.ToJsonString() ?? "null";
+    internal static string ToCanonicalJson(CkCompiledModelRoot model) => ToCanonicalJson(model, false);
+
+    /// <summary>
+    ///     The canonical JSON text of <paramref name="model" />; with <paramref name="withoutResolvedClosure" /> without the
+    ///     resolved dependency closure (<see cref="ResolvedClosurePath" />). The declared <c>dependencyRanges</c> stay.
+    /// </summary>
+    internal static string ToCanonicalJson(CkCompiledModelRoot model, bool withoutResolvedClosure) =>
+        ToCanonicalNode(model, withoutResolvedClosure)?.ToJsonString() ?? "null";
 
     /// <summary>
     ///     The SHA-256 of the canonical JSON as lower-case hex. It names a content without carrying it, so a log line or a

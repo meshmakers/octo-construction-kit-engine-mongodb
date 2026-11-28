@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- AB#9326 Fix (Bug AB#10061): the restore check no longer refuses a genuine dump because the resolved dependency closure
+  (`dependencies`) of a service-managed model differs from the catalog's. That closure is written by the compiler from the
+  dependency versions the build saw, so the same model version exists with several closures (published System.UI-2.12.0
+  lists `System-2.8.0`, services built from main embed it with `System-2.10.0`), and every genuine dump of a fresh tenant
+  was refused as `content_differs` for System.UI and System.Files - on shared environments too, the published catalog
+  carries the same skew. For a range-retaining model (every published System.* model) the closure is now validated
+  instead of compared (`RestoreSystemModelClosure`, the rule of the engine's `CkClosureMove`, AB#5435): same model names,
+  every differing entry of the same major and inside the declared range and floor, and published in the catalog (new
+  refusal reason `dependency_unpublished`). Element rows, `writeAccess` and the declared `dependencyRanges` stay compared
+  exactly; classic models keep their exact pins. The raise target is judged the same way. No public contract change.
+  Tests: `RestoreSystemModelCheckTests` (MongoDB, mongodump; published System.UI, System.Notification and System.Files files as
+  test data), `RestoreSystemModelClosureTests`,
+  `RestoreSystemModelDeciderTests`. Docs: `docs/ck-model-import.md`, "Resolved dependency closure".
 - AB#9326 New: a tenant restore can no longer bring in a manipulated or outdated service-managed CK model (System,
   System.*). `TenantBackupService.RestoreTenantAsync` compares every such model of the dump (model row and element rows,
   read back like the CK cache reads them) in canonical form with the catalog's model of the same id. It runs once on the
