@@ -394,7 +394,7 @@ internal sealed class StagingCopyRunner(
 
         var dataSlices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).ToList();
         var mapSlices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.GenerationMap).ToList();
-        // AB#9933: only a load into an empty table gives the NULLs of a column-list dump their column default afterwards;
+        // Only a load into an empty table gives the NULLs of a column-list dump their column default afterwards;
         // rows that were in the table before keep what they hold.
         var dataTableWasEmpty = dataSlices.Count > 0 &&
                                 await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable}", options,
@@ -788,8 +788,19 @@ internal sealed class StagingCopyRunner(
 
         if (dataTableWasEmpty && await FillColumnDefaultsAsync(target, plan, options, cancellationToken) > 0)
         {
-            await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"),
-                options.CommandTimeout, cancellationToken);
+            try
+            {
+                await client.ExecuteStatementAsync(tenantId,
+                    CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"), options.CommandTimeout,
+                    cancellationToken);
+            }
+            catch (Exception ex) when (IsStatementFailure(ex))
+            {
+                // Best effort like the fill: the rows are loaded, the table's own refresh interval makes the filled
+                // values visible a little later.
+                logger.LogWarning("Archive {ArchiveRtId} of tenant {TenantId}: the refresh after the column-default fill " +
+                                  "failed ({Reason}).", target.ArchiveRtId, tenantId, ex.Message);
+            }
         }
 
         if (options.OptimizeAfterLoad)
@@ -860,10 +871,10 @@ internal sealed class StagingCopyRunner(
         => ex is StreamDataCopyStatementException or StreamDataStatementTimeoutException;
 
     /// <summary>
-    ///     AB#9933: a dump that names its columns (it leaves a Hidden column or a leftover of a computed column out, AB#9932)
+    ///     A dump that names its columns (it leaves a Hidden column or a leftover of a computed column out)
     ///     writes a NULL as an explicit <c>null</c>, which <c>COPY FROM</c> keeps, where a whole-row dump leaves it out and
-    ///     the load gives the column its DEFAULT (<c>rtcreationdatetime</c>, <c>rtchangeddatetime</c>, <c>was_updated</c>;
-    ///     AB#5490, AB#6647). After a load into an empty table every NULL of a column with a DEFAULT is set to that default,
+    ///     the load gives the column its DEFAULT (<c>rtcreationdatetime</c>, <c>rtchangeddatetime</c>, <c>was_updated</c>).
+    ///     After a load into an empty table every NULL of a column with a DEFAULT is set to that default,
     ///     so both dump forms restore the same rows. The defaults are read from the table itself (nullable columns only: a
     ///     NOT NULL column cannot hold a NULL). The UPDATE runs per data slice of the plan (its time range), so each statement
     ///     covers no more rows than the slice's COPY did within the same timeout. The data is complete before the fill, so a

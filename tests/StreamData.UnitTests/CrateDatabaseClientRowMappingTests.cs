@@ -7,7 +7,7 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 
 /// <summary>
-/// AB#9933: a row whose <c>rtcreationdatetime</c> or <c>rtchangeddatetime</c> is NULL (restored from a dump that named its
+/// A row whose <c>rtcreationdatetime</c> or <c>rtchangeddatetime</c> is NULL (restored from a dump that named its
 /// columns, or written before the column had its default) is read, not refused with an InvalidCastException.
 /// </summary>
 public class CrateDatabaseClientRowMappingTests

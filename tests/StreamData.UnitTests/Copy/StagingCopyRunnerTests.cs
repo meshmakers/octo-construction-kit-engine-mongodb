@@ -313,7 +313,7 @@ public class StagingCopyRunnerTests
     [Fact]
     public async Task CopyFrom_IntoAnEmptyTable_SetsTheNullsOfAColumnWithADefaultToItsDefault()
     {
-        // AB#9933: a dump with a column list writes explicit nulls that COPY FROM keeps; the load gives them the default.
+        // A dump with a column list writes explicit nulls that COPY FROM keeps; the load gives them the default.
         var plan = await Dumped();
         _crate.ColumnDefaults["rtcreationdatetime"] = "_cast(current_timestamp(3), 'timestamp with time zone')";
         _crate.ColumnDefaults["was_updated"] = "false";
@@ -342,17 +342,24 @@ public class StagingCopyRunnerTests
     [InlineData("UPDATE")]
     [InlineData("column_default")]
     [InlineData("IS NULL")]
+    [InlineData("REFRESH")]
     public async Task CopyFrom_AFillStatementThatFails_LeavesTheNulls_AndTheLoadSucceeds(string failing)
     {
         var plan = await Dumped();
         _crate.ColumnDefaults["rtcreationdatetime"] = "current_timestamp(3)";
         _crate.TargetNulls["rtcreationdatetime"] = 4;
+        var filled = false;
+        var refreshFailed = false;
         _crate.Fault = statement =>
         {
             var sql = statement.Reveal();
+            // "REFRESH": only the refresh after a successful fill, not the refresh of the load itself.
             var isFill = sql.StartsWith("UPDATE", StringComparison.Ordinal) ||
                          sql.Contains("column_default", StringComparison.Ordinal) ||
-                         sql.Contains(" IS NULL", StringComparison.Ordinal);
+                         sql.Contains(" IS NULL", StringComparison.Ordinal) ||
+                         (filled && !refreshFailed && sql.StartsWith("REFRESH", StringComparison.Ordinal));
+            filled |= sql.StartsWith("UPDATE", StringComparison.Ordinal);
+            refreshFailed |= isFill && failing == "REFRESH" && sql.StartsWith("REFRESH", StringComparison.Ordinal);
             if (isFill && sql.Contains(failing, StringComparison.Ordinal))
             {
                 throw new StreamDataCopyStatementException("UPDATE t", "XX000", "statement failed (test)");

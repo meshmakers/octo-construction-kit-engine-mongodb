@@ -52,10 +52,10 @@ internal sealed class SimulatedCrate : ICrateCopyClient
     /// <summary>Data types the description reports for named columns; others are <c>text</c> (<c>timestamp</c> a timestamp).</summary>
     public Dictionary<string, string> ColumnTypes { get; } = new();
 
-    /// <summary>AB#9933: columns of the target table with a DEFAULT (name, expression); none by default.</summary>
+    /// <summary>Columns of the target table with a DEFAULT (name, expression); none by default.</summary>
     public Dictionary<string, string> ColumnDefaults { get; } = new();
 
-    /// <summary>AB#9933: NULLs per column of the target table after the load, answered to <c>... IS NULL</c> counts.</summary>
+    /// <summary>NULLs per column of the target table after the load, answered to <c>... IS NULL</c> counts.</summary>
     public Dictionary<string, long> TargetNulls { get; } = new();
 
     private static readonly System.Text.RegularExpressions.Regex IsNullCount =
@@ -198,7 +198,7 @@ internal sealed class SimulatedCrate : ICrateCopyClient
 
         if (sql.StartsWith("UPDATE", StringComparison.Ordinal))
         {
-            // AB#9933: the first UPDATE of a column changes all its NULLs, later ones (other slices) none.
+            // The first UPDATE of a column changes all its NULLs, later ones (other slices) none.
             var column = IsNullCount.Match(sql).Groups["column"].Value;
             var changed = TargetNulls.TryGetValue(column, out var left) ? left : 0;
             TargetNulls[column] = 0;
@@ -207,7 +207,7 @@ internal sealed class SimulatedCrate : ICrateCopyClient
 
         if (sql.Contains("column_default", StringComparison.Ordinal))
         {
-            // AB#9933: the columns of the target table with a DEFAULT.
+            // The columns of the target table with a DEFAULT.
             return new CrateStatementResult(0, ColumnDefaults
                 .Select(d => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
                 {

@@ -128,9 +128,9 @@ ever removed a computed column, or changed the formula of one, could not be rest
   behaviour of the native copy (AB#5490; `CrateVersionMatrixCases.Format2_ANullInAColumnWithADefault_…` in
   `octo-asset-repo-services` pins it). So `StagingCopyRunner.DumpedColumns` names columns only when the target excludes
   Hidden columns or the source table holds leftovers (`ArchiveColumnOwnership.FindLeftovers` over the table, read once
-  per dump); otherwise the dump copies the whole row, as before AB#9837. An archive with a Hidden column or a leftover is
+  per dump); otherwise the dump copies the whole row, as before. An archive with a Hidden column or a leftover is
   still dumped with a column list; its explicit NULLs are fixed after the load (next item).
-- **Column defaults after the load (AB#9933).** When `StagingCopyRunner.CopyFromAsync` loaded into a table that was empty
+- **Column defaults after the load.** When `StagingCopyRunner.CopyFromAsync` loaded into a table that was empty
   before the load, `FillColumnDefaultsAsync` sets every NULL of a column with a DEFAULT (read from
   `information_schema.columns.column_default` of the table itself, nullable columns only: `rtcreationdatetime`,
   `rtchangeddatetime`) to that default, after the first `REFRESH` and before the row count; an INFO line names the column

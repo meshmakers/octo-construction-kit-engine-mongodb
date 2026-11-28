@@ -471,7 +471,7 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
         var load = await target.Repository.LoadArchiveFromStagingAsync(target.Archive, dump.Plan, location, null, Ct);
         Assert.True(load.IsSuccess, string.Join("; ", load.Slices.Select(s => s.Message)));
         Assert.True(load.RowCountVerified);
-        // AB#9933: after the load into the empty table every NULL of a column with a DEFAULT gets that default, as the
+        // After the load into the empty table every NULL of a column with a DEFAULT gets that default, as the
         // whole-row dump above gives it - the explicit null of the column list no longer stays NULL.
         await fixture.SqlAsync($"REFRESH TABLE {target.Table}");
         Assert.Equal(0, await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtcreationdatetime\" IS NULL"));

@@ -116,7 +116,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     /// <summary>
     ///     One result row as a data point. <c>rtcreationdatetime</c> and <c>rtchangeddatetime</c> may be NULL (a row
-    ///     restored from a dump that named its columns before AB#9933, or written before the column had its default): such
+    ///     restored from a dump that named its columns before this fix, or written before the column had its default): such
     ///     a value leaves the property at its default instead of failing the whole read.
     /// </summary>
     internal static DataPointDto ToDataPointDto(IDictionary<string, object?> result)
