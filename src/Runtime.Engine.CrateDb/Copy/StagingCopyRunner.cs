@@ -873,11 +873,23 @@ internal sealed class StagingCopyRunner(
     private async Task<long> FillColumnDefaultsAsync(
         ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyOptions options, CancellationToken cancellationToken)
     {
-        var columns = await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
-            "SELECT column_name, column_default FROM information_schema.columns " +
-            $"WHERE table_schema = {CopyStatement.Literal(target.Schema)} " +
-            $"AND table_name = {CopyStatement.Literal(target.TableName)} AND column_default IS NOT NULL " +
-            "AND is_nullable ORDER BY ordinal_position", returnsRows: true), options.CommandTimeout, cancellationToken);
+        CrateStatementResult columns;
+        try
+        {
+            columns = await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
+                "SELECT column_name, column_default FROM information_schema.columns " +
+                $"WHERE table_schema = {CopyStatement.Literal(target.Schema)} " +
+                $"AND table_name = {CopyStatement.Literal(target.TableName)} AND column_default IS NOT NULL " +
+                "AND is_nullable ORDER BY ordinal_position", returnsRows: true), options.CommandTimeout, cancellationToken);
+        }
+        catch (Exception ex) when (IsStatementFailure(ex))
+        {
+            logger.LogWarning(
+                "Archive {ArchiveRtId} of tenant {TenantId}: the columns with a default could not be read ({Reason}); " +
+                "restored NULLs are not set to the column default (the data is complete).",
+                target.ArchiveRtId, tenantId, ex.Message);
+            return 0;
+        }
 
         var slices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data && s.FromUtc != null && s.ToUtc != null)
             .ToList();

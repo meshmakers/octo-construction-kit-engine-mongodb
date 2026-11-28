@@ -338,15 +338,22 @@ public class StagingCopyRunnerTests
         Assert.Contains(executed.Skip(updateIndex), s => s.StartsWith("REFRESH TABLE", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task CopyFrom_AFillThatFails_LeavesTheNulls_AndTheLoadSucceeds()
+    [Theory]
+    [InlineData("UPDATE")]
+    [InlineData("column_default")]
+    [InlineData("IS NULL")]
+    public async Task CopyFrom_AFillStatementThatFails_LeavesTheNulls_AndTheLoadSucceeds(string failing)
     {
         var plan = await Dumped();
         _crate.ColumnDefaults["rtcreationdatetime"] = "current_timestamp(3)";
         _crate.TargetNulls["rtcreationdatetime"] = 4;
         _crate.Fault = statement =>
         {
-            if (statement.Reveal().StartsWith("UPDATE", StringComparison.Ordinal))
+            var sql = statement.Reveal();
+            var isFill = sql.StartsWith("UPDATE", StringComparison.Ordinal) ||
+                         sql.Contains("column_default", StringComparison.Ordinal) ||
+                         sql.Contains(" IS NULL", StringComparison.Ordinal);
+            if (isFill && sql.Contains(failing, StringComparison.Ordinal))
             {
                 throw new StreamDataCopyStatementException("UPDATE t", "XX000", "statement failed (test)");
             }
@@ -354,6 +361,7 @@ public class StagingCopyRunnerTests
 
         var results = await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
 
+        Assert.NotEmpty(results);
         Assert.All(results, r => Assert.True(r.IsSuccess, r.Message));
     }
 
