@@ -561,7 +561,7 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
             ("model", IdentityName)) >= 1);
         Assert.True(await UserExistsAsync(existing));
         await AssertGenericUserWriteRefusedAsync(await ResolveAsync(existing));
-        await AssertStagingGoneAsync(existing, expectedRuns: 1);
+        await AssertStagingGoneAsync(existing, expectedRuns: 1, expectedDumps: 1);
     }
 
     [Theory]
@@ -594,7 +594,7 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         Assert.Contains("(upgrade_failed)", result.Error, StringComparison.Ordinal);
         Assert.Contains($"The existing tenant '{existing}' was not changed", result.Error, StringComparison.Ordinal);
         await AssertExistingTenantUntouchedAsync(existing, before);
-        await AssertStagingGoneAsync(existing, expectedRuns: 1);
+        await AssertStagingGoneAsync(existing, expectedRuns: 1, expectedDumps: 0);
     }
 
     [Fact]
@@ -661,7 +661,7 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         // The catalog went away after the check admitted the dump and before the raise completed: the gap of #290.
         Assert.Contains(reasons, r => r.Contains("(upgrade_failed)", StringComparison.Ordinal));
         Assert.Contains(Identity380.FullName, await ModelIdsAsync(existing));
-        await AssertStagingGoneAsync(existing, expectedRuns: reasons.Count + 1);
+        await AssertStagingGoneAsync(existing, expectedRuns: reasons.Count + 1, expectedDumps: 1);
     }
 
     [Fact]
@@ -681,7 +681,7 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         Assert.StartsWith(RestoreSystemModelGuard.RefusalCode, result.Error, StringComparison.Ordinal);
         Assert.Contains("(content_differs)", result.Error, StringComparison.Ordinal);
         await AssertExistingTenantUntouchedAsync(existing, before);
-        await AssertStagingGoneAsync(existing, expectedRuns: 1);
+        await AssertStagingGoneAsync(existing, expectedRuns: 1, expectedDumps: 0);
     }
 
     [Fact]
@@ -733,7 +733,7 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
     ///     Every staging database the restores of <paramref name="tenantId" /> used (from their log lines) is dropped, and
     ///     no database user of one is left.
     /// </summary>
-    private async Task AssertStagingGoneAsync(string tenantId, int expectedRuns)
+    private async Task AssertStagingGoneAsync(string tenantId, int expectedRuns, int expectedDumps)
     {
         var lines = fixture.Logs.Find(Microsoft.Extensions.Logging.LogLevel.Information,
             $"Restore of tenant '{tenantId}': the restore replaces the existing tenant");
@@ -750,8 +750,10 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         }
 
         // Only the temp archives of this tenant's restores: other collections restore over tenants in parallel.
-        foreach (var line in fixture.Logs.Find(Microsoft.Extensions.Logging.LogLevel.Information,
-                     $"Restore of tenant '{tenantId}': the checked staging database is dumped into temp archive"))
+        var dumps = fixture.Logs.Find(Microsoft.Extensions.Logging.LogLevel.Information,
+            $"Restore of tenant '{tenantId}': the checked staging database is dumped into temp archive");
+        Assert.Equal(expectedDumps, dumps.Count);
+        foreach (var line in dumps)
         {
             var archive = System.Text.RegularExpressions.Regex.Match(line, "temp archive '([^']+)'").Groups[1].Value;
             Assert.Contains("restorestage-", archive, StringComparison.Ordinal);
