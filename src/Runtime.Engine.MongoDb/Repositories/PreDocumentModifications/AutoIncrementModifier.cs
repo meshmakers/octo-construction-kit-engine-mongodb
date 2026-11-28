@@ -305,7 +305,34 @@ public class AutoIncrementModifier(
 
         requests = requests.OrderBy(r => order[r.Entity]).ToList();
 
-        await NumberRequestsAsync(session, repositoryDataSource, requests, counters);
+        // Two updates of one batch may name one stored document under two types of its collection (the engine keys
+        // them by type and id): the document gets one number, written by both updates.
+        var primaries = new Dictionary<(OctoObjectId RtId, string Attribute), NumberRequest>();
+        var unique = new List<NumberRequest>(requests.Count);
+        var followers = new List<(NumberRequest Follower, NumberRequest Primary)>();
+        foreach (var request in requests)
+        {
+            if (primaries.TryGetValue((request.Entity.RtId, request.Attribute.AttributeName), out var primary))
+            {
+                followers.Add((request, primary));
+                continue;
+            }
+
+            primaries[(request.Entity.RtId, request.Attribute.AttributeName)] = request;
+            unique.Add(request);
+        }
+
+        await NumberRequestsAsync(session, repositoryDataSource, unique, counters);
+
+        foreach (var (follower, primary) in followers)
+        {
+            var number = primary.Entity.GetAttributeValueOrDefault(primary.Attribute.AttributeName);
+            if (number != null)
+            {
+                follower.Entity.SetAttributeValue(follower.Attribute.AttributeName, follower.Attribute.ValueType,
+                    number);
+            }
+        }
     }
 
     /// <summary>
@@ -510,7 +537,7 @@ public class AutoIncrementModifier(
     {
         var mongoCollection = ((IMongoDbDataSourceCollection<OctoObjectId, RtAutoIncrement>)autoIncrementCollection)
             .GetMongoCollection();
-        var requestingCkTypeId = requests[0].Entity.GetRtCkTypeId();
+        var requestingCkTypeId = requests[0].CkTypeGraph.CkTypeId.ToRtCkId();
 
         if (counter == null && requests.All(r => r.Kind == NumberRequestKind.New))
         {

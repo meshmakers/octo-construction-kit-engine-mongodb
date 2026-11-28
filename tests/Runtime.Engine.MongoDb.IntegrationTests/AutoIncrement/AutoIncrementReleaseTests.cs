@@ -661,10 +661,110 @@ public class AutoIncrementReleaseTests(CkModelImportGuardFixture fixture)
             Assert.Equal(Released, stored["documentState"].ToInt32());
             Assert.EndsWith("-00001", stored["number"].AsString);
             Assert.Equal(1, (await PeriodsAsync(database, counterId)).Values.Single());
+            var entry = Assert.Single(await ReleaseEntriesAsync(database, draft.RtId))["attributes"].AsBsonDocument;
+            Assert.Equal(SiblingInvoiceTypeId.FullName, entry["documentCkTypeId"].AsString);
         }, SiblingModel);
     }
 
-    private static RtEntity SiblingInvoice(int state) => new(SiblingInvoiceTypeId, OctoObjectId.GenerateNewId(),
+    /// <summary>
+    ///     The engine keys the updates of a batch by type and id, so one batch can release a stored Invoice draft twice,
+    ///     once naming Invoice and once naming its sibling Memo: the draft gets one number, the counter moves by one and
+    ///     one Release entry is written.
+    /// </summary>
+    [Fact]
+    public async Task TwoUpdatesOfOneDocumentUnderTwoTypes_GiveItOneNumber()
+    {
+        await WithTenantAsync("relsibtwo", async (repository, database, _) =>
+        {
+            var counterId = await InsertReleaseCounterAsync(repository);
+            var draft = SiblingInvoice(Draft);
+            await ApplyAsync(repository, Insert(draft));
+
+            var asInvoice = new RtEntity(SiblingInvoiceTypeId, draft.RtId,
+                new Dictionary<string, object?> { [StateAttribute] = Released });
+            var asMemo = new RtEntity(SiblingMemoTypeId, draft.RtId,
+                new Dictionary<string, object?> { [StateAttribute] = Released });
+            await ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateUpdate(asInvoice.ToRtEntityId(), asInvoice),
+                EntityUpdateInfo<RtEntity>.CreateUpdate(asMemo.ToRtEntityId(), asMemo));
+
+            Assert.EndsWith("-00001", (await AttributesAsync(database, draft.RtId))["number"].AsString);
+            Assert.Equal(1, (await PeriodsAsync(database, counterId)).Values.Single());
+            Assert.Single(await ReleaseEntriesAsync(database, draft.RtId));
+        }, SiblingModel);
+    }
+
+    /// <summary>
+    ///     A replace that names Invoice with the id of a stored Memo turns it into a new Invoice: the Memo's number is not
+    ///     the stored number of an Invoice, so supplying it is refused (174), and a replace without a number numbers the
+    ///     released Invoice from its range instead of carrying the Memo's number over.
+    /// </summary>
+    [Fact]
+    public async Task AReplaceNamingAnotherTypeOfTheCollection_DoesNotTakeOverTheStoredNumber()
+    {
+        await WithTenantAsync("relsibrep", async (repository, database, _) =>
+        {
+            await InsertReleaseCounterAsync(repository);
+            var memo = new RtEntity(SiblingMemoTypeId, OctoObjectId.GenerateNewId(), new Dictionary<string, object?>
+            {
+                ["Title"] = "memo", [StateAttribute] = Released, [NumberAttribute] = "RE-2026-00042"
+            });
+            await ApplyAsync(repository, Insert(memo));
+
+            var withNumber = SiblingInvoice(Released, memo.RtId);
+            withNumber.SetAttributeRawValue(NumberAttribute, "RE-2026-00042");
+            await AssertSuppliedNumberRefusedAsync(() => ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateReplace(withNumber.ToRtEntityId(), withNumber)), "replace");
+
+            var withoutNumber = SiblingInvoice(Released, memo.RtId);
+            await ApplyAsync(repository,
+                EntityUpdateInfo<RtEntity>.CreateReplace(withoutNumber.ToRtEntityId(), withoutNumber));
+
+            Assert.EndsWith("-00001", (await AttributesAsync(database, memo.RtId))["number"].AsString);
+        }, SiblingModel);
+    }
+
+    /// <summary>An update that names Invoice with the id of a stored Memo draft writes the Memo: it takes no number.</summary>
+    [Fact]
+    public async Task AnUpdateNamingANumberedTypeForAStoredSibling_TakesNoNumber()
+    {
+        await WithTenantAsync("relsibmemo", async (repository, database, _) =>
+        {
+            var counterId = await InsertReleaseCounterAsync(repository);
+            var memo = new RtEntity(SiblingMemoTypeId, OctoObjectId.GenerateNewId(),
+                new Dictionary<string, object?> { ["Title"] = "memo", [StateAttribute] = Draft });
+            await ApplyAsync(repository, Insert(memo));
+            var counterBefore = await CounterDocumentAsync(database, counterId);
+
+            var release = new RtEntity(SiblingInvoiceTypeId, memo.RtId,
+                new Dictionary<string, object?> { [StateAttribute] = Released });
+            await ApplyAsync(repository, EntityUpdateInfo<RtEntity>.CreateUpdate(release.ToRtEntityId(), release));
+
+            Assert.False((await AttributesAsync(database, memo.RtId)).Contains("number"));
+            Assert.Equal(counterBefore, await CounterDocumentAsync(database, counterId));
+        }, SiblingModel);
+    }
+
+    /// <summary>The <c>Release</c> entries (action 0) of the audit trail of one document.</summary>
+    private static async Task<List<BsonDocument>> ReleaseEntriesAsync(IMongoDatabase database, OctoObjectId rtId)
+    {
+        var filter = new BsonDocument { ["attributes.documentRtId"] = rtId.ToString(), ["attributes.action"] = 0 };
+        var entries = new List<BsonDocument>();
+        foreach (var name in await (await database.ListCollectionNamesAsync(
+                     cancellationToken: TestContext.Current.CancellationToken)).ToListAsync(TestContext.Current.CancellationToken))
+        {
+            if (name.StartsWith("RtEntity_", StringComparison.Ordinal))
+            {
+                entries.AddRange(await database.GetCollection<BsonDocument>(name).Find(filter)
+                    .ToListAsync(TestContext.Current.CancellationToken));
+            }
+        }
+
+        return entries;
+    }
+
+    private static RtEntity SiblingInvoice(int state, OctoObjectId? rtId = null) => new(SiblingInvoiceTypeId,
+        rtId ?? OctoObjectId.GenerateNewId(),
         new Dictionary<string, object?> { ["Title"] = "invoice", [StateAttribute] = state });
 
     /// <summary>
