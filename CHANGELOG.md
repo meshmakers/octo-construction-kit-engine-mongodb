@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- AB#9759 Fix: a second `AddMongoDbRuntimeRepository()` (a host or test fixture that registers the runtime repository
+  twice) adds no second pre-document modification: `AutoIncrementRangeValidator`, `AutoIncrementModifier` and
+  `DisplayNameModifier` are registered with `TryAddEnumerable`. With two number modifiers the second took the number
+  the first handed out for a caller-supplied one and refused the release (message 174). Tests:
+  `AutoIncrementModifierRegistrationTests`.
 - AB#9759 Fix: on a number range with a release configuration the number is never supplied by the caller (design note
   D13). `AutoIncrementModifier` refuses an insert, replace or partial update through `BulkRtMutation` whose number
   attribute carries a value other than the stored number (`ReleasedDocumentLockedException`, code

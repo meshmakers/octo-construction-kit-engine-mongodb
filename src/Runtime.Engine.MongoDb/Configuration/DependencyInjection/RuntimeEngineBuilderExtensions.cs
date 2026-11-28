@@ -173,17 +173,24 @@ public static class RuntimeEngineBuilderExtensions
             return new SlowQueriesBuffer(cfg.SlowQueryBufferSize, explainCache);
         });
 
-        // Add pre-document modification services. The range validator runs first (AB#9754): a number range that is
+        // Add pre-document modification services, once each: a second registration of the repository must not run
+        // the number modifier twice (it would take the number it handed out for one the caller supplied). The range
+        // validator runs first: a number range that is
         // not valid is refused before anything is numbered or written in the batch.
-        builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementRangeValidator>();
-        builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementModifier>();
-        builder.Services.AddTransient<IPreDocumentModification<RtEntity>, DisplayNameModifier>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Transient<IPreDocumentModification<RtEntity>, AutoIncrementRangeValidator>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Transient<IPreDocumentModification<RtEntity>, AutoIncrementModifier>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Transient<IPreDocumentModification<RtEntity>, DisplayNameModifier>());
 
         // AB#9755: partial updates of a number range are checked by the same rules before anything is written.
-        builder.Services.AddTransient<IPreDocumentUpdateValidation<RtEntity>, AutoIncrementRangeValidator>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Transient<IPreDocumentUpdateValidation<RtEntity>, AutoIncrementRangeValidator>());
 
         // An update that releases a document of a range with release configuration numbers it in the same write.
-        builder.Services.AddTransient<IPreDocumentUpdateModification<RtEntity>, AutoIncrementModifier>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Transient<IPreDocumentUpdateModification<RtEntity>, AutoIncrementModifier>());
 
         // Register MongoDB-specific CK model migration support by default
         // This enables automatic migration detection when CK models are updated
