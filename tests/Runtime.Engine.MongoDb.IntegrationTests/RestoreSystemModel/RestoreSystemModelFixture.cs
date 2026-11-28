@@ -6,6 +6,8 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelCatalogs;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.ConstructionKit.Engine.ModelCatalogs;
+using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.CkModelImportGuard;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
@@ -39,9 +41,16 @@ public class RestoreSystemModelFixture : SystemFixture
         Services.AddSingleton(Catalog);
         Services.AddSingleton<ICatalog>(sp => sp.GetRequiredService<TestSystemIdentityCatalog>());
         Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(Logs);
+
+        // AB#10017 failure injection: a CK migration that throws or reports a failure, and an attach that fails.
+        Decorate<ICkModelUpgradeService>((_, inner) => new FaultInjectingCkModelUpgradeService(inner, Faults));
+        Decorate<ITenantNotifications>((_, inner) => new FaultInjectingTenantNotifications(inner, Faults));
     }
 
     public TestSystemIdentityCatalog Catalog { get; } = new();
+
+    /// <summary>Failures the restore tests inject (off by default; a test sets and resets them).</summary>
+    public RestoreFaults Faults { get; } = new();
 
     /// <summary>Every log line of the fixture's services (the scratch database name of a restore is in one).</summary>
     public RecordingLoggerProvider Logs { get; } = new();
@@ -66,6 +75,101 @@ public class RestoreSystemModelFixture : SystemFixture
             type.WriteAccess = null;
         }
     }
+
+    /// <summary>Replaces the last registration of <typeparamref name="TService" /> by a wrapper around it.</summary>
+    private void Decorate<TService>(Func<IServiceProvider, TService, TService> wrap) where TService : class
+    {
+        var descriptor = Services.Last(d => d.ServiceType == typeof(TService));
+        Services.Remove(descriptor);
+        Services.Add(ServiceDescriptor.Describe(typeof(TService),
+            sp => wrap(sp, (TService)(descriptor.ImplementationInstance
+                                      ?? descriptor.ImplementationFactory?.Invoke(sp)
+                                      ?? ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType!))),
+            descriptor.Lifetime));
+    }
+}
+
+/// <summary>What the restore tests make fail. Reset by the test that set it (the collection runs one test at a time).</summary>
+public sealed class RestoreFaults
+{
+    /// <summary>How every CK migration run behaves.</summary>
+    public MigrationFault Migration { get; set; }
+
+    /// <summary>The attach of this tenant id fails (its pre-create notification throws).</summary>
+    public string? FailAttachOfTenant { get; set; }
+
+    /// <summary>Number of migration runs that met an armed <see cref="Migration" /> fault.</summary>
+    public int MigrationFaultsHit;
+}
+
+public enum MigrationFault
+{
+    None,
+    Throw,
+    ReportFailure
+}
+
+/// <summary>The real upgrade service, unless <see cref="RestoreFaults.Migration" /> makes every run fail.</summary>
+internal sealed class FaultInjectingCkModelUpgradeService(ICkModelUpgradeService inner, RestoreFaults faults)
+    : ICkModelUpgradeService
+{
+    public Task<CkModelUpgradeResult> UpgradeModelsAsync(string tenantId, IEnumerable<CkModelIdVersionRange> newModelIds,
+        CkMigrationOptions? options = null, IReadOnlyDictionary<string, string>? previouslyInstalledVersions = null,
+        CancellationToken cancellationToken = default)
+    {
+        switch (faults.Migration)
+        {
+            case MigrationFault.Throw:
+                Interlocked.Increment(ref faults.MigrationFaultsHit);
+                throw new InvalidOperationException("Injected CK migration failure (test).");
+            case MigrationFault.ReportFailure:
+                Interlocked.Increment(ref faults.MigrationFaultsHit);
+                return Task.FromResult(new CkModelUpgradeResult
+                {
+                    Success = false, Errors = ["Injected CK migration error (test)."]
+                });
+            default:
+                return inner.UpgradeModelsAsync(tenantId, newModelIds, options, previouslyInstalledVersions,
+                    cancellationToken);
+        }
+    }
+
+    public Task<CkModelUpgradeInfo> CheckUpgradeNeededAsync(string tenantId, string ckModelName, string targetVersion,
+        CancellationToken cancellationToken = default) =>
+        inner.CheckUpgradeNeededAsync(tenantId, ckModelName, targetVersion, cancellationToken);
+
+    public Task<IReadOnlyDictionary<string, string>> GetInstalledVersionsAsync(string tenantId,
+        CancellationToken cancellationToken = default) =>
+        inner.GetInstalledVersionsAsync(tenantId, cancellationToken);
+
+    public Task RecordInstalledVersionAsync(string tenantId, CkModelId modelId,
+        CancellationToken cancellationToken = default) =>
+        inner.RecordInstalledVersionAsync(tenantId, modelId, cancellationToken);
+}
+
+/// <summary>The real notifications, except that the pre-create notification of an armed tenant id throws.</summary>
+internal sealed class FaultInjectingTenantNotifications(ITenantNotifications inner, RestoreFaults faults)
+    : ITenantNotifications
+{
+    public Task NotifyPreTenantCreateAsync(string tenantId, Guid correlationId) =>
+        string.Equals(faults.FailAttachOfTenant, tenantId, StringComparison.OrdinalIgnoreCase)
+            ? throw new InvalidOperationException("Injected attach failure (test).")
+            : inner.NotifyPreTenantCreateAsync(tenantId, correlationId);
+
+    public Task NotifyPosTenantCreateAsync(string tenantId, Guid correlationId) =>
+        inner.NotifyPosTenantCreateAsync(tenantId, correlationId);
+
+    public Task NotifyPreTenantUpdateAsync(string tenantId, Guid correlationId) =>
+        inner.NotifyPreTenantUpdateAsync(tenantId, correlationId);
+
+    public Task NotifyPosTenantUpdateAsync(string tenantId, Guid correlationId) =>
+        inner.NotifyPosTenantUpdateAsync(tenantId, correlationId);
+
+    public Task NotifyPreTenantDeleteAsync(string tenantId, Guid correlationId) =>
+        inner.NotifyPreTenantDeleteAsync(tenantId, correlationId);
+
+    public Task NotifyPosTenantDeleteAsync(string tenantId, Guid correlationId) =>
+        inner.NotifyPosTenantDeleteAsync(tenantId, correlationId);
 }
 
 [CollectionDefinition(Name)]
@@ -202,9 +306,22 @@ public sealed class TestSystemIdentityCatalog : ICatalog
         }
     }
 
+    /// <summary>
+    ///     Makes the catalog answer exactly <paramref name="reads" /> more reads and become unreachable afterwards (a
+    ///     catalog that goes away in the middle of a restore); <c>null</c> turns it off.
+    /// </summary>
+    public void UnreachableAfter(int? reads)
+    {
+        _readsLeft = reads ?? -1;
+        _countReads = reads != null;
+    }
+
+    private int _readsLeft = -1;
+    private volatile bool _countReads;
+
     private void ThrowIfUnreachable([CallerMemberName] string member = "")
     {
-        if (Unreachable)
+        if (Unreachable || (_countReads && Interlocked.Decrement(ref _readsLeft) < 0))
         {
             throw new HttpRequestException($"Test catalog unreachable ({member}).");
         }

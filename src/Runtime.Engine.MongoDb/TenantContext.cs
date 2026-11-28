@@ -35,6 +35,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.StreamData;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.RestoreSystemModelCheck;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -167,6 +168,17 @@ public class TenantContext : ITenantContext
             _logger.LogWarning(ex, "Could not drop the restore check database '{DatabaseName}'; drop it by hand",
                 databaseName);
         }
+    }
+
+    /// <summary>
+    ///     True when <paramref name="databaseName" /> holds a collection other than the ownership and system-database
+    ///     markers. Listed through this context's admin client, so no repository client per staging name is cached.
+    /// </summary>
+    internal async Task<bool> HoldsRestoredDataForRestoreAsync(string databaseName)
+    {
+        var names = await _adminRepositoryClient.ListCollectionNamesAsync(NormalizeDatabaseName(databaseName));
+        return names.Any(name => name != TenantOwnershipStore.CollectionName &&
+                                 name != SystemDatabaseMarkerStore.CollectionName);
     }
 
     /// <summary>Drops this process's CK cache of <paramref name="tenantId" /> when it is loaded.</summary>
@@ -593,6 +605,13 @@ public class TenantContext : ITenantContext
             _logger.LogError(
                 "CK model migration failed for '{CkModelId}' in tenant '{TenantId}': {Errors}",
                 importedModelId, tenantId, string.Join("; ", result.Errors));
+
+            // AB#10017: the raise of a tenant restore must not attach a model whose migration did not run. Every other
+            // import keeps logging only (an embedded import retries the pending migration on the next resolve).
+            if (RestoringTenantScope.TryGetDatabaseName(tenantId, out _))
+            {
+                throw new RestoreCkMigrationFailedException(importedModelId, result.Errors.Count);
+            }
         }
         else if (result.TotalEntitiesAffected > 0)
         {

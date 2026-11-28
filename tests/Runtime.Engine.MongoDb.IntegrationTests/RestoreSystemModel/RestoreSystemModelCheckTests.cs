@@ -537,7 +537,223 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         return model;
     }
 
+    // ---- AB#10017: a restore that replaces an existing tenant is checked and raised in a staging database ---------
+
+    [Fact]
+    public async Task GenuineOlderDump_RestoredOverAnExistingTenant_IsRaisedInStaging_AndReplacesIt()
+    {
+        var existing = await SourceTenantAsync("stgok", await fixture.Catalog.LoadAsync(Identity380));
+        await PutCanaryAsync(existing);
+        var older = await SourceTenantAsync("stgoksrc",
+            await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess));
+        var archive = await DumpAsync(older);
+        using var counters = new CkCounterRecorder();
+
+        var result = await Sys.RestoreTenantAsync(existing, existing, archive, sourceDatabaseName: older,
+            dropExistingTenant: true);
+
+        Assert.True(result.Success, result.Error);
+        Assert.False(await HasCanaryAsync(existing), "the restore must replace the existing tenant's database");
+        var models = await ModelIdsAsync(existing);
+        Assert.Contains(Identity380.FullName, models);
+        Assert.DoesNotContain(Identity370.FullName, models);
+        Assert.True(counters.Sum(CkModelImportDiagnostics.RestoreSystemModelRaisedCounterName,
+            ("model", IdentityName)) >= 1);
+        Assert.True(await UserExistsAsync(existing));
+        await AssertGenericUserWriteRefusedAsync(await ResolveAsync(existing));
+        await AssertStagingGoneAsync(existing, expectedRuns: 1);
+    }
+
+    [Theory]
+    [InlineData(MigrationFault.Throw)]
+    [InlineData(MigrationFault.ReportFailure)]
+    public async Task FailingMigrationOfTheRaise_OverAnExistingTenant_LeavesThatTenantUntouched(MigrationFault fault)
+    {
+        var existing = await SourceTenantAsync("stgmig", await fixture.Catalog.LoadAsync(Identity380));
+        await PutCanaryAsync(existing);
+        var before = await SnapshotAsync(existing, IdentityName);
+        var older = await SourceTenantAsync("stgmigsrc",
+            await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess));
+        var archive = await DumpAsync(older);
+        var hitsBefore = fixture.Faults.MigrationFaultsHit;
+        CommandResult result;
+        fixture.Faults.Migration = fault;
+        try
+        {
+            result = await Sys.RestoreTenantAsync(existing, existing, archive, sourceDatabaseName: older,
+                dropExistingTenant: true);
+        }
+        finally
+        {
+            fixture.Faults.Migration = MigrationFault.None;
+        }
+
+        Assert.True(fixture.Faults.MigrationFaultsHit > hitsBefore, "the raise must have run a migration");
+        Assert.False(result.Success);
+        Assert.StartsWith(RestoreSystemModelGuard.RefusalCode, result.Error, StringComparison.Ordinal);
+        Assert.Contains("(upgrade_failed)", result.Error, StringComparison.Ordinal);
+        Assert.Contains($"The existing tenant '{existing}' was not changed", result.Error, StringComparison.Ordinal);
+        await AssertExistingTenantUntouchedAsync(existing, before);
+        await AssertStagingGoneAsync(existing, expectedRuns: 1);
+    }
+
+    [Fact]
+    public async Task MigrationReportingAFailure_RefusesARestoreIntoANewTenant()
+    {
+        var older = await SourceTenantAsync("migrep", await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess));
+        var archive = await DumpAsync(older);
+        var target = NewTenantId("migreprt");
+        CommandResult result;
+        fixture.Faults.Migration = MigrationFault.ReportFailure;
+        try
+        {
+            result = await Sys.RestoreTenantAsync(target, target, archive);
+        }
+        finally
+        {
+            fixture.Faults.Migration = MigrationFault.None;
+        }
+
+        await AssertRefusedAndNothingLeftAsync(result, target, "upgrade_failed");
+    }
+
+    [Fact]
+    public async Task CatalogGoingAwayAtAnyPointOfTheStagedRestore_NeverDropsTheExistingTenant()
+    {
+        var existing = await SourceTenantAsync("stgcat", await fixture.Catalog.LoadAsync(Identity380));
+        await PutCanaryAsync(existing);
+        var before = await SnapshotAsync(existing, IdentityName);
+        var older = await SourceTenantAsync("stgcatsrc",
+            await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess));
+        var archive = await DumpAsync(older);
+        var reasons = new List<string>();
+
+        // The catalog answers 0, 1, 2, ... reads and then goes away: every point of the check and of the raise is hit
+        // once, up to the first restore that needs no more reads than the catalog gave.
+        CommandResult? success = null;
+        for (var reads = 0; reads <= 60 && success == null; reads++)
+        {
+            CommandResult result;
+            fixture.Catalog.UnreachableAfter(reads);
+            try
+            {
+                result = await Sys.RestoreTenantAsync(existing, existing, archive, sourceDatabaseName: older,
+                    dropExistingTenant: true);
+            }
+            finally
+            {
+                fixture.Catalog.UnreachableAfter(null);
+            }
+
+            if (result.Success)
+            {
+                success = result;
+                break;
+            }
+
+            Assert.StartsWith(RestoreSystemModelGuard.RefusalCode, result.Error, StringComparison.Ordinal);
+            reasons.Add(result.Error!);
+            await AssertExistingTenantUntouchedAsync(existing, before);
+        }
+
+        Assert.NotNull(success);
+        Assert.Contains(reasons, r => r.Contains("(catalog_unavailable)", StringComparison.Ordinal));
+        // The catalog went away after the check admitted the dump and before the raise completed: the gap of #290.
+        Assert.Contains(reasons, r => r.Contains("(upgrade_failed)", StringComparison.Ordinal));
+        Assert.Contains(Identity380.FullName, await ModelIdsAsync(existing));
+        await AssertStagingGoneAsync(existing, expectedRuns: reasons.Count + 1);
+    }
+
+    [Fact]
+    public async Task ManipulatedDump_RestoredOverAnExistingTenant_IsRefusedInStaging_AndLeavesNoStagingBehind()
+    {
+        var existing = await SourceTenantAsync("stgman", await fixture.Catalog.LoadAsync(Identity380));
+        await PutCanaryAsync(existing);
+        var before = await SnapshotAsync(existing, IdentityName);
+        var manipulated = await SourceTenantAsync("stgmansrc", await fixture.Catalog.LoadAsync(Identity380));
+        await ManipulateAsync(manipulated, "writeAccess removed from the element rows");
+        var archive = await DumpAsync(manipulated);
+
+        var result = await Sys.RestoreTenantAsync(existing, existing, archive, sourceDatabaseName: manipulated,
+            dropExistingTenant: true);
+
+        Assert.False(result.Success);
+        Assert.StartsWith(RestoreSystemModelGuard.RefusalCode, result.Error, StringComparison.Ordinal);
+        Assert.Contains("(content_differs)", result.Error, StringComparison.Ordinal);
+        await AssertExistingTenantUntouchedAsync(existing, before);
+        await AssertStagingGoneAsync(existing, expectedRuns: 1);
+    }
+
+    [Fact]
+    public async Task GenuineOlderDump_WhoseAttachFails_LeavesNoDatabaseUserTheRaiseCreated()
+    {
+        var older = await SourceTenantAsync("attfail", await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess));
+        var archive = await DumpAsync(older);
+        var target = NewTenantId("attfailrt");
+        CommandResult result;
+        fixture.Faults.FailAttachOfTenant = target;
+        try
+        {
+            result = await Sys.RestoreTenantAsync(target, target, archive);
+        }
+        finally
+        {
+            fixture.Faults.FailAttachOfTenant = null;
+        }
+
+        Assert.False(result.Success);
+        Assert.False(await TenantExistsAsync(target));
+        Assert.False(await UserExistsAsync(target), "a user the raise created must not outlive a failed attach");
+    }
+
     // ---- helpers -------------------------------------------------------------------------------------------------
+
+    private const string CanaryCollection = "RestoreCanary";
+
+    private async Task PutCanaryAsync(string tenantId) =>
+        await Database(tenantId).GetCollection<BsonDocument>(CanaryCollection)
+            .InsertOneAsync(new BsonDocument("_id", "canary"), cancellationToken: TestContext.Current.CancellationToken);
+
+    private async Task<bool> HasCanaryAsync(string tenantId) =>
+        await Database(tenantId).GetCollection<BsonDocument>(CanaryCollection)
+            .CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty,
+                cancellationToken: TestContext.Current.CancellationToken) == 1;
+
+    /// <summary>The existing tenant is attached, holds its own data and its CK rows, and its restriction holds.</summary>
+    private async Task AssertExistingTenantUntouchedAsync(string tenantId, string identitySnapshot)
+    {
+        Assert.True(await TenantExistsAsync(tenantId), "a failed staged restore must not drop the existing tenant");
+        Assert.True(await HasCanaryAsync(tenantId), "a failed staged restore must not replace the tenant's database");
+        Assert.Equal(identitySnapshot, await SnapshotAsync(tenantId, IdentityName));
+        Assert.True(await UserExistsAsync(tenantId));
+        await AssertGenericUserWriteRefusedAsync(await ResolveAsync(tenantId));
+    }
+
+    /// <summary>
+    ///     Every staging database the restores of <paramref name="tenantId" /> used (from their log lines) is dropped, and
+    ///     no database user of one is left.
+    /// </summary>
+    private async Task AssertStagingGoneAsync(string tenantId, int expectedRuns)
+    {
+        var lines = fixture.Logs.Find(Microsoft.Extensions.Logging.LogLevel.Information,
+            $"Restore of tenant '{tenantId}': the restore replaces the existing tenant");
+        Assert.Equal(expectedRuns, lines.Count);
+        var databases = await ListDatabasesAsync();
+        foreach (var line in lines)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(line, "staging database '([^']+)'");
+            Assert.True(match.Success, line);
+            var staging = match.Groups[1].Value;
+            Assert.Contains("restorestage_", staging, StringComparison.Ordinal);
+            Assert.DoesNotContain(staging, databases);
+            Assert.False(await UserExistsAsync(staging), $"the database user of staging database '{staging}' is left");
+        }
+
+        Assert.DoesNotContain(Directory.GetFiles(Path.GetTempPath(), "restorestage-*.archive"),
+            f => File.GetLastWriteTimeUtc(f) > _startedUtc);
+    }
+
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
 
     private async Task AssertRefusedAndNothingLeftAsync(CommandResult result, string target, string reason)
     {
