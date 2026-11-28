@@ -473,10 +473,13 @@ model without `dependencies` and validates the closure on its own; the closure i
 
 Anything else is `content_differs`. A classic model (no `dependencyRanges`) resolves by its exact pins, so its closure is
 compared exactly. Why this is safe: element rows, `writeAccess`, `access`, `visibility`, `derivable` and the declared
-ranges - everything that carries behaviour - are still compared exactly; the accepted closures are exactly those a build of
-the published model against published dependency versions can write, so a dump cannot reach a state a genuine service
-build cannot. A closure entry only influences which baseline version the upgrade guard's surface check names
-(`CkSurfaceSatisfactionChecker`), and that is always a published version inside the declared range. Not checked: whether
+ranges - everything that carries behaviour - are still compared exactly, and the closure of a range-retaining model has
+no effect at run time: resolution and the dependents' requirements use the ranges (`GetResolutionRanges`,
+`DatabaseCkModelRepository.RequirementsOf`), the model graph uses only the closure's names, the upgrade guard reads no
+pin of a range-retaining dependent (`TenantUpgradeGuard.FindPin`), and the surface check reads a pin only for a name
+without a declared range (`CkSurfaceSatisfactionChecker`). The accepted closures are a superset of what a build can write
+(an entry may also move down, and a transitive entry - one without a declared range, e.g. System.Bot in the closure of
+System.Ai - may move anywhere inside its major); every accepted entry is a published version of the same major. Not checked: whether
 the dump's own System satisfies the declared ranges - that is the same question for every genuine tenant and the engine
 answers it when the model loads (a model whose range is not satisfied becomes `ResolveFailed`, which removes its types
 and grants no write).

@@ -387,6 +387,32 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         await AssertGenericUserWriteRefusedAsync(await ResolveAsync(target));
     }
 
+    [Fact]
+    public async Task GenuineOlderDump_WhenThePlatformsVersionHasAnUnpublishedClosureEntry_IsRefused_NotRaised()
+    {
+        var source = await SourceTenantAsync("skewtgt", await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess));
+        var archive = await DumpAsync(source);
+        var target = NewTenantId("skewtgtrt");
+        var systemModels = Database(Sys.DatabaseName).GetCollection<BsonDocument>("CkModel");
+        var platformRow = Builders<BsonDocument>.Filter.Eq("_id", Identity380.FullName);
+        var closure = (await systemModels.Find(platformRow).FirstAsync(TestContext.Current.CancellationToken))["dependencies"];
+        CommandResult result;
+        await systemModels.UpdateOneAsync(platformRow,
+            Builders<BsonDocument>.Update.Set("dependencies", new BsonArray { "System-2.99.0" }),
+            cancellationToken: TestContext.Current.CancellationToken);
+        try
+        {
+            result = await Sys.RestoreTenantAsync(target, target, archive);
+        }
+        finally
+        {
+            await systemModels.UpdateOneAsync(platformRow, Builders<BsonDocument>.Update.Set("dependencies", closure),
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        await AssertRefusedAndNothingLeftAsync(result, target, "target_not_published");
+    }
+
     /// <summary>
     ///     Runs <paramref name="test" /> with a source tenant whose service-managed models carry the closure of a service
     ///     build (the tenant's own System), while the test catalog publishes them with the closures of the real catalog;

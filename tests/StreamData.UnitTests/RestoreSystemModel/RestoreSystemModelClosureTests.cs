@@ -65,6 +65,7 @@ public class RestoreSystemModelClosureTests
     [InlineData("System-3.0.0")] // another major
     [InlineData("System-2.4.0")] // below the floor
     [InlineData("System@2")] // not a concrete version
+    [InlineData("system-2.10.0")] // another name: names compare ordinal, a case variant is not the same dependency
     public void ClosureEntryOutsideTheDeclaredRange_IsAnotherContent(string entry)
     {
         Assert.Equal(RestoreSystemModelContentMatch.Differs, Compare(Model([entry]), Model(["System-2.8.0"])).Match);

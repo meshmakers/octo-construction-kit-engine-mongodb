@@ -49,8 +49,11 @@ internal sealed record RestoreSystemModelContentComparison(
 ///         model); the closure names exactly the same models as the catalog's, each once; every entry that differs is a
 ///         concrete version of the same major as the catalog's entry and, when the model declares a range for that name,
 ///         inside the effective range (range with its floor). The caller additionally requires every moved entry to be a
-///         published version (reason <c>dependency_unpublished</c>), so the accepted closures are exactly those a build
-///         of the published model against published dependencies can write. Classic models (no
+///         published version (reason <c>dependency_unpublished</c>). That accepts a superset of what a build can write (an
+///         entry may also move down; an entry without a declared range, a transitive one, may move anywhere inside its
+///         major); it is safe because the closure of a range-retaining model has no effect at run time (resolution and
+///         requirements use the ranges, the model graph only the names, the upgrade guard no pin of a range-retaining
+///         dependent, the surface check a pin only for a name without a declared range). Classic models (no
 ///         <c>dependencyRanges</c>) resolve by their exact pins: their closure is compared exactly.
 ///     </para>
 /// </summary>
