@@ -426,7 +426,7 @@ below the platform's security floor. A dump that cannot be brought to that state
 `TenantBackupService.RestoreTenantAsync` runs `RestoreSystemModelGuard` (`src/Runtime.Engine.MongoDb/Services/RestoreSystemModelCheck/`)
 in one of two flows.
 
-**A restore that replaces an existing tenant** (`dropExistingTenant: true` and a tenant with that id exists; AB#10017) is
+**A restore that replaces an existing tenant** (`dropExistingTenant: true` and a tenant with that id exists) is
 staged, so a check or raise that fails at run time never leaves the tenant dropped:
 
 1. The whole dump is restored into a staging database `<tenant database prefix>restorestage_<20 hex digits>` (namespace
@@ -456,7 +456,9 @@ drop: the database name is in the INFO line "Restore of tenant ...: the restore 
 and checking the dump in staging database ...", the archive path in "... the checked staging database is dumped into
 temp archive ..."; drop the user with `dropUser` in the authentication database. While the raise runs, the
 import publishes pre/post tenant-update notifications for the tenant id: other services unload their cache of the
-still attached tenant and load it again from its own database.
+still attached tenant and load it again from its own database, and the communication controller relays a restart of
+the tenant's adapters and deployment sites. This happens also when the restore is refused afterwards (re-check, staging
+dump): the tenant's data is unchanged then, but its adapters restarted once.
 
 **Every other restore** (a new tenant, or `dropExistingTenant: false`) checks twice:
 

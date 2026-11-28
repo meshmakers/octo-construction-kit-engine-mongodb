@@ -424,7 +424,7 @@ internal class TenantBackupService(
         {
             if (existingTenantContext != null && dropExistingTenant && systemContext is TenantContext engineSystemContext)
             {
-                // AB#10017: the restore replaces an existing tenant. The whole dump is restored into a staging database
+                // The restore replaces an existing tenant. The whole dump is restored into a staging database
                 // and checked there, genuine older models are raised there, and only a staging database that passed is
                 // copied over the target after the drop. No check, raise or catalog read runs after the drop.
                 staged = await StageAndCheckAsync(engineSystemContext, tenantId, databaseName, archivePath,
@@ -577,7 +577,7 @@ internal class TenantBackupService(
         // become reachable: manipulated, unknown or too new models refuse the restore, genuine older ones are raised to
         // the platform's version here, while the database is still unattached. Also for a restore without attach, so a
         // checked database is all a restore ever leaves behind. A staged restore copied a staging database that already
-        // passed this check (and its raise) before the drop: nothing is checked or raised after the drop (AB#10017).
+        // passed this check (and its raise) before the drop: nothing is checked or raised after the drop.
         var keptCreatedDatabaseUser = false;
         if (staged == null)
         {
@@ -642,7 +642,7 @@ internal class TenantBackupService(
             {
                 // The check created the tenant database user for its raise and kept it for the attach; the attach did
                 // not commit (also when the session could not be opened), so the database stays unattached and the
-                // user must not outlive the restore (review of #290). An attached tenant keeps its user.
+                // user must not outlive the restore (attach after a raise). An attached tenant keeps its user.
                 await engineSystemContext.DropTenantDatabaseUserForRestoreAsync(databaseName);
                 throw;
             }
@@ -713,7 +713,7 @@ internal class TenantBackupService(
         $"{systemConfiguration?.Value.TenantDatabasePrefix ?? string.Empty}{kind}" + Guid.NewGuid().ToString("N")[..20];
 
     /// <summary>
-    ///     AB#10017, the first half of a restore that replaces an existing tenant: restores the whole dump into a staging
+    ///     The first half of a restore that replaces an existing tenant: restores the whole dump into a staging
     ///     database <c>&lt;prefix&gt;restorestage_&lt;id&gt;</c>, runs the full check of service-managed models there and
     ///     raises genuine older ones (with migrations), and dumps the checked staging database into a temp archive, which
     ///     the caller restores into the target after the drop. Nothing of the existing tenant is touched here. Whatever the

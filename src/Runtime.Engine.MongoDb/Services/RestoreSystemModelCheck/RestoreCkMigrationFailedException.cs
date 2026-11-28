@@ -3,7 +3,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services.RestoreSystemModelCheck;
 
 /// <summary>
-///     A CK migration of the raise of a tenant restore reported a failure (AB#10017). An ordinary import only logs a
+///     A CK migration of the raise of a tenant restore reported a failure. An ordinary import only logs a
 ///     failed migration; inside a <see cref="RestoringTenantScope" /> the raise fails instead, so the restore is refused
 ///     (<c>upgrade_failed</c>) rather than attaching a raised model whose data was not migrated. The message names the
 ///     model and the number of errors only, never their text (it may quote tenant data).

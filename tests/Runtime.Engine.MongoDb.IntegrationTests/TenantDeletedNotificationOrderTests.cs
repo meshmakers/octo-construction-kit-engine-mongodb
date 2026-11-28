@@ -425,7 +425,7 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
     [InlineData("staging dump")]
     public async Task RestoreOverAnExistingTenant_WhoseStagingStepFails_KeepsTheTenant_AndDropsNothing(string failing)
     {
-        // AB#10017: the staging restore and its dump run before the drop, so their failure keeps the existing tenant.
+        // The staging restore and its dump run before the drop, so their failure keeps the existing tenant.
         var systemContext = fixture.GetSystemContext();
         var tenantId = NewTenantId("delstg");
         var archivePath = Path.Combine(Path.GetTempPath(), $"notify_{Guid.NewGuid():N}.tar.gz");
@@ -501,12 +501,8 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
     }
 
     /// <summary>
-    ///     The restore of the target, not the scratch restore of the CK collections the restore check of service-managed
-    ///     models runs first.
-    /// </summary>
-    /// <summary>
     ///     The mongorestore into the target itself: not the one of the pre-check's scratch database, nor the one into the
-    ///     staging database of a restore over an existing tenant (AB#10017), which both run before anything is dropped.
+    ///     staging database of a restore over an existing tenant, which both run before anything is dropped.
     /// </summary>
     private static bool IsTargetRestore(MongoRestoreOptions options) =>
         !options.Database.Contains("restorecheck_", StringComparison.Ordinal) &&

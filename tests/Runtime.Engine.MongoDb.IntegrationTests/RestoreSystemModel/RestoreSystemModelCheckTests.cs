@@ -537,7 +537,7 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
         return model;
     }
 
-    // ---- AB#10017: a restore that replaces an existing tenant is checked and raised in a staging database ---------
+    // ---- a restore that replaces an existing tenant is checked and raised in a staging database ---------
 
     [Fact]
     public async Task GenuineOlderDump_RestoredOverAnExistingTenant_IsRaisedInStaging_AndReplacesIt()
@@ -658,7 +658,7 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
 
         Assert.NotNull(success);
         Assert.Contains(reasons, r => r.Contains("(catalog_unavailable)", StringComparison.Ordinal));
-        // The catalog went away after the check admitted the dump and before the raise completed: the gap of #290.
+        // The catalog went away after the check admitted the dump and before the raise completed: the gap staging closes.
         Assert.Contains(reasons, r => r.Contains("(upgrade_failed)", StringComparison.Ordinal));
         Assert.Contains(Identity380.FullName, await ModelIdsAsync(existing));
         await AssertStagingGoneAsync(existing, expectedRuns: reasons.Count + 1, expectedDumps: 1);

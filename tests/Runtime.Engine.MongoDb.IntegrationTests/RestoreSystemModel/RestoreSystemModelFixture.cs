@@ -42,7 +42,7 @@ public class RestoreSystemModelFixture : SystemFixture
         Services.AddSingleton<ICatalog>(sp => sp.GetRequiredService<TestSystemIdentityCatalog>());
         Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(Logs);
 
-        // AB#10017 failure injection: a CK migration that throws or reports a failure, and an attach that fails.
+        // Failure injection: a CK migration that throws or reports a failure, and an attach that fails.
         Decorate<ICkModelUpgradeService>((_, inner) => new FaultInjectingCkModelUpgradeService(inner, Faults));
         Decorate<ITenantNotifications>((_, inner) => new FaultInjectingTenantNotifications(inner, Faults));
     }

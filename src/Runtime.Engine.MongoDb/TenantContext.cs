@@ -606,7 +606,7 @@ public class TenantContext : ITenantContext
                 "CK model migration failed for '{CkModelId}' in tenant '{TenantId}': {Errors}",
                 importedModelId, tenantId, string.Join("; ", result.Errors));
 
-            // AB#10017: the raise of a tenant restore must not attach a model whose migration did not run. Every other
+            // The raise of a tenant restore must not attach a model whose migration did not run. Every other
             // import keeps logging only (an embedded import retries the pending migration on the next resolve).
             if (RestoringTenantScope.TryGetDatabaseName(tenantId, out _))
             {

@@ -25,7 +25,7 @@ internal sealed record RestoreSystemModelCheckResult(
 
     /// <summary>
     ///     True when the check created the tenant database user for the raise and kept it (keepDatabaseUser): the caller
-    ///     drops it again when the attach after the check fails (AB#10017).
+    ///     drops it again when the attach after the check fails.
     /// </summary>
     public bool KeptCreatedDatabaseUser { get; init; }
 
