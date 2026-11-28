@@ -439,6 +439,12 @@ staged, so a check or raise that fails at run time never leaves the tenant dropp
 4. Only now is the existing tenant dropped; the temp archive is restored into the target and the tenant is attached. No
    check, raise or catalog read runs after the drop.
 
+Before step 1, a target database that is not the existing tenant's own database but already holds collections is
+refused: the copy replaces only the collections of the staged archive, so collections the dump lacks would stay
+unchecked. Restore into the tenant's own database or into one that does not exist. Known limit: the raise opens
+repository clients for the staging database name, which the process keeps cached until it ends (one per staged restore
+with a raise).
+
 Whatever the outcome, the staging database is dropped again, the database user the raise created for it is dropped
 (the staged check never keeps it) and the temp archive is deleted. This process's CK cache of the tenant id is unloaded
 right before and right after the check and raise, and again at the end: the cache is keyed by tenant id, so the live
@@ -575,8 +581,8 @@ Tests: `RestoreSystemModelDeciderTests`, `RestoreSystemModelContentTests`, `Rest
 `RestoringTenantScopeTests` (unit), `RestoreSystemModelCheckTests` (the closure cases of AB#10061 with the published
 System.UI, System.Notification and System.Files files under `testData/publishedSystemModels`), `PublishedSystemModelRoundTripTests` (MongoDB, mongodump/mongorestore). The staged flow is covered with failure injection (`RestoreSystemModelFixture.Faults`, `TestSystemIdentityCatalog.UnreachableAfter`): a
 migration that throws or reports a failure, a catalog that goes away after 0, 1, 2, ... reads, a manipulated dump and a
-genuine older dump over an existing tenant, and a failed attach; each asserts the existing tenant, the staging
-database and its user.
+genuine older dump over an existing tenant and a pre-filled other target, each asserting the existing tenant, the
+staging database and its user; and a failed attach of a restore into a new tenant, asserting the user the raise created.
 
 ### Service-Managed CK Model Auto-import
 

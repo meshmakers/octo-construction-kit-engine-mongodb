@@ -685,6 +685,31 @@ public sealed class RestoreSystemModelCheckTests(RestoreSystemModelFixture fixtu
     }
 
     [Fact]
+    public async Task RestoreOverAnExistingTenant_IntoAnotherDatabaseThatHoldsData_IsRefusedBeforeAnythingChanges()
+    {
+        // The copy of the staged archive replaces only its own collections: collections the dump lacks would stay in a
+        // pre-filled target unchecked, so such a target is refused before the existing tenant is touched.
+        var existing = await SourceTenantAsync("stgoth", await fixture.Catalog.LoadAsync(Identity380));
+        await PutCanaryAsync(existing);
+        var before = await SnapshotAsync(existing, IdentityName);
+        var source = await SourceTenantAsync("stgothsrc", await fixture.Catalog.LoadAsync(Identity380));
+        var archive = await DumpAsync(source);
+        var otherDatabase = NewTenantId("stgothdb");
+        await PutCanaryAsync(otherDatabase); // an unattached database that already holds data
+
+        var result = await Sys.RestoreTenantAsync(existing, otherDatabase, archive, sourceDatabaseName: source,
+            dropExistingTenant: true);
+
+        Assert.False(result.Success);
+        Assert.Contains($"the target database '{otherDatabase}' is not the tenant's database", result.Error,
+            StringComparison.Ordinal);
+        await AssertExistingTenantUntouchedAsync(existing, before);
+        Assert.True(await HasCanaryAsync(otherDatabase), "the pre-filled target must stay as it was");
+        Assert.Empty(fixture.Logs.Find(Microsoft.Extensions.Logging.LogLevel.Information,
+            $"Restore of tenant '{existing}': the restore replaces the existing tenant"));
+    }
+
+    [Fact]
     public async Task GenuineOlderDump_WhoseAttachFails_LeavesNoDatabaseUserTheRaiseCreated()
     {
         var older = await SourceTenantAsync("attfail", await fixture.Catalog.LoadAsync(Identity370, WithoutWriteAccess));

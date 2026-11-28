@@ -427,6 +427,22 @@ internal class TenantBackupService(
                 // The restore replaces an existing tenant. The whole dump is restored into a staging database
                 // and checked there, genuine older models are raised there, and only a staging database that passed is
                 // copied over the target after the drop. No check, raise or catalog read runs after the drop.
+                // The copy replaces only the collections of the staged archive. A target that is not the existing
+                // tenant's own database but already holds collections would keep the ones the dump lacks, unchecked:
+                // refused before anything is changed.
+                if (!string.Equals(TenantDatabaseRegistrationLookup.Normalize(existingTenantContext.DatabaseName),
+                        TenantDatabaseRegistrationLookup.Normalize(databaseName), StringComparison.Ordinal) &&
+                    await engineSystemContext.HoldsRestoredDataForRestoreAsync(databaseName))
+                {
+                    var message = $"The restore of tenant '{tenantId}' was refused before the existing tenant was " +
+                                  $"replaced: the target database '{databaseName}' is not the tenant's database " +
+                                  $"'{existingTenantContext.DatabaseName}' and already holds data. Restore into the " +
+                                  "tenant's own database or into a database that does not exist. The existing tenant " +
+                                  $"'{tenantId}' was not changed.";
+                    logger.LogError("Restore of tenant '{TenantId}': {Message}", tenantId, message);
+                    return CommandResult.Failure(message);
+                }
+
                 staged = await StageAndCheckAsync(engineSystemContext, tenantId, databaseName, archivePath,
                     effectiveSourceDatabaseName, detectedDatabases, timeout, cancellationToken ?? CancellationToken.None);
                 if (staged.Failure != null)
