@@ -52,6 +52,11 @@ Two optional seams, both `GetService` and both inert in any host that registers 
 | `ITenantLocationSource` | tenant id | which database holds that tenant | `SystemContext.TryFindTenantContextAsync`, **before** the probe and the registry read |
 | `ITenantDatabaseCredentialSource` | database name | which credential opens that database | `UserMongoRepositoryClient`, per connection build |
 
+Before both seams, `TryFindTenantContextAsync` consults two in-process `AsyncLocal` scopes that cover exactly one tenant
+id in exactly one async flow and also return a detached context: `RestoringTenantScope` (a restore raises a model of
+its still unattached database, AB#9326) and `CreatingTenantScope` (`CreateChildTenantAsync` applies a blueprint while
+the new registry entry is still in the caller's uncommitted transaction, AB#10060). See `docs/blueprints.md`.
+
 Keyed differently on purpose: a process may open several databases, but asks for one tenant at a time.
 Either seam alone is not enough — with only the credential the member still needs admin to *find* the
 tenant, and with only the location it cannot open what it found.

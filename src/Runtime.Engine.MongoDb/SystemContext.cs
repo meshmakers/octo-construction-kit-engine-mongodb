@@ -216,6 +216,15 @@ public class SystemContext : TenantContext, ISystemContext
             return CreateDetachedTenantContext(tenantId, restoringDatabaseName);
         }
 
+        // A tenant created with a blueprint: its registry entry is still in the creating transaction (AB#8796), so the
+        // blueprint's CK model install resolves exactly that tenant id, in exactly that async flow, to its new database
+        // (CreatingTenantScope, AB#10060). The creation already imported the System model; the first resolve after the
+        // commit runs the registry path with its imports as before.
+        if (CreatingTenantScope.TryGetDatabaseName(tenantId, out var creatingDatabaseName))
+        {
+            return CreateDetachedTenantContext(tenantId, creatingDatabaseName);
+        }
+
         var locationSource = _serviceProvider.GetService<ITenantLocationSource>();
         if (locationSource is not null
             && locationSource.TryGetDatabaseName(tenantId, out var leasedDatabaseName))

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- AB#10060 Fix: creating a child tenant with a blueprint in one call (`CreateChildTenantAsync` with a `BlueprintId`,
+  POST tenants with `blueprintId`) failed for every blueprint with "Tenant '<id>' not found; cannot install CK model": the
+  tenant's registry entry is still in the caller's uncommitted transaction (AB#8796) while the blueprint's CK install
+  resolves the tenant in its own session. `CreatingTenantScope` now makes exactly that tenant id resolve to its new
+  database in the creating async flow while the blueprint is applied; the transaction boundary is unchanged.
 - AB#9326 Fix (Bug AB#10061): the restore check no longer refuses a genuine dump because the resolved dependency closure
   (`dependencies`) of a service-managed model differs from the catalog's. That closure is written by the compiler from the
   dependency versions the build saw, so the same model version exists with several closures (published System.UI-2.12.0

@@ -77,6 +77,17 @@ BlueprintId blueprintId = "InfrastructureStarter-2.0.0";
 await CreateTenantAsync("customer-789", "customer_789_db", blueprintId);
 ```
 
+### Resolving the new tenant while the blueprint is applied
+
+The tenant's registry entry in `octosystem` is written in the caller's transaction and is committed only after
+`CreateChildTenantAsync` returns (AB#8796). The blueprint's CK model install resolves the tenant by id
+(`ISystemContext.TryFindTenantContextAsync`) in a session of its own, which does not see that uncommitted entry. While
+the blueprint is applied, `CreatingTenantScope` (an `AsyncLocal` like `RestoringTenantScope`) therefore makes exactly
+the new tenant id, in exactly the creating async flow, resolve to its new database (AB#10060). Every other tenant id,
+every other flow and every flow that outlives the call resolve through the registry; the transaction boundary does not
+change, so a failed blueprint still rolls the whole creation back. Tests: `CreatingTenantScopeTests` (unit),
+`CreateChildTenantWithBlueprintIntegrationTests` (MongoDB).
+
 ### Error Handling
 
 On blueprint errors, the tenant is automatically rolled back:
