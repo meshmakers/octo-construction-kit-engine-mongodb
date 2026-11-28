@@ -51,6 +51,15 @@ internal sealed class SimulatedCrate : ICrateCopyClient
 
     /// <summary>Data types the description reports for named columns; others are <c>text</c> (<c>timestamp</c> a timestamp).</summary>
     public Dictionary<string, string> ColumnTypes { get; } = new();
+
+    /// <summary>Columns of the target table with a DEFAULT (name, expression); none by default.</summary>
+    public Dictionary<string, string> ColumnDefaults { get; } = new();
+
+    /// <summary>NULLs per column of the target table after the load, answered to <c>... IS NULL</c> counts.</summary>
+    public Dictionary<string, long> TargetNulls { get; } = new();
+
+    private static readonly System.Text.RegularExpressions.Regex IsNullCount =
+        new("WHERE \"(?<column>[^\"]+)\" IS NULL");
     public string Filter { get; set; } = JobLogFilterGuard.RecommendedFilter;
     public long[] NodeDiskAvailable { get; set; } = [100L << 30];
 
@@ -187,6 +196,25 @@ internal sealed class SimulatedCrate : ICrateCopyClient
             return Row(("jobs_log_filter", Filter));
         }
 
+        if (sql.StartsWith("UPDATE", StringComparison.Ordinal))
+        {
+            // The first UPDATE of a column changes all its NULLs, later ones (other slices) none.
+            var column = IsNullCount.Match(sql).Groups["column"].Value;
+            var changed = TargetNulls.TryGetValue(column, out var left) ? left : 0;
+            TargetNulls[column] = 0;
+            return new CrateStatementResult(changed, []);
+        }
+
+        if (sql.Contains("column_default", StringComparison.Ordinal))
+        {
+            // The columns of the target table with a DEFAULT.
+            return new CrateStatementResult(0, ColumnDefaults
+                .Select(d => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+                {
+                    ["column_name"] = d.Key, ["column_default"] = d.Value
+                }).ToList());
+        }
+
         if (sql.Contains("information_schema.columns", StringComparison.Ordinal))
         {
             var columns = sql.Contains(SourceTable, StringComparison.Ordinal) ? SourceColumns : TargetColumns;
@@ -298,6 +326,12 @@ internal sealed class SimulatedCrate : ICrateCopyClient
 
     private long Count(string sql)
     {
+        var isNull = IsNullCount.Match(sql);
+        if (isNull.Success)
+        {
+            return TargetNulls.TryGetValue(isNull.Groups["column"].Value, out var nulls) ? nulls : 0;
+        }
+
         var isTarget = sql.Contains(TargetTable, StringComparison.Ordinal);
         if (!sql.Contains(" WHERE ", StringComparison.Ordinal))
         {

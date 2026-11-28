@@ -451,21 +451,37 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
         await source.Lifecycle.AddComputedColumnAsync(source.Archive, "doubled", "value * 2", FormulaResultType.Double,
             indexed: false);
         await source.Lifecycle.RemoveComputedColumnAsync(source.Archive, "doubled");
-        await fixture.SqlAsync($"UPDATE {source.Table} SET \"rtcreationdatetime\" = NULL WHERE \"value\" < 15");
+        await fixture.SqlAsync($"UPDATE {source.Table} SET \"rtcreationdatetime\" = NULL, \"rtchangeddatetime\" = NULL " +
+                               "WHERE \"value\" < 15");
+        // The other rows carry a fixed past timestamp, so the restore shows that it keeps them and fills only the NULLs.
+        await fixture.SqlAsync($"UPDATE {source.Table} SET \"rtcreationdatetime\" = '2020-01-01T00:00:00Z' " +
+                               "WHERE \"value\" >= 15");
         await fixture.SqlAsync($"REFRESH TABLE {source.Table}");
+        var kept = await fixture.CountAsync($"SELECT count(*) FROM {source.Table} WHERE \"value\" >= 15");
+        Assert.True(kept > 0);
 
         var (dump, location, staged) = await DumpAsync(source);
 
         AssertStagedWithout(staged, "doubled");
         // The column list (json_object) writes a NULL as an explicit null - the whole row would leave it out.
         Assert.Contains("\"rtcreationdatetime\":null", staged, StringComparison.Ordinal);
+        Assert.Contains("\"rtchangeddatetime\":null", staged, StringComparison.Ordinal);
         var target = await NewTargetAsync(source, cache);
         Assert.DoesNotContain("doubled", await ColumnsAsync(target));
         var load = await target.Repository.LoadArchiveFromStagingAsync(target.Archive, dump.Plan, location, null, Ct);
         Assert.True(load.IsSuccess, string.Join("; ", load.Slices.Select(s => s.Message)));
         Assert.True(load.RowCountVerified);
-        // The known limit of a dump with a column list (docs/streamdata-write-path.md): the explicit null stays NULL.
+        // After the load into the empty table every NULL of a column with a DEFAULT gets that default, as the
+        // whole-row dump above gives it - the explicit null of the column list no longer stays NULL.
         await fixture.SqlAsync($"REFRESH TABLE {target.Table}");
-        Assert.Equal(10, await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtcreationdatetime\" IS NULL"));
+        Assert.Equal(0, await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtcreationdatetime\" IS NULL"));
+        Assert.Equal(0, await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtchangeddatetime\" IS NULL"));
+        Assert.Equal(await fixture.CountAsync($"SELECT count(*) FROM {source.Table}"),
+            await fixture.CountAsync($"SELECT count(*) FROM {target.Table}"));
+        // The filled rows got the default (the time of the load), the others keep their source value.
+        Assert.Equal(10, await fixture.CountAsync(
+            $"SELECT count(*) FROM {target.Table} WHERE \"value\" < 15 AND \"rtcreationdatetime\" > '2020-01-02T00:00:00Z'"));
+        Assert.Equal(kept, await fixture.CountAsync(
+            $"SELECT count(*) FROM {target.Table} WHERE \"value\" >= 15 AND \"rtcreationdatetime\" = '2020-01-01T00:00:00Z'"));
     }
 }
