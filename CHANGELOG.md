@@ -5,8 +5,9 @@
 - AB#9933 Fix: an archive restored from a dump that names its columns (a Hidden column or a leftover of a removed
   computed column, AB#9932) no longer holds NULL in `rtcreationdatetime` / `rtchangeddatetime`, and reading such rows no
   longer fails. After a load into an empty table, `StagingCopyRunner` sets every NULL of a column with a DEFAULT to that
-  default (read from the table's `information_schema`), like a whole-row dump gives it; a load into a table with rows
-  leaves them alone. `CrateDatabaseClient` reads a NULL timestamp as the property default instead of throwing
+  default (read from the table's `information_schema`, nullable columns), like a whole-row dump gives it, with one UPDATE
+  per data slice; a fill statement that fails is a WARN, never a failed load; a load into a table with rows leaves them
+  alone. `CrateDatabaseClient` reads a NULL timestamp as the property default instead of throwing
   `InvalidCastException` (archives restored before this fix). Tests: `ArchiveComputedColumnLeftoverBackupIntegrationTests`
   (real CrateDB), `CrateDatabaseClientRowMappingTests`. Docs: `docs/streamdata-write-path.md`.
 - AB#10017 Fix: a tenant restore that replaces an existing tenant (`dropExistingTenant: true`) no longer leaves the tenant

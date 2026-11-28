@@ -786,7 +786,7 @@ internal sealed class StagingCopyRunner(
         await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"),
             options.CommandTimeout, cancellationToken);
 
-        if (dataTableWasEmpty && await FillColumnDefaultsAsync(target, options, cancellationToken) > 0)
+        if (dataTableWasEmpty && await FillColumnDefaultsAsync(target, plan, options, cancellationToken) > 0)
         {
             await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"),
                 options.CommandTimeout, cancellationToken);
@@ -864,36 +864,75 @@ internal sealed class StagingCopyRunner(
     ///     writes a NULL as an explicit <c>null</c>, which <c>COPY FROM</c> keeps, where a whole-row dump leaves it out and
     ///     the load gives the column its DEFAULT (<c>rtcreationdatetime</c>, <c>rtchangeddatetime</c>, <c>was_updated</c>;
     ///     AB#5490, AB#6647). After a load into an empty table every NULL of a column with a DEFAULT is set to that default,
-    ///     so both dump forms restore the same rows. The defaults are read from the table itself. Returns the rows changed.
+    ///     so both dump forms restore the same rows. The defaults are read from the table itself (nullable columns only: a
+    ///     NOT NULL column cannot hold a NULL). The UPDATE runs per data slice of the plan (its time range), so each statement
+    ///     covers no more rows than the slice's COPY did within the same timeout. The data is complete before the fill, so a
+    ///     statement that fails only leaves NULLs (logged as WARN; reads are null-safe) and never fails the load. Returns
+    ///     the rows changed.
     /// </summary>
     private async Task<long> FillColumnDefaultsAsync(
-        ArchiveCopyTarget target, ArchiveCopyOptions options, CancellationToken cancellationToken)
+        ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyOptions options, CancellationToken cancellationToken)
     {
         var columns = await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
             "SELECT column_name, column_default FROM information_schema.columns " +
             $"WHERE table_schema = {CopyStatement.Literal(target.Schema)} " +
             $"AND table_name = {CopyStatement.Literal(target.TableName)} AND column_default IS NOT NULL " +
-            "ORDER BY ordinal_position", returnsRows: true), options.CommandTimeout, cancellationToken);
+            "AND is_nullable ORDER BY ordinal_position", returnsRows: true), options.CommandTimeout, cancellationToken);
 
+        var slices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data && s.FromUtc != null && s.ToUtc != null)
+            .ToList();
+        var time = CopyStatement.Identifier(target.TimeColumn);
         long changed = 0;
         foreach (var row in columns.Rows)
         {
-            var column = CopyStatement.Identifier(Text(row, "column_name"));
-            var nulls = await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable} WHERE {column} IS NULL", options,
-                cancellationToken);
+            var name = Text(row, "column_name");
+            var column = CopyStatement.Identifier(name);
+            long nulls;
+            try
+            {
+                nulls = await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable} WHERE {column} IS NULL", options,
+                    cancellationToken);
+            }
+            catch (Exception ex) when (IsStatementFailure(ex))
+            {
+                logger.LogWarning(
+                    "Archive {ArchiveRtId} of tenant {TenantId}: the NULLs of column {Column} could not be counted " +
+                    "({Reason}); they are not set to the column default (the data is complete).",
+                    target.ArchiveRtId, tenantId, name, ex.Message);
+                continue;
+            }
+
             if (nulls == 0)
             {
                 continue;
             }
 
-            // The default expression comes from CrateDB's own table definition (information_schema), not from the dump.
-            await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
-                    $"UPDATE {target.QualifiedTable} SET {column} = {Text(row, "column_default")} WHERE {column} IS NULL"),
-                options.CommandTimeout, cancellationToken);
+            long columnChanged = 0;
+            foreach (var slice in slices)
+            {
+                try
+                {
+                    // The default expression comes from CrateDB's own table definition (information_schema), not the dump.
+                    var result = await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
+                            $"UPDATE {target.QualifiedTable} SET {column} = {Text(row, "column_default")} " +
+                            $"WHERE {column} IS NULL AND {time} >= {CopyStatement.Literal(CopyStatement.FormatTs(slice.FromUtc!.Value))} " +
+                            $"AND {time} < {CopyStatement.Literal(CopyStatement.FormatTs(slice.ToUtc!.Value))}"),
+                        options.CommandTimeout, cancellationToken);
+                    columnChanged += result.AffectedRows;
+                }
+                catch (Exception ex) when (IsStatementFailure(ex))
+                {
+                    logger.LogWarning(
+                        "Archive {ArchiveRtId} of tenant {TenantId}: the NULLs of column {Column} in slice {Slice} could not " +
+                        "be set to the column default ({Reason}); they stay NULL (the data is complete).",
+                        target.ArchiveRtId, tenantId, name, slice.Key, ex.Message);
+                }
+            }
+
             logger.LogInformation(
-                "Archive {ArchiveRtId} of tenant {TenantId}: {Rows} restored rows held NULL in column {Column}, which has a " +
-                "default; set to the default.", target.ArchiveRtId, tenantId, nulls, Text(row, "column_name"));
-            changed += nulls;
+                "Archive {ArchiveRtId} of tenant {TenantId}: {Nulls} restored rows held NULL in column {Column}, which has a " +
+                "default; {Rows} set to the default.", target.ArchiveRtId, tenantId, nulls, name, columnChanged);
+            changed += columnChanged;
         }
 
         return changed;

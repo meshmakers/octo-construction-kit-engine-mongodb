@@ -132,10 +132,14 @@ ever removed a computed column, or changed the formula of one, could not be rest
   still dumped with a column list; its explicit NULLs are fixed after the load (next item).
 - **Column defaults after the load (AB#9933).** When `StagingCopyRunner.CopyFromAsync` loaded into a table that was empty
   before the load, `FillColumnDefaultsAsync` sets every NULL of a column with a DEFAULT (read from
-  `information_schema.columns.column_default` of the table itself: `rtcreationdatetime`, `rtchangeddatetime`,
-  `was_updated`) to that default, after the first `REFRESH` and before the row count; an INFO line names the column and
-  the number of rows. So a dump with a column list restores the same rows as a whole-row dump. A load into a table that
-  already held rows leaves every NULL alone (rows it did not write keep what they hold). The read path is null-safe as
+  `information_schema.columns.column_default` of the table itself, nullable columns only: `rtcreationdatetime`,
+  `rtchangeddatetime`) to that default, after the first `REFRESH` and before the row count; an INFO line names the column
+  and the number of rows. The UPDATE runs once per data slice of the plan (its time range), so no statement covers more
+  rows than the slice's `COPY FROM` within the same command timeout. The data is complete before the fill: a fill
+  statement that fails leaves those NULLs (WARN) and never fails the load. So a dump with a column list restores the same
+  rows as a whole-row dump. A load into a table that already held rows leaves every NULL alone (rows it did not write keep
+  what they hold). Known limit: a load repeated into the same table after a partial load (a failed slice) finds rows and
+  skips the fill, so the NULLs of that dump stay; drop and recreate the table before such a repeat, as a fresh restore does. The read path is null-safe as
   well: `CrateDatabaseClient.ToDataPointDto` leaves `RtCreationDateTime` / `RtChangedDateTime` at their default for a NULL
   instead of failing the whole read with an `InvalidCastException` (archives restored before this fix).
 - **What the dump keeps.** Every other column stays in the manifest, so the restore still refuses it before loading

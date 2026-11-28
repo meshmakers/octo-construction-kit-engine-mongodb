@@ -196,6 +196,15 @@ internal sealed class SimulatedCrate : ICrateCopyClient
             return Row(("jobs_log_filter", Filter));
         }
 
+        if (sql.StartsWith("UPDATE", StringComparison.Ordinal))
+        {
+            // AB#9933: the first UPDATE of a column changes all its NULLs, later ones (other slices) none.
+            var column = IsNullCount.Match(sql).Groups["column"].Value;
+            var changed = TargetNulls.TryGetValue(column, out var left) ? left : 0;
+            TargetNulls[column] = 0;
+            return new CrateStatementResult(changed, []);
+        }
+
         if (sql.Contains("column_default", StringComparison.Ordinal))
         {
             // AB#9933: the columns of the target table with a DEFAULT.

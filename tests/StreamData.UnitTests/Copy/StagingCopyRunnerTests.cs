@@ -321,14 +321,40 @@ public class StagingCopyRunnerTests
 
         await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
 
-        var update = Assert.Single(_crate.Executed, s => s.StartsWith("UPDATE", StringComparison.Ordinal));
+        // One UPDATE per data slice, each bounded by the slice's time range like its COPY.
+        var dataSlices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).ToList();
+        var updates = _crate.Executed.Where(s => s.StartsWith("UPDATE", StringComparison.Ordinal)).ToList();
+        Assert.Equal(dataSlices.Count, updates.Count);
+        var first = dataSlices[0];
         Assert.Equal($"UPDATE {RestoreTarget.QualifiedTable} SET \"rtcreationdatetime\" = " +
-                     "_cast(current_timestamp(3), 'timestamp with time zone') WHERE \"rtcreationdatetime\" IS NULL", update);
+                     "_cast(current_timestamp(3), 'timestamp with time zone') WHERE \"rtcreationdatetime\" IS NULL " +
+                     $"AND \"{RestoreTarget.TimeColumn}\" >= '{CopyStatement.FormatTs(first.FromUtc!.Value)}' " +
+                     $"AND \"{RestoreTarget.TimeColumn}\" < '{CopyStatement.FormatTs(first.ToUtc!.Value)}'", updates[0]);
+        Assert.DoesNotContain(updates, u => u.Contains("was_updated", StringComparison.Ordinal)); // no NULLs there
         // The fill runs after the data is loaded and refreshed, and the table is refreshed again before it is counted.
         var executed = _crate.Executed;
-        var updateIndex = executed.IndexOf(update);
+        var updateIndex = executed.IndexOf(updates[0]);
         Assert.Contains(executed.Take(updateIndex), s => s.StartsWith("COPY", StringComparison.Ordinal));
         Assert.Contains(executed.Skip(updateIndex), s => s.StartsWith("REFRESH TABLE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CopyFrom_AFillThatFails_LeavesTheNulls_AndTheLoadSucceeds()
+    {
+        var plan = await Dumped();
+        _crate.ColumnDefaults["rtcreationdatetime"] = "current_timestamp(3)";
+        _crate.TargetNulls["rtcreationdatetime"] = 4;
+        _crate.Fault = statement =>
+        {
+            if (statement.Reveal().StartsWith("UPDATE", StringComparison.Ordinal))
+            {
+                throw new StreamDataCopyStatementException("UPDATE t", "XX000", "statement failed (test)");
+            }
+        };
+
+        var results = await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
+
+        Assert.All(results, r => Assert.True(r.IsSuccess, r.Message));
     }
 
     [Fact]

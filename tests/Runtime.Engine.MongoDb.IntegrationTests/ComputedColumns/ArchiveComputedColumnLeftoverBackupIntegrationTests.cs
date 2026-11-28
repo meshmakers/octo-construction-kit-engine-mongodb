@@ -453,7 +453,12 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
         await source.Lifecycle.RemoveComputedColumnAsync(source.Archive, "doubled");
         await fixture.SqlAsync($"UPDATE {source.Table} SET \"rtcreationdatetime\" = NULL, \"rtchangeddatetime\" = NULL " +
                                "WHERE \"value\" < 15");
+        // The other rows carry a fixed past timestamp, so the restore shows that it keeps them and fills only the NULLs.
+        await fixture.SqlAsync($"UPDATE {source.Table} SET \"rtcreationdatetime\" = '2020-01-01T00:00:00Z' " +
+                               "WHERE \"value\" >= 15");
         await fixture.SqlAsync($"REFRESH TABLE {source.Table}");
+        var kept = await fixture.CountAsync($"SELECT count(*) FROM {source.Table} WHERE \"value\" >= 15");
+        Assert.True(kept > 0);
 
         var (dump, location, staged) = await DumpAsync(source);
 
@@ -473,5 +478,10 @@ public class ArchiveComputedColumnLeftoverBackupIntegrationTests(CrateStagingCop
         Assert.Equal(0, await fixture.CountAsync($"SELECT count(*) FROM {target.Table} WHERE \"rtchangeddatetime\" IS NULL"));
         Assert.Equal(await fixture.CountAsync($"SELECT count(*) FROM {source.Table}"),
             await fixture.CountAsync($"SELECT count(*) FROM {target.Table}"));
+        // The filled rows got the default (the time of the load), the others keep their source value.
+        Assert.Equal(10, await fixture.CountAsync(
+            $"SELECT count(*) FROM {target.Table} WHERE \"value\" < 15 AND \"rtcreationdatetime\" > '2020-01-02T00:00:00Z'"));
+        Assert.Equal(kept, await fixture.CountAsync(
+            $"SELECT count(*) FROM {target.Table} WHERE \"value\" >= 15 AND \"rtcreationdatetime\" = '2020-01-01T00:00:00Z'"));
     }
 }
