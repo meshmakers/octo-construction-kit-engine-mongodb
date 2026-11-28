@@ -420,6 +420,56 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
         }
     }
 
+    [Theory]
+    [InlineData("staging restore")]
+    [InlineData("staging dump")]
+    public async Task RestoreOverAnExistingTenant_WhoseStagingStepFails_KeepsTheTenant_AndDropsNothing(string failing)
+    {
+        // The staging restore and its dump run before the drop, so their failure keeps the existing tenant.
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = NewTenantId("delstg");
+        var archivePath = Path.Combine(Path.GetTempPath(), $"notify_{Guid.NewGuid():N}.tar.gz");
+        var ops = RepositoryOpsThatThrow();
+        if (failing == "staging restore")
+        {
+            A.CallTo(() => ops.ExecuteMongoRestoreAsync(
+                    A<MongoRestoreOptions>.That.Matches(o => o.Database.Contains("restorestage_")),
+                    A<TimeSpan?>._, A<CancellationToken?>._))
+                .ThrowsAsync(new InvalidOperationException("mongorestore crashed (test)"));
+        }
+        else
+        {
+            A.CallTo(() => ops.ExecuteMongoDumpAsync(
+                    A<MongoDumpOptions>.That.Matches(o => o.Database.Contains("restorestage_")),
+                    A<TimeSpan?>._, A<CancellationToken?>._))
+                .Returns(CommandResult.Failure("mongodump failed (test)"));
+        }
+
+        try
+        {
+            await CreateAsync(tenantId);
+            var backup = await systemContext.BackupTenantAsync(tenantId, archivePath);
+            Assert.True(backup.Success, backup.Error);
+
+            var result = await BackupServiceWith(ops).RestoreTenantAsync(tenantId, tenantId, archivePath,
+                dropExistingTenant: true, attachTenant: true);
+
+            Assert.False(result.Success);
+            Assert.True(await systemContext.IsTenantRegisteredAsync(tenantId), "the existing tenant must not be dropped");
+            Assert.True(await systemContext.IsDatabaseExistingAsync(tenantId));
+            Assert.DoesNotContain("tenant-deleted", result.Output ?? string.Empty, StringComparison.Ordinal);
+            if (failing == "staging dump")
+            {
+                Assert.Contains($"The existing tenant '{tenantId}' was not changed", result.Error, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            DeleteFile(archivePath);
+            await DropAsync(tenantId);
+        }
+    }
+
     [Fact]
     public async Task RestoreThatThrows_WithoutAFailedNotification_FailsAsBefore_WithoutARecoveryLine()
     {
@@ -451,11 +501,12 @@ public class TenantDeletedNotificationOrderTests(TenantNotificationFixture fixtu
     }
 
     /// <summary>
-    ///     The restore of the target, not the scratch restore of the CK collections the restore check of service-managed
-    ///     models runs first.
+    ///     The mongorestore into the target itself: not the one of the pre-check's scratch database, nor the one into the
+    ///     staging database of a restore over an existing tenant, which both run before anything is dropped.
     /// </summary>
     private static bool IsTargetRestore(MongoRestoreOptions options) =>
-        !options.Database.Contains("restorecheck_", StringComparison.Ordinal);
+        !options.Database.Contains("restorecheck_", StringComparison.Ordinal) &&
+        !options.Database.Contains("restorestage_", StringComparison.Ordinal);
 
     /// <summary>The fixture's mongo tools; a test makes one call of them throw.</summary>
     private IRepositoryOpsService RepositoryOpsThatThrow() =>

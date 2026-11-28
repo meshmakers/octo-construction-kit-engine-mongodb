@@ -418,18 +418,72 @@ internal class TenantBackupService(
         bool dropExistingTenant, bool attachTenant, bool overrideForeignOwnership, RestoreClaim claim,
         StrongBox<string?> deleteNotificationWarning, TimeSpan? timeout, CancellationToken? cancellationToken)
     {
-        // Before anything destructive: the CK collections of the dump go into a scratch database and their
-        // service-managed models are checked there. A dump the check refuses drops no existing tenant and writes nothing
-        // into the target. The full check (with the raise of genuine older models) runs again on the restored target.
-        var preCheckRefusal = await PreCheckSystemModelsAsync(tenantId, databaseName, archivePath,
-            effectiveSourceDatabaseName, timeout, cancellationToken ?? CancellationToken.None);
-        if (preCheckRefusal != null)
-        {
-            return CommandResult.Failure(preCheckRefusal);
-        }
-
-        // Check if tenant exists and optionally drop it
         var existingTenantContext = await systemContext.TryFindTenantContextAsync(tenantId);
+        StagedRestore? staged = null;
+        try
+        {
+            if (existingTenantContext != null && dropExistingTenant && systemContext is TenantContext engineSystemContext)
+            {
+                // The restore replaces an existing tenant. The whole dump is restored into a staging database
+                // and checked there, genuine older models are raised there, and only a staging database that passed is
+                // copied over the target after the drop. No check, raise or catalog read runs after the drop.
+                // The copy replaces only the collections of the staged archive. A target that is not the existing
+                // tenant's own database but already holds collections would keep the ones the dump lacks, unchecked:
+                // refused before anything is changed.
+                if (!string.Equals(TenantDatabaseRegistrationLookup.Normalize(existingTenantContext.DatabaseName),
+                        TenantDatabaseRegistrationLookup.Normalize(databaseName), StringComparison.Ordinal) &&
+                    await engineSystemContext.HoldsRestoredDataForRestoreAsync(databaseName))
+                {
+                    var message = $"The restore of tenant '{tenantId}' was refused before the existing tenant was " +
+                                  $"replaced: the target database '{databaseName}' is not the tenant's database " +
+                                  $"'{existingTenantContext.DatabaseName}' and already holds data. Restore into the " +
+                                  "tenant's own database or into a database that does not exist. The existing tenant " +
+                                  $"'{tenantId}' was not changed.";
+                    logger.LogError("Restore of tenant '{TenantId}': {Message}", tenantId, message);
+                    return CommandResult.Failure(message);
+                }
+
+                staged = await StageAndCheckAsync(engineSystemContext, tenantId, databaseName, archivePath,
+                    effectiveSourceDatabaseName, detectedDatabases, timeout, cancellationToken ?? CancellationToken.None);
+                if (staged.Failure != null)
+                {
+                    return CommandResult.Failure(staged.Failure);
+                }
+            }
+            else
+            {
+                // Before anything destructive: the CK collections of the dump go into a scratch database and their
+                // service-managed models are checked there. A dump the check refuses writes nothing into the target.
+                // The full check (with the raise of genuine older models) runs again on the restored target.
+                var preCheckRefusal = await PreCheckSystemModelsAsync(tenantId, databaseName, archivePath,
+                    effectiveSourceDatabaseName, timeout, cancellationToken ?? CancellationToken.None);
+                if (preCheckRefusal != null)
+                {
+                    return CommandResult.Failure(preCheckRefusal);
+                }
+            }
+
+            return await RestoreIntoTargetAsync(tenantId, databaseName, archivePath, effectiveSourceDatabaseName,
+                detectedDatabases, dropExistingTenant, attachTenant, overrideForeignOwnership, claim,
+                deleteNotificationWarning, existingTenantContext, staged, timeout, cancellationToken);
+        }
+        finally
+        {
+            staged?.DeleteArchive(logger);
+        }
+    }
+
+    /// <summary>
+    ///     Drops the existing tenant if asked, restores the dump (or, for a staged restore, the checked staging copy) into
+    ///     the target, checks it when it was not staged, and attaches.
+    /// </summary>
+    private async Task<CommandResult> RestoreIntoTargetAsync(string tenantId, string databaseName,
+        string archivePath, string? effectiveSourceDatabaseName, IReadOnlyList<string> detectedDatabases,
+        bool dropExistingTenant, bool attachTenant, bool overrideForeignOwnership, RestoreClaim claim,
+        StrongBox<string?> deleteNotificationWarning, ITenantContext? existingTenantContext, StagedRestore? staged,
+        TimeSpan? timeout, CancellationToken? cancellationToken)
+    {
+        // Check if tenant exists and optionally drop it
         if (existingTenantContext != null)
         {
             if (!dropExistingTenant)
@@ -485,7 +539,8 @@ internal class TenantBackupService(
         var restoreOptions = new MongoRestoreOptions
         {
             Database = databaseName,
-            Archive = archivePath,
+            // A staged restore copies the checked staging database (its dump), never the caller's archive again.
+            Archive = staged?.ArchivePath ?? archivePath,
             Gzip = true,
             Drop = true,
             // AB#8672: the archive carries the ownership markers of the instance it was dumped from. They are never
@@ -495,9 +550,10 @@ internal class TenantBackupService(
         };
 
         // Enable namespace mapping if restoring to a different database name
-        if (!string.IsNullOrEmpty(effectiveSourceDatabaseName) && effectiveSourceDatabaseName != databaseName)
+        var restoreSourceDatabaseName = staged?.StagingDatabaseName ?? effectiveSourceDatabaseName;
+        if (!string.IsNullOrEmpty(restoreSourceDatabaseName) && restoreSourceDatabaseName != databaseName)
         {
-            restoreOptions.NsFrom = $"{effectiveSourceDatabaseName}.*";
+            restoreOptions.NsFrom = $"{restoreSourceDatabaseName}.*";
             restoreOptions.NsTo = $"{databaseName}.*";
             logger.LogInformation(
                 "Using namespace mapping: '{NsFrom}' -> '{NsTo}'",
@@ -536,16 +592,23 @@ internal class TenantBackupService(
         // The service-managed models of the dump (System, System.*) must be genuine published ones before the tenant can
         // become reachable: manipulated, unknown or too new models refuse the restore, genuine older ones are raised to
         // the platform's version here, while the database is still unattached. Also for a restore without attach, so a
-        // checked database is all a restore ever leaves behind.
-        var systemModelRefusal = await CheckSystemModelsAsync(tenantId, databaseName, attachTenant,
-            cancellationToken ?? CancellationToken.None);
-        if (systemModelRefusal != null)
+        // checked database is all a restore ever leaves behind. A staged restore copied a staging database that already
+        // passed this check (and its raise) before the drop: nothing is checked or raised after the drop.
+        var keptCreatedDatabaseUser = false;
+        if (staged == null)
         {
-            // The restored database holds the refused content: drop it again when this restore created it (a new name,
-            // or the existing tenant's database this restore dropped). A database that existed before unattached stays
-            // unattached as mongorestore left it (see the restore section of the docs).
-            claim.DropRestoredDatabase();
-            return CommandResult.Failure(systemModelRefusal);
+            var (systemModelRefusal, keptUser) = await CheckSystemModelsAsync(tenantId, databaseName, attachTenant,
+                cancellationToken ?? CancellationToken.None);
+            if (systemModelRefusal != null)
+            {
+                // The restored database holds the refused content: drop it again when this restore created it (a new
+                // name, or the existing tenant's database this restore dropped). A database that existed before
+                // unattached stays unattached as mongorestore left it (see the restore section of the docs).
+                claim.DropRestoredDatabase();
+                return CommandResult.Failure(systemModelRefusal);
+            }
+
+            keptCreatedDatabaseUser = keptUser;
         }
 
         logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",
@@ -560,29 +623,44 @@ internal class TenantBackupService(
             // The tenant-created notification is published here, after the commit: the services set the tenant up
             // when they receive it and must find it registered. A failed publish does not fail the restore (the data is
             // restored and attached); it is reported on the result, so the caller can surface it.
-            using var session = await systemContext.GetAdminSessionAsync();
-            using var notification = TenantNotificationScope.Begin(session);
-            session.StartTransaction();
-            await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
-            await session.CommitTransactionAsync();
-
-            logger.LogInformation(
-                "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
-                tenantId, databaseName);
-
+            var attached = false;
             try
             {
-                await notification.PublishAsync();
+                using var session = await systemContext.GetAdminSessionAsync();
+                using var notification = TenantNotificationScope.Begin(session);
+                session.StartTransaction();
+                await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
+                await session.CommitTransactionAsync();
+                attached = true;
+
+                logger.LogInformation(
+                    "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
+                    tenantId, databaseName);
+
+                try
+                {
+                    await notification.PublishAsync();
+                }
+                catch (Exception ex)
+                {
+                    var warning =
+                        $"Tenant '{tenantId}' was restored and attached to database '{databaseName}', but the " +
+                        $"tenant-created notification failed ({ex.Message}). The services have not set the tenant up: " +
+                        "run ClearCache for the tenant.";
+                    logger.LogWarning(ex, "Restore of tenant '{TenantId}': {Warning}", tenantId, warning);
+                    result.TenantCreatedNotificationFailed = true;
+                    result.Output = string.IsNullOrEmpty(result.Output)
+                        ? warning
+                        : result.Output + Environment.NewLine + warning;
+                }
             }
-            catch (Exception ex)
+            catch when (!attached && keptCreatedDatabaseUser && systemContext is TenantContext engineSystemContext)
             {
-                var warning =
-                    $"Tenant '{tenantId}' was restored and attached to database '{databaseName}', but the " +
-                    $"tenant-created notification failed ({ex.Message}). The services have not set the tenant up: " +
-                    "run ClearCache for the tenant.";
-                logger.LogWarning(ex, "Restore of tenant '{TenantId}': {Warning}", tenantId, warning);
-                result.TenantCreatedNotificationFailed = true;
-                result.Output = string.IsNullOrEmpty(result.Output) ? warning : result.Output + Environment.NewLine + warning;
+                // The check created the tenant database user for its raise and kept it for the attach; the attach did
+                // not commit (also when the session could not be opened), so the database stays unattached and the
+                // user must not outlive the restore (attach after a raise). An attached tenant keeps its user.
+                await engineSystemContext.DropTenantDatabaseUserForRestoreAsync(databaseName);
+                throw;
             }
         }
 
@@ -599,13 +677,11 @@ internal class TenantBackupService(
     {
         if (systemContext is not TenantContext engineSystemContext)
         {
-            return await CheckSystemModelsAsync(tenantId, databaseName, attachTenant: false, cancellationToken);
+            return (await CheckSystemModelsAsync(tenantId, databaseName, attachTenant: false, cancellationToken))
+                .Refusal;
         }
 
-        // Carries this instance's tenant database prefix, so on a shared MongoDB server it is recognisably this
-        // instance's. 20 random hex digits keep it within MongoDB's 64-byte database names for the longest prefix.
-        var scratchDatabaseName = $"{systemConfiguration?.Value.TenantDatabasePrefix ?? string.Empty}restorecheck_" +
-                                  Guid.NewGuid().ToString("N")[..20];
+        var scratchDatabaseName = NewRestoreDatabaseName("restorecheck_");
         var sourceDatabaseName = string.IsNullOrEmpty(effectiveSourceDatabaseName)
             ? databaseName
             : effectiveSourceDatabaseName;
@@ -645,23 +721,162 @@ internal class TenantBackupService(
     }
 
     /// <summary>
-    ///     Runs the restore check of service-managed models on the restored, unattached database; returns the refusal
-    ///     message, or null when the restore may go on. Fails closed when the check cannot run.
+    ///     A database name of this restore's own: this instance's tenant database prefix (so on a shared MongoDB server it
+    ///     is recognisably this instance's), <paramref name="kind" /> and 20 random hex digits, which keep it within
+    ///     MongoDB's 64-byte database names for the longest prefix.
     /// </summary>
-    private async Task<string?> CheckSystemModelsAsync(string tenantId, string databaseName, bool attachTenant,
-        CancellationToken cancellationToken)
+    private string NewRestoreDatabaseName(string kind) =>
+        $"{systemConfiguration?.Value.TenantDatabasePrefix ?? string.Empty}{kind}" + Guid.NewGuid().ToString("N")[..20];
+
+    /// <summary>
+    ///     The first half of a restore that replaces an existing tenant: restores the whole dump into a staging
+    ///     database <c>&lt;prefix&gt;restorestage_&lt;id&gt;</c>, runs the full check of service-managed models there and
+    ///     raises genuine older ones (with migrations), and dumps the checked staging database into a temp archive, which
+    ///     the caller restores into the target after the drop. Nothing of the existing tenant is touched here. Whatever the
+    ///     outcome, the staging database is dropped again, the database user the raise created for it is gone (the check
+    ///     never keeps it) and this process's CK cache of the tenant id is unloaded (the raise ran under that id while the
+    ///     existing tenant is still attached); on a failure the temp archive is deleted too.
+    /// </summary>
+    private async Task<StagedRestore> StageAndCheckAsync(TenantContext engineSystemContext, string tenantId,
+        string databaseName, string archivePath, string? effectiveSourceDatabaseName,
+        IReadOnlyList<string> detectedDatabases, TimeSpan? timeout, CancellationToken cancellationToken)
+    {
+        var stagingDatabaseName = NewRestoreDatabaseName("restorestage_");
+        var sourceDatabaseName = string.IsNullOrEmpty(effectiveSourceDatabaseName)
+            ? databaseName
+            : effectiveSourceDatabaseName;
+        // Named, so an operator can drop a staging database a crashed process left behind.
+        logger.LogInformation(
+            "Restore of tenant '{TenantId}': the restore replaces the existing tenant; restoring and checking the dump " +
+            "in staging database '{StagingDatabaseName}' first", tenantId, stagingDatabaseName);
+        string? stagedArchive = null;
+        var staged = false;
+        try
+        {
+            var restore = await repositoryOpsService.ExecuteMongoRestoreAsync(new MongoRestoreOptions
+            {
+                Database = stagingDatabaseName,
+                Archive = archivePath,
+                Gzip = true,
+                Drop = true,
+                NsFrom = $"{sourceDatabaseName}.*",
+                NsTo = $"{stagingDatabaseName}.*",
+                NsExclude = [$"*.{TenantOwnershipStore.CollectionName}", $"*.{SystemDatabaseMarkerStore.CollectionName}"]
+            }, timeout, cancellationToken);
+            if (!restore.Success)
+            {
+                return StagedRestore.Failed(StagingFailure(tenantId,
+                    $"the dump could not be restored into the staging database ({restore.Error})"));
+            }
+
+            // Before the drop: a dump that restores nothing must not replace the existing tenant with an empty database.
+            // Ownership and system-database markers are excluded from the staging restore, and so from its dump.
+            if (!await engineSystemContext.HoldsRestoredDataForRestoreAsync(stagingDatabaseName))
+            {
+                var archiveInfo = detectedDatabases.Count > 0
+                    ? $" The archive contains database(s) '{string.Join("', '", detectedDatabases)}'."
+                    : string.Empty;
+                return StagedRestore.Failed(StagingFailure(tenantId,
+                    $"mongorestore restored no data from database '{sourceDatabaseName}' of the archive — no " +
+                    $"namespaces in the archive matched.{archiveInfo}"));
+            }
+
+            // The CK cache is keyed by tenant id: the live tenant's cache must not serve the raise's migrations, and the
+            // staging models the raise loads must not serve the live tenant longer than the raise.
+            engineSystemContext.UnloadCkCacheForRestore(tenantId);
+            var check = await systemModelGuard.EnforceAsync(engineSystemContext, tenantId, stagingDatabaseName,
+                keepDatabaseUser: false, cancellationToken);
+            engineSystemContext.UnloadCkCacheForRestore(tenantId);
+            if (check.IsRefused)
+            {
+                return StagedRestore.Failed(check.Message(tenantId) +
+                                            $" The existing tenant '{tenantId}' was not changed.");
+            }
+
+            stagedArchive = Path.Combine(Path.GetTempPath(), $"restorestage-{Guid.NewGuid():N}.archive");
+            logger.LogInformation(
+                "Restore of tenant '{TenantId}': the checked staging database is dumped into temp archive '{Archive}'",
+                tenantId, stagedArchive);
+            var dump = await repositoryOpsService.ExecuteMongoDumpAsync(
+                MongoDumpOptions.ForArchive(stagingDatabaseName, stagedArchive), timeout, cancellationToken);
+            if (!dump.Success)
+            {
+                return StagedRestore.Failed(StagingFailure(tenantId,
+                    $"the checked staging database could not be dumped for the copy ({dump.Error})"));
+            }
+
+            staged = true;
+            return new StagedRestore(null, stagedArchive, stagingDatabaseName);
+        }
+        finally
+        {
+            engineSystemContext.UnloadCkCacheForRestore(tenantId);
+            await engineSystemContext.DropRestoreCheckDatabaseAsync(stagingDatabaseName);
+            if (!staged)
+            {
+                StagedRestore.DeleteFile(stagedArchive, logger);
+            }
+        }
+    }
+
+    private string StagingFailure(string tenantId, string reason)
+    {
+        var message = $"The restore of tenant '{tenantId}' failed before the existing tenant was replaced: {reason}. " +
+                      $"The existing tenant '{tenantId}' was not changed.";
+        logger.LogError("Restore of tenant '{TenantId}': {Message}", tenantId, message);
+        return message;
+    }
+
+    /// <summary>
+    ///     The outcome of <see cref="StageAndCheckAsync" />: a failure message, or the temp archive of the checked staging
+    ///     database (dumped from <see cref="StagingDatabaseName" />, which is already dropped) that the caller deletes.
+    /// </summary>
+    private sealed record StagedRestore(string? Failure, string? ArchivePath, string? StagingDatabaseName)
+    {
+        public static StagedRestore Failed(string message) => new(message, null, null);
+
+        public void DeleteArchive(ILogger log) => DeleteFile(ArchivePath, log);
+
+        public static void DeleteFile(string? path, ILogger log)
+        {
+            if (path == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Failed to delete the staged restore archive '{Archive}'; delete it by hand", path);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Runs the restore check of service-managed models on the restored, unattached database; returns the refusal
+    ///     message, or null when the restore may go on, and whether the check kept a database user it created for the
+    ///     raise (the attach needs it; a failed attach drops it). Fails closed when the check cannot run.
+    /// </summary>
+    private async Task<(string? Refusal, bool KeptCreatedDatabaseUser)> CheckSystemModelsAsync(string tenantId,
+        string databaseName, bool attachTenant, CancellationToken cancellationToken)
     {
         if (systemContext is not TenantContext engineSystemContext)
         {
             var message = $"{RestoreSystemModelGuard.RefusalCode}: the restore of tenant '{tenantId}' was refused " +
                           "before the attach: the service-managed CK models of the dump cannot be checked by this host.";
             logger.LogError("Restore of tenant '{TenantId}': {Message}", tenantId, message);
-            return message;
+            return (message, false);
         }
 
         var result = await systemModelGuard.EnforceAsync(engineSystemContext, tenantId, databaseName,
             keepDatabaseUser: attachTenant, cancellationToken);
-        return result.IsRefused ? result.Message(tenantId) : null;
+        return result.IsRefused ? (result.Message(tenantId), false) : (null, result.KeptCreatedDatabaseUser);
     }
 
     /// <summary>

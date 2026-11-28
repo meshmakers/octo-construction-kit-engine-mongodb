@@ -424,17 +424,57 @@ the content of a version published in the CK catalog, and no such model is older
 below the platform's security floor. A dump that cannot be brought to that state is refused before the attach.
 
 `TenantBackupService.RestoreTenantAsync` runs `RestoreSystemModelGuard` (`src/Runtime.Engine.MongoDb/Services/RestoreSystemModelCheck/`)
-twice:
+in one of two flows.
+
+**A restore that replaces an existing tenant** (`dropExistingTenant: true` and a tenant with that id exists) is
+staged, so a check or raise that fails at run time never leaves the tenant dropped:
+
+1. The whole dump is restored into a staging database `<tenant database prefix>restorestage_<20 hex digits>` (namespace
+   mapping from the dump's database, ownership and system-database markers excluded). A dump that restores nothing is
+   refused here.
+2. The full check runs on the staging database, and genuine older models are raised there (with migrations, see
+   **Raise** below; `RestoringTenantScope` resolves the tenant id to the staging database in the restore's async flow
+   while the existing tenant stays attached). The check and the raise are the only steps that read the CK catalog.
+3. The checked staging database is dumped into a temp archive (`<temp>/restorestage-<id>.archive`).
+4. Only now is the existing tenant dropped; the temp archive is restored into the target and the tenant is attached. No
+   check, raise or catalog read runs after the drop.
+
+Before step 1, a target database that is not the existing tenant's own database but already holds collections is
+refused: the copy replaces only the collections of the staged archive, so collections the dump lacks would stay
+unchecked. Restore into the tenant's own database or into one that does not exist. Known limit: the raise opens
+repository clients for the staging database name, which the process keeps cached until it ends (one per staged restore
+with a raise).
+
+Whatever the outcome, the staging database is dropped again, the database user the raise created for it is dropped
+(the staged check never keeps it) and the temp archive is deleted. This process's CK cache of the tenant id is unloaded
+right before and right after the check and raise, and again at the end: the cache is keyed by tenant id, so the live
+tenant's cache must not serve the raise's migrations, and the staging models the raise loads must not serve the live
+tenant (the next access loads the attached tenant's own models). Known limit: a request for the live tenant in the same
+process while the raise runs can still load either model set into that cache for the duration of the raise. A refusal or failure in steps 1-3
+leaves the existing tenant attached and unchanged; its message ends with "The existing tenant '...' was not changed."
+What can still fail after the drop is the restore of the local temp archive or the attach, as for every restore (a
+failed tenant-deleted notification is named in the result's `Output`). The staged flow needs disk space for a second
+archive in the temp folder and moves the data three times (staging restore, dump, target restore); the caller's
+`timeout` applies to each mongorestore/mongodump call. A process that dies in steps 1-3 can leave a staging database,
+the tenant database user of that staging database (the configured `DatabaseUser` format with the staging name, in the
+authentication database; it carries the shared tenant database password) and a temp archive. All three are safe to
+drop: the database name is in the INFO line "Restore of tenant ...: the restore replaces the existing tenant; restoring
+and checking the dump in staging database ...", the archive path in "... the checked staging database is dumped into
+temp archive ..."; drop the user with `dropUser` in the authentication database. While the raise runs, the
+import publishes pre/post tenant-update notifications for the tenant id: other services unload their cache of the
+still attached tenant and load it again from its own database, and the communication controller relays a restart of
+the tenant's adapters and deployment sites. This happens also when the restore is refused afterwards (re-check, staging
+dump): the tenant's data is unchanged then, but its adapters restarted once.
+
+**Every other restore** (a new tenant, or `dropExistingTenant: false`) checks twice:
 
 1. **Pre-check, before anything destructive.** The `Ck*` collections of the archive are restored into a scratch database
    `<tenant database prefix>restorecheck_<20 hex digits>`, checked there, and the scratch database is dropped again. A
-   refused dump drops no existing tenant, writes nothing into the target and leaves no database behind. A process that
-   dies during the pre-check can leave a scratch database; it holds only CK collections and is safe to drop (its name is
-   in the INFO line "Restore of tenant ...: checking the service-managed CK models of the dump in scratch database ...").
+   refused dump writes nothing into the target and leaves no database behind. A process that dies during the pre-check
+   can leave a scratch database; it holds only CK collections and is safe to drop (its name is in the INFO line
+   "Restore of tenant ...: checking the service-managed CK models of the dump in scratch database ...").
 2. **Check and raise, after mongorestore and before the attach**, on the restored target (also for `attachTenant: false`).
-   A refusal here (a raise that does not complete, a catalog or system tenant that cannot be read any more) comes after
-   `dropExistingTenant` dropped an existing tenant: that tenant is then gone, like after any restore that fails after
-   the drop, and a failed tenant-deleted notification is named in the result's `Output`.
+   No existing tenant was dropped in this flow, so a refusal here leaves nothing of the restore attached.
 
 What is compared: every `CkModel` row that names a service-managed model (`ServiceManagedCkModels.IsServiceManaged`) in
 its id or in its `ModelId` (the field the by-name lookups of the import guard read), in any state, is read back with its element rows the way the runtime CK cache reads it
@@ -517,15 +557,18 @@ catalog content, downgrade guard, migrations) on a detached context of the resto
 dependency order (`System` first). The CK migrations resolve the tenant by id; `RestoringTenantScope` (an `AsyncLocal`
 holder that ends with the raise) makes exactly the restoring tenant id resolve to the restored database in exactly that
 async flow (`SystemContext.TryFindTenantContextAsync`, like a leased tenant). The tenant database user the migrations need
-is ensured first; a user the check created is dropped again when the restore is refused or does not attach. After the
-raise the full check runs again and must keep every model. The import publishes its pre/post tenant-update
-notifications for the restoring tenant id; other services find no registered tenant for it yet. Known limitation: a CK
-migration that fails is logged and does not fail the import (the same as for every embedded import), so the restore
-then attaches the raised model with the migration not applied.
+is ensured first; a user the check created is dropped again when the restore is refused or does not attach, also when
+the attach itself fails after the check kept the user for it. After the raise the full check runs again and must keep
+every model. The import publishes its pre/post tenant-update notifications for the restoring tenant id; for a new
+tenant other services find no registered tenant for it yet. A CK migration of the raise that throws or reports a failure
+refuses the restore (`upgrade_failed`): inside a `RestoringTenantScope`, `TenantContext.RunCkModelMigrationsForImportAsync`
+throws `RestoreCkMigrationFailedException` (model id and error count only) where every other import only logs the
+failed migration.
 
 **Refusal.** The restore returns a failure whose `Error` starts with `RESTORE_SYSTEM_MODEL_REFUSED` and names each refused
-model, its version and the reason, never model content; nothing is attached. The restored database is dropped when
-this restore created it (a new name, or the existing tenant's database this restore dropped), and only while it still
+model, its version and the reason, never model content; nothing is attached. In the staged flow the refusal comes before
+the drop and only the staging database is dropped. Otherwise the restored database is dropped when this restore created
+it (a new name), and only while it still
 carries exactly this restore's claim (`TenantOwnershipStore.TryDropClaimedDatabaseAsync`). A target that existed before
 as an unattached database stays unattached as mongorestore left it. Each refused model logs a WARN (tenant, model id,
 reason) and counts `octo.ck.restore_system_model.refused` (tag `reason` only; no model or tenant tag, the dump names the
@@ -536,7 +579,10 @@ is not in the catalog, and a restore needs the catalog to be reachable.
 
 Tests: `RestoreSystemModelDeciderTests`, `RestoreSystemModelContentTests`, `RestoreSystemModelClosureTests`,
 `RestoringTenantScopeTests` (unit), `RestoreSystemModelCheckTests` (the closure cases of AB#10061 with the published
-System.UI, System.Notification and System.Files files under `testData/publishedSystemModels`), `PublishedSystemModelRoundTripTests` (MongoDB, mongodump/mongorestore).
+System.UI, System.Notification and System.Files files under `testData/publishedSystemModels`), `PublishedSystemModelRoundTripTests` (MongoDB, mongodump/mongorestore). The staged flow is covered with failure injection (`RestoreSystemModelFixture.Faults`, `TestSystemIdentityCatalog.UnreachableAfter`): a
+migration that throws or reports a failure, a catalog that goes away after 0, 1, 2, ... reads, a manipulated dump and a
+genuine older dump over an existing tenant and a pre-filled other target, each asserting the existing tenant, the
+staging database and its user; and a failed attach of a restore into a new tenant, asserting the user the raise created.
 
 ### Service-Managed CK Model Auto-import
 

@@ -24,6 +24,12 @@ internal sealed record RestoreSystemModelCheckResult(
     public IReadOnlyList<RestoreSystemModelDecision> Raised { get; init; } = [];
 
     /// <summary>
+    ///     True when the check created the tenant database user for the raise and kept it (keepDatabaseUser): the caller
+    ///     drops it again when the attach after the check fails.
+    /// </summary>
+    public bool KeptCreatedDatabaseUser { get; init; }
+
+    /// <summary>
     ///     The refusal message: starts with <see cref="RestoreSystemModelGuard.RefusalCode" />, names every refused model
     ///     with its version and reason, never model content.
     /// </summary>
@@ -142,7 +148,7 @@ internal sealed class RestoreSystemModelGuard(
             }
 
             succeeded = true;
-            return recheck with { Raised = raises };
+            return recheck with { Raised = raises, KeptCreatedDatabaseUser = userCreated && keepDatabaseUser };
         }
         finally
         {

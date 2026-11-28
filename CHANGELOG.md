@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- AB#10017 Fix: a tenant restore that replaces an existing tenant (`dropExistingTenant: true`) no longer leaves the tenant
+  dropped when the System-model check or the raise of a genuine older model fails at run time (migration error, catalog
+  gone between the checks). The whole dump is restored into a staging database (`<prefix>restorestage_<id>`), checked
+  and raised there, dumped into a temp archive, and only then is the existing tenant dropped and the checked copy restored
+  into the target; no catalog read, check or raise runs after the drop. On every outcome the staging database and the
+  database user the raise created for it are dropped, the tenant's CK cache in this process is unloaded and the temp
+  archive is deleted; a refusal names "The existing tenant '...' was not changed." A CK migration of the raise that
+  reports a failure (until now only logged) refuses the restore (`upgrade_failed`). A database user the check kept for
+  the attach is dropped again when the attach fails (review of #290). Restores into a new tenant keep the two-check flow.
+  The staged flow needs a second archive's disk space in the temp folder and copies the data three times. No public
+  contract changes. Tests: `RestoreSystemModelCheckTests` (staged flow with failure injection). Docs:
+  `docs/ck-model-import.md`, "Restore check of service-managed models".
+
 - AB#10060 Fix: creating a child tenant with a blueprint in one call (`CreateChildTenantAsync` with a `BlueprintId`,
   POST tenants with `blueprintId`) failed for every blueprint with "Tenant '<id>' not found; cannot install CK model": the
   tenant's registry entry is still in the caller's uncommitted transaction (AB#8796) while the blueprint's CK install
